@@ -171,6 +171,8 @@ async function optionalLlmReport(query: string) {
 
 async function main() {
   const app = express();
+  // Render terminates TLS at the edge; trust proxy so 402 resource URLs become https://.
+  app.set("trust proxy", 1);
   app.use(express.json());
 
   const payTo = process.env.X402_PAY_TO?.trim();
