@@ -9,7 +9,7 @@ on:
                   steps:
                         - name: Hit /health
                                 run: |
-                                code=$(curl -sS -o /tmp/h.json -w "%{http_code}" --max-time 20 https://x402-seller-pmlm.onrender.com/health || echo 000)
-                                echo "status=$code"
-                                cat /tmp/h.json || true
-                                test "$code" = "200"
+                                          code=$(curl -sS -o /tmp/h.json -w "%{http_code}" --max-time 20 https://x402-seller-pmlm.onrender.com/health || echo 000)
+                                                    echo "status=$code"
+                                                              cat /tmp/h.json || true
+                                                                        test "$code" = "200"
