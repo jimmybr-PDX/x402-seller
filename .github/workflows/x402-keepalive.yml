@@ -1,0 +1,15 @@
+name: x402-keepalive
+on:
+  schedule:
+      - cron: "*/10 * * * *"
+        workflow_dispatch:
+        jobs:
+          ping:
+              runs-on: ubuntu-latest
+                  steps:
+                        - name: Hit /health
+                                run: |
+                                code=$(curl -sS -o /tmp/h.json -w "%{http_code}" --max-time 20 https://x402-seller-pmlm.onrender.com/health || echo 000)
+                                echo "status=$code"
+                                cat /tmp/h.json || true
+                                test "$code" = "200"
