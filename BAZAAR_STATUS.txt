@@ -1,0 +1,6 @@
+validate valid: true
+simulation: accepted
+index active: true
+lastCrawledAt: 2026-09-07T18:36:31.412Z
+discovery_settle_tx: 0x9ad8e4f9500dec518ea2cc1ef6b193115b8eb94fb1aff61d13d00af011bc5067
+notes: bazaar extension present; schemas+examples declared; crawl refreshed after $0.01 settle

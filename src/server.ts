@@ -116,7 +116,9 @@ async function optionalLlmReport(query: string) {
     ? (process.env.GROK_API_BASE ?? "https://api.x.ai/v1")
     : "https://api.openai.com/v1";
   const key = grokKey ?? openaiKey!;
-  const model = grokKey ? "grok-2-latest" : "gpt-4o-mini";
+  const model = grokKey
+    ? (process.env.GROK_MODEL ?? "grok-4.3")
+    : "gpt-4o-mini";
 
   try {
     const res = await fetch(`${base}/chat/completions`, {
@@ -222,7 +224,7 @@ async function main() {
         price: DEFAULT_PRICE,
         networks: [...NETWORKS],
         description:
-          "Pay-per-call research brief for agents. Pass ?q=your question; returns short JSON (summary + bullets) via Grok. Use when you need a quick sourced-style outline and can pay USDC on Base.",
+          "Pay-per-call research brief for AI agents. Pass ?q=topic; returns JSON summary+bullets via Grok. Use for quick USDC-paid outlines on Base (x402). Agents: discover via Bazaar, pay Exact USDC, get structured JSON.",
         mimeType: "application/json",
         extensions: {
           ...declareDiscoveryExtension({
@@ -294,6 +296,7 @@ async function main() {
       "## Free",
       "GET /health",
       "GET /llms.txt",
+      "GET /robots.txt",
       "GET /.well-known/x402.json",
       "",
       "## Paid",
@@ -307,6 +310,12 @@ async function main() {
       "",
     ].join("\n");
     res.type("text/plain").send(body);
+  });
+
+  app.get("/robots.txt", (_req, res) => {
+    res.type("text/plain").send(
+      ["User-agent: *", "Allow: /", "Allow: /llms.txt", "Allow: /.well-known/x402.json", "Allow: /health", "Disallow: /report", ""].join("\n"),
+    );
   });
 
   app.get("/.well-known/x402.json", (_req, res) => {
@@ -327,7 +336,7 @@ async function main() {
           price: DEFAULT_PRICE,
         },
       ],
-      free: ["/health", "/llms.txt", "/.well-known/x402.json"],
+      free: ["/health", "/llms.txt", "/robots.txt", "/.well-known/x402.json"],
     });
   });
 
