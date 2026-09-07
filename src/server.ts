@@ -10,6 +10,7 @@
 
 import { createX402Server } from "@coinbase/cdp-sdk/x402";
 import { paymentMiddlewareFromHTTPServer } from "@x402/express";
+import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import express, { type Request, type Response, type NextFunction } from "express";
 import fs from "node:fs";
 import path from "node:path";
@@ -220,7 +221,35 @@ async function main() {
       "GET /report": {
         price: DEFAULT_PRICE,
         networks: [...NETWORKS],
-        description: "Generate a concise research report",
+        description:
+          "Pay-per-call research brief for agents. Pass ?q=your question; returns short JSON (summary + bullets) via Grok. Use when you need a quick sourced-style outline and can pay USDC on Base.",
+        mimeType: "application/json",
+        extensions: {
+          ...declareDiscoveryExtension({
+            input: { q: "What is x402 Bazaar discovery?" },
+            inputSchema: {
+              properties: {
+                q: {
+                  type: "string",
+                  description: "Research question or topic for the brief",
+                },
+              },
+              required: ["q"],
+            },
+            output: {
+              example: {
+                query: "What is x402 Bazaar discovery?",
+                summary: "x402 Bazaar is CDP's catalog of pay-per-call APIs agents can find and settle in USDC.",
+                bullets: [
+                  "Unpaid GET /report returns HTTP 402 with payment instructions.",
+                  "Paid calls settle USDC on Base and return JSON.",
+                  "Discovery improves when query schema and examples are declared.",
+                ],
+                generatedAt: "2026-09-06T00:00:00.000Z",
+              },
+            },
+          }),
+        },
       },
     },
   };
@@ -238,7 +267,7 @@ async function main() {
 
   app.use(paymentMiddlewareFromHTTPServer(server));
 
-  // Free health check (not in routes map)
+  // Free health / agent discovery (not in paid routes map)
   app.get("/health", (_req, res) => {
     res.json({
       ok: true,
@@ -250,6 +279,55 @@ async function main() {
       circuitOpen: circuitOpen(),
       payToEvmAddress: server.payToEvmAddress ?? null,
       payToMode: payTo ? "address" : "cdp-provisioned",
+    });
+  });
+
+  app.get("/llms.txt", (_req, res) => {
+    const pay = server.payToEvmAddress ?? payTo ?? "(see /health)";
+    const body = [
+      "# x402 research report seller",
+      "",
+      "Pay-per-call concise research brief for autonomous agents.",
+      `Price: ${DEFAULT_PRICE} USDC on Base (${NETWORKS.join(", ")}).`,
+      `Pay to: ${pay}`,
+      "",
+      "## Free",
+      "GET /health",
+      "GET /llms.txt",
+      "GET /.well-known/x402.json",
+      "",
+      "## Paid",
+      "GET /report?q=<url-encoded question>",
+      "Unpaid requests return HTTP 402 with PAYMENT-REQUIRED.",
+      "After USDC settlement via CDP facilitator, response is JSON:",
+      '{ "query", "summary", "bullets", "generatedAt", ... }',
+      "",
+      "Example:",
+      "https://x402-seller-pmlm.onrender.com/report?q=Base+USDC+x402+overview",
+      "",
+    ].join("\n");
+    res.type("text/plain").send(body);
+  });
+
+  app.get("/.well-known/x402.json", (_req, res) => {
+    res.json({
+      name: "x402-seller research report",
+      description:
+        "Pay-per-call research brief for agents. Pass q= topic; returns short JSON summary + bullets.",
+      version: "1",
+      network: NETWORKS[0],
+      price: DEFAULT_PRICE,
+      payTo: server.payToEvmAddress ?? payTo ?? null,
+      resources: [
+        {
+          method: "GET",
+          path: "/report",
+          url: "https://x402-seller-pmlm.onrender.com/report",
+          query: { q: "string research question" },
+          price: DEFAULT_PRICE,
+        },
+      ],
+      free: ["/health", "/llms.txt", "/.well-known/x402.json"],
     });
   });
 
