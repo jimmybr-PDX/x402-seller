@@ -503,6 +503,10 @@ async function main() {
     llms: `${PUBLIC_URL}/llms.txt`,
     free: ["/health", "/llms.txt", "/openapi.json", "/.well-known/x402", "/robots.txt"],
   });
+  // 402 Index domain verification (public SHA-256 hash of the claim token, not the token itself)
+  app.get("/.well-known/402index-verify.txt", (_req, res) =>
+    res.type("text/plain").send(process.env.INDEX402_VERIFY_HASH ?? "95632cdce38229948423be81cdaefe38e617bdffe5177f3ff38d3439ff63ee65"),
+  );
   app.get("/.well-known/x402", (_req, res) => res.json(wellKnown()));
   app.get("/.well-known/x402.json", (_req, res) => res.json(wellKnown()));
 
