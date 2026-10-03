@@ -7,7 +7,7 @@ No API key, no signup. AI agents pay per request in USDC on Base mainnet (`eip15
 
 | Endpoint | Price | Use it when | Returns |
 |---|---|---|---|
-| `GET /report?q=<question>` | $0.01 | You need a quick, cited answer or background on a topic | `summary`, 3-6 cited `bullets`, `sources[]` (Wikipedia, DuckDuckGo, Hacker News, Crossref papers) with URLs + dates |
+| `GET /report?q=<question>` | $0.01 | You need a quick, cited answer or background on a topic | `summary`, 3-6 cited `bullets`, `sources[]` (official docs, Wikipedia, Stack Overflow, GitHub, papers; off-topic sources dropped) with URLs + dates |
 | `GET /read?url=<https url>` | $0.005 | You have a URL and need its text for an LLM | `title`, `description`, `publishedAt`, clean `markdown`, `wordCount`, `headings[]`, `links[]` |
 | `GET /check?url=<x402 endpoint>` | $0.005 | You are about to pay for or list an x402 API | readiness `score`, per-check results, `fixes[]` (one unpaid probe; never pays the target) |
 

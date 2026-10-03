@@ -3,7 +3,7 @@
  * Pattern: https://docs.cdp.coinbase.com/x402/quickstart-for-sellers
  *
  * Paid (USDC on Base via x402, CDP facilitator):
- *   GET /report?q=   cited research brief (Wikipedia, DuckDuckGo, Hacker News, Crossref; optional LLM synthesis)
+ *   GET /report?q=   cited research brief (official docs, Wikipedia, Stack Overflow, GitHub, HN-linked articles, Crossref; relevance-filtered extractive summary)
  *   GET /read?url=   any public web page -> clean LLM-ready markdown + title, headings, links
  *   GET /check?url=  x402 endpoint readiness + Bazaar ranking check (one unpaid probe)
  *
@@ -197,9 +197,8 @@ async function main() {
     summary:
       "Retrieval-augmented generation (RAG) is a technique that lets large language models retrieve and incorporate new information from external sources before answering. [1]",
     bullets: [
-      "RAG pairs a retriever (search or vector index) with a generator model so answers can cite current documents. [1]",
-      'Scholarly: "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" (2020) [3]',
-      'Discussion: "Show HN: RAG pipeline in 100 lines" (412 HN points) [4]',
+      "The term retrieval-augmented generation (RAG) was introduced in a 2020 paper that described combining a parametric language model with a non-parametric external memory accessed through retrieval at inference time. [1]",
+      "Retrieval-augmented generation is a technique for enhancing the accuracy and reliability of generative AI models with information fetched from specific and relevant data sources. [2]",
     ],
     sources: [
       {
@@ -212,8 +211,8 @@ async function main() {
         publishedAt: "2026-09-20T10:00:00Z",
       },
     ],
-    sourceCount: 7,
-    providers: ["wikipedia", "duckduckgo", "hackernews", "crossref"],
+    sourceCount: 3,
+    providers: ["wikipedia", "hackernews"],
     method: "extractive",
     depth: "standard",
     lang: "en",
@@ -260,7 +259,7 @@ async function main() {
     "GET /report": {
       accepts: accept(REPORT_PRICE),
       description:
-        `Research brief with citations for any question or topic. Use when an agent needs a quick, sourced answer or background before writing, deciding, or searching deeper. Pass q (question). Returns summary, 3-6 cited bullets, and a source list (Wikipedia, DuckDuckGo, Hacker News, Crossref papers) with URLs and dates. ${usd(REPORT_PRICE)} USDC on Base. ${ERRORS_DOC}`,
+        `Research brief with citations for any question or topic. Use when an agent needs a quick, sourced answer or background before writing, deciding, or searching deeper. Pass q (question). Returns summary, 3-6 cited bullets, and a source list (official docs, Wikipedia, Stack Overflow, GitHub, papers) with URLs and dates; off-topic ones dropped. ${usd(REPORT_PRICE)} USDC on Base. ${ERRORS_DOC}`,
       mimeType: "application/json",
       serviceName: SERVICE_NAME,
       tags: ["research", "web-search", "citations", "summarization", "knowledge"],
@@ -271,7 +270,7 @@ async function main() {
           inputSchema: {
             properties: {
               q: { type: "string", minLength: 2, maxLength: 300, description: "Natural-language research question or topic, e.g. 'history of the transistor' or 'pros and cons of RAG'" },
-              depth: { type: "string", enum: ["quick", "standard"], description: "quick = encyclopedia + instant answer only (faster); standard (default) adds Hacker News discussions and scholarly papers" },
+              depth: { type: "string", enum: ["quick", "standard"], description: "quick = encyclopedia + instant answer only (faster); standard (default) adds official docs, Stack Overflow, GitHub, articles linked from Hacker News, and scholarly papers" },
               lang: { type: "string", pattern: "^[a-z]{2,3}$", description: "Wikipedia language code, default en" },
             },
             required: ["q"],
@@ -289,7 +288,7 @@ async function main() {
                     type: "object",
                     properties: {
                       id: { type: "integer" },
-                      type: { type: "string", enum: ["encyclopedia", "instant_answer", "discussion", "paper"] },
+                      type: { type: "string", enum: ["encyclopedia", "instant_answer", "discussion", "paper", "web_page"] },
                       provider: { type: "string" },
                       title: { type: "string" },
                       url: { type: "string" },
@@ -459,7 +458,7 @@ async function main() {
       `> Pay to: ${payToAddr ?? "(see /health)"}. ${ERRORS_DOC}`,
       "",
       "## Paid endpoints",
-      `- GET ${PUBLIC_URL}/report?q=<question>  (${REPORT_PRICE}) — research brief with citations: summary, 3-6 cited bullets, sources from Wikipedia, DuckDuckGo, Hacker News, Crossref. Optional depth=quick|standard, lang=en.`,
+      `- GET ${PUBLIC_URL}/report?q=<question>  (${REPORT_PRICE}) — research brief with citations: summary, 3-6 cited bullets, sources from official docs, Wikipedia, Stack Overflow, GitHub, HN-linked articles, Crossref (off-topic sources dropped). Optional depth=quick|standard, lang=en.`,
       `- GET ${PUBLIC_URL}/read?url=<https url>  (${READ_PRICE}) — web page to clean LLM-ready markdown with title, description, publish date, headings, links. Optional maxChars (default 20000).`,
       `- GET ${PUBLIC_URL}/check?url=<https x402 endpoint>  (${CHECK_PRICE}) — x402 readiness + Bazaar ranking check; one unpaid probe, score + fixes. Optional method=GET|POST.`,
       "",
