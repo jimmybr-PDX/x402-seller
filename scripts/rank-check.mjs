@@ -93,9 +93,10 @@ out.onchain = {
 
 // 6. x402scan presence (public page; 200 + host mention = listed)
 try {
-  const r = await fetch(`https://www.x402scan.com/server/${HOST}`, { signal: AbortSignal.timeout(20000) });
+  const X402SCAN_ID = process.env.X402SCAN_ORIGIN_ID ?? "732c6ca1-b936-460c-984a-09368d91ac8d";
+  const r = await fetch(`https://www.x402scan.com/server/${X402SCAN_ID}`, { signal: AbortSignal.timeout(20000) });
   const html = await r.text();
-  out.x402scan = { url: `https://www.x402scan.com/server/${HOST}`, status: r.status, listed: r.ok && !/Not Found/.test(html) };
+  out.x402scan = { url: `https://www.x402scan.com/server/${X402SCAN_ID}`, status: r.status, listed: r.ok && html.includes(HOST) };
 } catch (e) {
   out.x402scan = { error: String(e) };
 }
