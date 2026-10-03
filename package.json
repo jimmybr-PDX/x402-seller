@@ -2,12 +2,13 @@
   "name": "x402-seller",
   "version": "1.0.0",
   "private": true,
-  "description": "Minimal x402 seller (CDP createX402Server + Express) — Base Sepolia by default",
+  "description": "Agent Research Tools: pay-per-call x402 APIs (cited research brief, web page to markdown, x402 endpoint check), USDC on Base",
   "type": "module",
   "scripts": {
     "dev": "tsx src/server.ts",
     "start": "tsx src/server.ts",
-    "report-week": "tsx scripts/report-week.ts"
+    "report-week": "tsx scripts/report-week.ts",
+    "rank-check": "node scripts/rank-check.mjs"
   },
   "engines": {
     "node": ">=22"
@@ -28,5 +29,15 @@
     "@types/node": "^22.15.0",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3"
-  }
+  },
+  "keywords": [
+    "x402",
+    "x402-bazaar",
+    "ai-agents",
+    "research",
+    "web-scraping",
+    "markdown",
+    "usdc",
+    "base"
+  ]
 }

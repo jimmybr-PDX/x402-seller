@@ -1,75 +1,68 @@
-# x402 seller (minimal)
+# Agent Research Tools — pay-per-call x402 APIs (USDC on Base)
 
-Minimal Express seller using Coinbase CDP `createX402Server` and `@x402/express` `paymentMiddlewareFromHTTPServer`.
+Live: **https://x402-seller-pmlm.onrender.com** · Agent guide: [`/llms.txt`](https://x402-seller-pmlm.onrender.com/llms.txt) · OpenAPI: [`/openapi.json`](https://x402-seller-pmlm.onrender.com/openapi.json) · Discovery: [`/.well-known/x402`](https://x402-seller-pmlm.onrender.com/.well-known/x402)
 
-Default: **development** on **Base Sepolia** (`eip155:84532`) at **$0.01** for `GET /report`.
+No API key, no signup. AI agents pay per request in USDC on Base mainnet (`eip155:8453`) using the
+[x402](https://x402.org) protocol, settled through the Coinbase CDP facilitator and listed in the CDP x402 Bazaar.
 
-This project does **not** ship secrets. Do **not** commit `.env` or `payments.jsonl`.
+| Endpoint | Price | Use it when | Returns |
+|---|---|---|---|
+| `GET /report?q=<question>` | $0.01 | You need a quick, cited answer or background on a topic | `summary`, 3-6 cited `bullets`, `sources[]` (Wikipedia, DuckDuckGo, Hacker News, Crossref papers) with URLs + dates |
+| `GET /read?url=<https url>` | $0.005 | You have a URL and need its text for an LLM | `title`, `description`, `publishedAt`, clean `markdown`, `wordCount`, `headings[]`, `links[]` |
+| `GET /check?url=<x402 endpoint>` | $0.005 | You are about to pay for or list an x402 API | readiness `score`, per-check results, `fixes[]` (one unpaid probe; never pays the target) |
 
-Official quickstart: https://docs.cdp.coinbase.com/x402/quickstart-for-sellers
+**Never charged for errors:** 400 bad input, 422 nothing found / target unreachable, 503 unavailable.
+The x402 middleware only settles a payment when the handler returns 2xx.
 
-## Prerequisites
+## Call it
 
-- Node.js 22+
-- A CDP API key from https://portal.cdp.coinbase.com
-- Either your own receive address in `X402_PAY_TO`, or a `CDP_WALLET_SECRET` so CDP can provision a receiver wallet
+```bash
+# 1. Unpaid call -> 402 with base64 JSON challenge in the PAYMENT-REQUIRED header
+curl -i "https://x402-seller-pmlm.onrender.com/report?q=history+of+the+transistor"
 
-## Setup (beginner)
+# 2. Pay with any x402 client, e.g. @x402/fetch
+```
 
-1. Create an API key at portal.cdp.coinbase.com.
+```ts
+import { wrapFetchWithPayment } from "@x402/fetch";
+// ... create an x402 client with an EVM signer holding a little Base USDC
+const res = await fetchWithPayment("https://x402-seller-pmlm.onrender.com/report?q=what+is+RAG");
+console.log(await res.json()); // { summary, bullets, sources, ... }
+```
 
-2. Copy .env.example to .env. Fill CDP credentials from the portal.
+## Run it yourself
 
-3. Option A: set X402_PAY_TO. Server uses payToConfig with type address.
+Node 22+, a CDP API key (https://portal.cdp.coinbase.com), and a Base receive address.
 
-3b. Option B: leave X402_PAY_TO unset; set CDP_WALLET_SECRET. Server omits payToConfig so CDP provisions.
+```bash
+cp .env.example .env   # fill CDP_API_KEY_ID / CDP_API_KEY_SECRET / X402_PAY_TO
+npm ci && npm run dev  # http://localhost:8402
+```
 
-4. Install deps, load env, start with the dev script. Default PORT is 8402.
+| Env | Default | Notes |
+|---|---|---|
+| `X402_ENV` | `development` | `production` = Base mainnet, `development` = Base Sepolia |
+| `X402_PAY_TO` | — | Your EVM receive address (else CDP provisions one; needs `CDP_WALLET_SECRET`) |
+| `REPORT_PRICE` / `READ_PRICE` / `CHECK_PRICE` | `$0.01` / `$0.005` / `$0.005` | Per-call prices |
+| `PUBLIC_URL` | Render URL | Used in discovery docs |
+| `DAILY_SPEND_CAP_USD` | `50` | Runaway guard on confirmed settlements per UTC day |
+| `GROK_API_KEY` or `OPENAI_API_KEY` | — | Optional: LLM synthesis over the cited sources; without it `/report` is extractive |
 
-## Prove 402 with curl
+Free routes: `/health`, `/llms.txt`, `/openapi.json`, `/.well-known/x402`, `/robots.txt`, `/icon.svg`.
 
-Free: curl -sS http://localhost:8402/health
+## Discovery and ranking
 
-Paid without payment (expect HTTP 402 and PAYMENT-REQUIRED header):
-
-curl -i "http://localhost:8402/report?q=test"
-
-## Routes
-
-- GET /health — free status
-- GET /report?q= — paid; returns JSON { query, summary, bullets, generatedAt, note }
-
-Without OPENAI_API_KEY or GROK_API_KEY, report body is a synthetic outline labeled for testing.
-
-## Environment
-
-- CDP_API_KEY_ID / CDP_API_KEY_SECRET — required for facilitator auth
-- X402_PAY_TO — optional; if set uses address payToConfig
-- CDP_WALLET_SECRET — needed when X402_PAY_TO is unset
-- PORT=8402
-- X402_ENV=development|production
-- REPORT_PRICE — default $0.01 (dev) or $1.25 (prod)
-- DAILY_SPEND_CAP_USD — default 50
-
-## Flip to production (Base mainnet)
-
-After Sepolia works, set X402_ENV=production and REPORT_PRICE=$1.25. Networks become eip155:8453 (Base). Ensure the receive address can accept mainnet USDC. Real funds; do not deploy publicly from this alone.
+- Every paid route declares `extensions.bazaar` (input schema + example, typed output schema + example) and
+  `resource.serviceName` / `tags` / `iconUrl` / `mimeType`, per the x402 Bazaar spec.
+- CDP Bazaar indexes a route after its first CDP-settled payment and refreshes ranking every ~6 h
+  (30-day calls, unique payers, metadata quality, availability). Routes with no settlement for 30 days drop out.
+- `node scripts/rank-check.mjs` prints the recurring checklist (live status, Bazaar listing + rank per query,
+  CDP validate, on-chain sales, x402scan presence). A weekly GitHub Action runs it.
 
 ## Guard rails
 
-- Appends settlements and errors to payments.jsonl (gitignored)
-- DAILY_SPEND_CAP_USD default 50; returns 503 when exceeded
+- Settlements are logged to `payments.jsonl` (gitignored) only after the facilitator confirms, with payer + tx hash.
+- Circuit breaker: 3 failed settlements (verified payment, settle failed) in 10 minutes -> 503 (uncharged) for paid calls.
+- `/read` and `/check` only fetch public `https` hosts (private/loopback/link-local IPs blocked, redirects re-checked, 3 MB / 15 s caps).
 
-- Circuit breaker: 3 settle failures in 10 minutes opens the circuit (503)
-- Does not invent on-chain payment hashes
-
-Weekly summary script: report-week (see package.json scripts).
-
-## Scripts
-
-- dev: tsx src/server.ts
-- report-week: summarize last 7 days of payments.jsonl
-
-## Safety
-
-No GitHub clone. No secrets committed. Do not call live CDP APIs until you set keys and start the server intentionally. Local/private use only.
+MIT-style: use freely. No secrets in this repo; never commit `.env`.
