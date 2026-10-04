@@ -1,9 +1,10 @@
-# Agent Research Tools — pay-per-call x402 APIs (USDC on Base, Polygon, Arbitrum)
+# Agent Research Tools — pay-per-call x402 APIs (USDC on Base, Polygon, Arbitrum, Solana, Avalanche, Sei)
 
 Live: **https://x402-seller-pmlm.onrender.com** · Agent guide: [`/llms.txt`](https://x402-seller-pmlm.onrender.com/llms.txt) · OpenAPI: [`/openapi.json`](https://x402-seller-pmlm.onrender.com/openapi.json) · Discovery: [`/.well-known/x402`](https://x402-seller-pmlm.onrender.com/.well-known/x402)
 
-No API key, no signup. AI agents pay per request in USDC on Base (`eip155:8453`), Polygon (`eip155:137`) or
-Arbitrum (`eip155:42161`) using the
+No API key, no signup. AI agents pay per request in USDC on Base (`eip155:8453`), Polygon (`eip155:137`),
+Arbitrum (`eip155:42161`), Solana mainnet (CDP facilitator) or Avalanche (`eip155:43114`) and Sei (`eip155:1329`)
+(free PayAI facilitator) using the
 [x402](https://x402.org) protocol, settled through the Coinbase CDP facilitator and listed in the CDP x402 Bazaar.
 
 | Endpoint | Price | Use it when | Returns |
@@ -42,8 +43,10 @@ npm ci && npm run dev  # http://localhost:8402
 
 | Env | Default | Notes |
 |---|---|---|
-| `X402_ENV` | `development` | `production` = Base + Polygon + Arbitrum mainnet, `development` = Base Sepolia |
-| `X402_NETWORKS` | per `X402_ENV` | Optional comma-separated CAIP-2 override, e.g. `eip155:8453,eip155:137` (supported: 8453, 137, 42161, 84532). Same `X402_PAY_TO` on every EVM chain |
+| `X402_ENV` | `development` | `production` = Base, Polygon, Arbitrum, Solana (CDP) + Avalanche, Sei (PayAI); `development` = Base Sepolia + Solana Devnet |
+| `X402_NETWORKS` | per `X402_ENV` | Optional comma-separated CAIP-2 override, e.g. `eip155:8453,eip155:137` (supported: 8453, 137, 42161, 43114, 1329, 84532, Solana mainnet/devnet). Same `X402_PAY_TO` on every EVM chain |
+| `X402_SOLANA_PAY_TO` | built-in public address | Solana receive address (public key only; the secret never lives in this repo) |
+| `PAYAI_FACILITATOR_URL` | `https://facilitator.payai.network` | Facilitator for Avalanche/Sei (free tier, no API key) |
 | `X402_PAY_TO` | — | Your EVM receive address (else CDP provisions one; needs `CDP_WALLET_SECRET`) |
 | `REPORT_PRICE` / `READ_PRICE` / `CHECK_PRICE` | `$0.01` / `$0.005` / `$0.005` | Per-call prices |
 | `PUBLIC_URL` | Render URL | Used in discovery docs |

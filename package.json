@@ -2,7 +2,7 @@
   "name": "x402-seller",
   "version": "1.0.0",
   "private": true,
-  "description": "Agent Research Tools: pay-per-call x402 APIs (cited research brief, web page to markdown, x402 endpoint check), USDC on Base, Polygon or Arbitrum",
+  "description": "Agent Research Tools: pay-per-call x402 APIs (cited research brief, web page to markdown, x402 endpoint check), USDC on Base, Polygon, Arbitrum, Solana, Avalanche or Sei",
   "type": "module",
   "scripts": {
     "dev": "tsx src/server.ts",
@@ -40,6 +40,9 @@
     "usdc",
     "base",
     "polygon",
-    "arbitrum"
+    "arbitrum",
+    "solana",
+    "avalanche",
+    "sei"
   ]
 }

@@ -1,8 +1,8 @@
 /**
- * x402 research tools for AI agents — Coinbase CDP createX402Server + Express.
+ * x402 research tools for AI agents — x402 resource server (CDP + PayAI facilitators) + Express.
  * Pattern: https://docs.cdp.coinbase.com/x402/quickstart-for-sellers
  *
- * Paid (USDC on Base, Polygon or Arbitrum via x402, CDP facilitator):
+ * Paid (USDC on Base, Polygon, Arbitrum, Solana via the CDP facilitator; Avalanche, Sei via PayAI):
  *   GET /report?q=   cited research brief (official docs, Wikipedia, Stack Overflow, GitHub, HN-linked articles, Crossref; relevance-filtered extractive summary)
  *   GET /read?url=   any public web page -> clean LLM-ready markdown + title, headings, links
  *   GET /check?url=  x402 endpoint readiness + Bazaar ranking check (one unpaid probe)
@@ -14,7 +14,8 @@
  * with the real tx hash and payer. No invented hashes.
  */
 
-import { createX402Server } from "@coinbase/cdp-sdk/x402";
+import { CDP_SUPPORTED_EXTENSIONS, createCdpFacilitatorClient, getCdpDefaultSchemes, getCdpExtensionRegistrations } from "@coinbase/cdp-sdk/x402";
+import { HTTPFacilitatorClient, x402HTTPResourceServer, x402ResourceServer } from "@x402/core/server";
 import { paymentMiddlewareFromHTTPServer } from "@x402/express";
 import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import express, { type Request, type Response, type NextFunction } from "express";
@@ -43,26 +44,46 @@ const CHECK_PRICE = process.env.CHECK_PRICE ?? "$0.005";
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
 const ICON_URL = `${PUBLIC_URL}/icon.svg`;
 
-// Accepted networks (all settled by the CDP facilitator, same EVM payTo on every chain).
-// Base stays first: most x402 clients pick the first matching accepts entry.
-// CDP has no Polygon/Arbitrum testnet, so development stays Base Sepolia only.
+// Accepted networks. Base stays first: most x402 clients pick the first matching accepts entry.
+// "cdp" networks settle via the Coinbase CDP facilitator (and feed the CDP Bazaar);
+// "payai" networks settle via the free PayAI facilitator (no API key; free tier per receiving wallet).
+// The same EVM payTo works on every EVM chain; Solana uses its own address (X402_SOLANA_PAY_TO).
+// CDP has no Polygon/Arbitrum testnet, so development is Base Sepolia (+ Solana Devnet).
 // Override with X402_NETWORKS=eip155:8453,eip155:137 (comma-separated CAIP-2 ids).
-const NETWORK_INFO: Record<string, { name: string; usdc: string }> = {
-  "eip155:8453": { name: "Base", usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" },
-  "eip155:137": { name: "Polygon", usdc: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359" },
-  "eip155:42161": { name: "Arbitrum", usdc: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831" },
-  "eip155:84532": { name: "Base Sepolia", usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" },
+type Facilitator = "cdp" | "payai";
+const SOLANA_MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+const SOLANA_DEVNET = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
+const NETWORK_INFO: Record<string, { name: string; usdc: string; facilitator: Facilitator; family: "evm" | "svm" }> = {
+  "eip155:8453": { name: "Base", usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", facilitator: "cdp", family: "evm" },
+  "eip155:137": { name: "Polygon", usdc: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", facilitator: "cdp", family: "evm" },
+  "eip155:42161": { name: "Arbitrum", usdc: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", facilitator: "cdp", family: "evm" },
+  [SOLANA_MAINNET]: { name: "Solana", usdc: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", facilitator: "cdp", family: "svm" },
+  "eip155:43114": { name: "Avalanche", usdc: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", facilitator: "payai", family: "evm" },
+  "eip155:1329": { name: "Sei", usdc: "0xe15fC38F6D8c56aF07bbCBe3BAf5708A2Bf42392", facilitator: "payai", family: "evm" },
+  "eip155:84532": { name: "Base Sepolia", usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", facilitator: "cdp", family: "evm" },
+  [SOLANA_DEVNET]: { name: "Solana Devnet", usdc: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", facilitator: "cdp", family: "svm" },
 };
-const DEFAULT_NETWORKS = X402_ENV === "production" ? ["eip155:8453", "eip155:137", "eip155:42161"] : ["eip155:84532"];
+// Public receiving addresses (not secrets). Env overrides win.
+const PAY_TO_EVM = process.env.X402_PAY_TO?.trim() || "0x079471E6F43b6feeF80895E19cBFcBB496904852";
+const PAY_TO_SVM = process.env.X402_SOLANA_PAY_TO?.trim() || "6uiGPwhN7iQ1wCswy9WVEKpemJ5njAczHw4dZN8WgNzA";
+const PAYAI_FACILITATOR_URL = process.env.PAYAI_FACILITATOR_URL?.trim() || "https://facilitator.payai.network";
+const DEFAULT_NETWORKS =
+  X402_ENV === "production"
+    ? ["eip155:8453", "eip155:137", "eip155:42161", SOLANA_MAINNET, "eip155:43114", "eip155:1329"]
+    : ["eip155:84532", SOLANA_DEVNET];
 const NETWORKS: string[] = (process.env.X402_NETWORKS?.split(",").map((n) => n.trim()).filter(Boolean) ?? DEFAULT_NETWORKS).filter((n) => {
-  if (NETWORK_INFO[n]) return true;
-  console.warn(`ignoring unsupported network ${n}`);
+  const info = NETWORK_INFO[n];
+  if (!info) console.warn(`ignoring unsupported network ${n}`);
+  else if (info.family === "svm" && !PAY_TO_SVM) console.warn(`ignoring ${n}: no X402_SOLANA_PAY_TO`);
+  else return true;
   return false;
 });
 if (!NETWORKS.length) throw new Error("No supported networks configured (X402_NETWORKS)");
+const payToFor = (network: string) => (NETWORK_INFO[network]!.family === "svm" ? PAY_TO_SVM : PAY_TO_EVM);
 const NETWORK_NAMES = NETWORKS.map((n) => NETWORK_INFO[n]!.name);
 const NETWORK_LABEL = NETWORK_NAMES.length > 1 ? `${NETWORK_NAMES.slice(0, -1).join(", ")} or ${NETWORK_NAMES.at(-1)}` : NETWORK_NAMES[0]!;
 const ON_NETWORKS = `USDC on ${NETWORK_LABEL}`;
+const ON_NETWORKS_SHORT = `USDC (${NETWORK_NAMES.join("/")})`;
 
 const PAID = {
   "/report": REPORT_PRICE,
@@ -145,7 +166,6 @@ async function main() {
     next();
   });
 
-  const payTo = process.env.X402_PAY_TO?.trim();
 
   // Guard rails + accurate settlement logging (runs before payment middleware).
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -205,7 +225,7 @@ async function main() {
       scheme: "exact",
       price,
       network,
-      payTo: payTo ?? "",
+      payTo: payToFor(network),
       maxTimeoutSeconds: 300,
     }));
 
@@ -276,7 +296,7 @@ async function main() {
     "GET /report": {
       accepts: accept(REPORT_PRICE),
       description:
-        `Research brief with citations for any question or topic. Use when an agent needs a quick, sourced answer or background before writing, deciding, or searching deeper. Pass q (question). Returns summary, 3-6 cited bullets, and a source list (official docs, Wikipedia, Stack Overflow, GitHub, papers) with URLs and dates; off-topic ones dropped. ${usd(REPORT_PRICE)} ${ON_NETWORKS}. ${ERRORS_DOC}`,
+        `Research brief with citations for any question or topic. Use when an agent needs a quick, sourced answer or background before writing, deciding, or searching deeper. Pass q (question). Returns summary, 3-6 cited bullets, and a source list (official docs, Wikipedia, Stack Overflow, GitHub, papers) with URLs and dates; off-topic ones dropped. ${usd(REPORT_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
       mimeType: "application/json",
       serviceName: SERVICE_NAME,
       tags: ["research", "web-search", "citations", "summarization", "knowledge"],
@@ -332,7 +352,7 @@ async function main() {
     "GET /read": {
       accepts: accept(READ_PRICE),
       description:
-        `Read any public web page and get clean, LLM-ready markdown. Use when an agent has a URL (article, docs, blog, product page) and needs its text without HTML, scripts, or nav clutter. Pass url (https). Returns title, meta description, publish date, markdown, word count, headings, and outbound links. ${usd(READ_PRICE)} ${ON_NETWORKS}. ${ERRORS_DOC}`,
+        `Read any public web page and get clean, LLM-ready markdown. Use when an agent has a URL (article, docs, blog, product page) and needs its text without HTML, scripts, or nav clutter. Pass url (https). Returns title, meta description, publish date, markdown, word count, headings, and outbound links. ${usd(READ_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
       mimeType: "application/json",
       serviceName: SERVICE_NAME,
       tags: ["web-scraping", "html-to-markdown", "web-reader", "content-extraction", "llm-ready"],
@@ -373,7 +393,7 @@ async function main() {
     "GET /check": {
       accepts: accept(CHECK_PRICE),
       description:
-        `x402 endpoint readiness and Bazaar ranking check. Use before paying for or listing an x402 API. Makes one unpaid probe (never pays the target) and grades the 402 challenge: PAYMENT-REQUIRED header, accepts, amount, payTo, network, description, mimeType, serviceName, tags, bazaar schemas and examples, latency. Returns a score and fixes. ${usd(CHECK_PRICE)} ${ON_NETWORKS}. ${ERRORS_DOC}`,
+        `x402 endpoint readiness and Bazaar ranking check. Use before paying for or listing an x402 API. Makes one unpaid probe (never pays the target) and grades the 402 challenge: PAYMENT-REQUIRED header, accepts, amount, payTo, network, description, mimeType, serviceName, tags, bazaar schemas and examples, latency. Returns a score and fixes. ${usd(CHECK_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
       mimeType: "application/json",
       serviceName: SERVICE_NAME,
       tags: ["x402", "api-testing", "validation", "bazaar", "developer-tools"],
@@ -412,15 +432,24 @@ async function main() {
     },
   };
 
-  const serverConfig: Parameters<typeof createX402Server>[0] = {
-    environment: X402_ENV,
-    routes: routes as any,
-  };
-  if (payTo) serverConfig.payToConfig = { type: "address", evm: payTo as `0x${string}` };
-  // else: CDP provisions a receiver wallet (requires CDP_WALLET_SECRET + API keys)
-
-  const server = await createX402Server(serverConfig);
-  const payToAddr = server.payToEvmAddress ?? payTo ?? null;
+  // Facilitators: CDP first so it wins every network it supports (Bazaar indexing);
+  // PayAI picks up the rest (Avalanche, Sei). First facilitator listing a network wins.
+  const needPayai = NETWORKS.some((n) => NETWORK_INFO[n]!.facilitator === "payai");
+  const facilitators = [
+    createCdpFacilitatorClient({ apiKeyId: process.env.CDP_API_KEY_ID, apiKeySecret: process.env.CDP_API_KEY_SECRET }),
+    ...(needPayai ? [new HTTPFacilitatorClient({ url: PAYAI_FACILITATOR_URL })] : []),
+  ];
+  const resourceServer = new x402ResourceServer(facilitators);
+  for (const scheme of getCdpDefaultSchemes()) resourceServer.register(scheme.network as any, scheme.server as any);
+  for (const ext of getCdpExtensionRegistrations()) resourceServer.registerExtension(ext as any);
+  const hasEvm = NETWORKS.some((n) => NETWORK_INFO[n]!.family === "evm");
+  const resolvedRoutes = Object.fromEntries(
+    Object.entries(routes).map(([k, r]) => [k, { ...r, extensions: { ...(hasEvm ? CDP_SUPPORTED_EXTENSIONS : {}), ...r.extensions } }]),
+  );
+  const server = new x402HTTPResourceServer(resourceServer, resolvedRoutes as any);
+  await server.initialize(); // fetches /supported from each facilitator and fails fast on an unsupported network
+  const payToAddr = PAY_TO_EVM;
+  const payToSolana = NETWORKS.some((n) => NETWORK_INFO[n]!.family === "svm") ? PAY_TO_SVM : null;
   app.use(paymentMiddlewareFromHTTPServer(server as any));
 
   // ---------- free discovery surface ----------
@@ -455,7 +484,8 @@ async function main() {
       circuitOpen: circuitOpen(),
       sinceStart: { startedAt, ...counters },
       payToEvmAddress: payToAddr,
-      payToMode: payTo ? "address" : "cdp-provisioned",
+      payToSolanaAddress: payToSolana,
+      facilitators: Object.fromEntries(NETWORKS.map((n) => [n, NETWORK_INFO[n]!.facilitator])),
     });
   });
 
@@ -473,7 +503,7 @@ async function main() {
       "",
       `> Pay-per-call research tools for autonomous AI agents. No API key, no signup: pay per request in ${ON_NETWORKS}`,
       `> (${NETWORKS.join(", ")}) with the x402 protocol (HTTP 402 + PAYMENT-REQUIRED / PAYMENT-SIGNATURE headers, CDP facilitator).`,
-      `> Pay to: ${payToAddr ?? "(see /health)"}. ${ERRORS_DOC}`,
+      `> Pay to: ${payToAddr} (EVM chains)${payToSolana ? `, ${payToSolana} (Solana)` : ""}. ${ERRORS_DOC}`,
       "",
       "## Paid endpoints",
       `- GET ${PUBLIC_URL}/report?q=<question>  (${REPORT_PRICE}) — research brief with citations: summary, 3-6 cited bullets, sources from official docs, Wikipedia, Stack Overflow, GitHub, HN-linked articles, Crossref (off-topic sources dropped). Optional depth=quick|standard, lang=en.`,
@@ -482,7 +512,7 @@ async function main() {
       "",
       "## How to pay",
       `1. Call the endpoint without payment -> HTTP 402 with base64 JSON in the PAYMENT-REQUIRED header (x402Version 2, scheme exact; one accepts entry per network: ${NETWORKS.map((n) => `${NETWORK_INFO[n]!.name} USDC ${NETWORK_INFO[n]!.usdc}`).join("; ")}).`,
-      "2. Sign an EIP-3009 USDC authorization for `amount` (atomic units, 6 decimals) to `payTo`; retry with the PAYMENT-SIGNATURE header.",
+      "2. Pick one accepts entry. EVM: sign an EIP-3009 USDC authorization for `amount` (atomic units, 6 decimals) to `payTo`. Solana: partially sign a USDC TransferChecked (facilitator is fee payer). Retry with the PAYMENT-SIGNATURE header.",
       "3. Response 200 + JSON body + PAYMENT-RESPONSE header (settlement tx). Any x402 client works: @x402/fetch, @x402/axios, x402 Python, Coinbase Agentic Wallet / CDP MCP.",
       "",
       "## Free",
@@ -517,6 +547,7 @@ async function main() {
     network: NETWORKS[0],
     networks: NETWORKS,
     payTo: payToAddr,
+    payToSolana,
     openapi: `${PUBLIC_URL}/openapi.json`,
     llms: `${PUBLIC_URL}/llms.txt`,
     free: ["/health", "/llms.txt", "/openapi.json", "/.well-known/x402", "/robots.txt"],
@@ -538,7 +569,7 @@ async function main() {
     };
     const pay = (price: string) => ({
       "x-payment-info": {
-        protocols: NETWORKS.map((network) => ({ x402: { version: 2, scheme: "exact", network, asset: NETWORK_INFO[network]!.usdc, payTo: payToAddr } })),
+        protocols: NETWORKS.map((network) => ({ x402: { version: 2, scheme: "exact", network, asset: NETWORK_INFO[network]!.usdc, payTo: payToFor(network) } })),
         price: { mode: "fixed", currency: "USD", amount: usd(price) },
       },
     });
@@ -658,7 +689,7 @@ async function main() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`x402 seller listening on http://localhost:${PORT}  env=${X402_ENV} networks=${NETWORKS.join(",")} (${NETWORK_LABEL})`);
-    console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}; payTo=${payToAddr}`);
+    console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}`);
   });
 }
 
