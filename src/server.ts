@@ -6,6 +6,8 @@
  *   GET /report?q=   cited research brief (official docs, Wikipedia, Stack Overflow, GitHub, HN-linked articles, Crossref; relevance-filtered extractive summary)
  *   GET /read?url=   any public web page -> clean LLM-ready markdown + title, headings, links
  *   GET /check?url=  x402 endpoint readiness + Bazaar ranking check (one unpaid probe)
+ *   GET /news?q=     recent news headlines (GDELT, Hacker News, major publisher RSS feeds)
+ *   GET /price?token= onchain ERC-20 USD price from Uniswap v3 pools via public RPC (verifiable)
  *
  * Buyers are only charged on HTTP 2xx: @x402/express skips settlement when the handler
  * answers >= 400, so bad input, no sources, or an unreachable target cost nothing.
@@ -26,6 +28,8 @@ import { InputError, PUBLIC_URL } from "./lib/net.js";
 import { researchBrief } from "./lib/research.js";
 import { readPage } from "./lib/read.js";
 import { checkX402Endpoint } from "./lib/check.js";
+import { newsSearch, warmNews } from "./lib/news.js";
+import { PRICE_CHAINS, PRICE_SYMBOLS, PriceInputError, tokenPrice } from "./lib/price.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -41,6 +45,8 @@ const DAILY_SPEND_CAP_USD = Number(process.env.DAILY_SPEND_CAP_USD ?? 50);
 const REPORT_PRICE = process.env.REPORT_PRICE ?? "$0.01";
 const READ_PRICE = process.env.READ_PRICE ?? "$0.005";
 const CHECK_PRICE = process.env.CHECK_PRICE ?? "$0.005";
+const NEWS_PRICE = process.env.NEWS_PRICE ?? "$0.005";
+const TOKEN_PRICE = process.env.TOKEN_PRICE ?? "$0.002";
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
 const ICON_URL = `${PUBLIC_URL}/icon.svg`;
 
@@ -65,11 +71,11 @@ const NETWORK_INFO: Record<string, { name: string; usdc: string; facilitator: Fa
 };
 // Public receiving addresses (not secrets). Env overrides win.
 const PAY_TO_EVM = process.env.X402_PAY_TO?.trim() || "0x079471E6F43b6feeF80895E19cBFcBB496904852";
-const PAY_TO_SVM = process.env.X402_SOLANA_PAY_TO?.trim() || "6uiGPwhN7iQ1wCswy9WVEKpemJ5njAczHw4dZN8WgNzA";
+const PAY_TO_SVM = process.env.X402_SOLANA_PAY_TO?.trim() || "787RZwDGpjmRsG5wgnyBeWQHBuARax8Qo6P7dmDuqKeW";
 const PAYAI_FACILITATOR_URL = process.env.PAYAI_FACILITATOR_URL?.trim() || "https://facilitator.payai.network";
 const DEFAULT_NETWORKS =
   X402_ENV === "production"
-    ? ["eip155:8453", "eip155:137", "eip155:42161", "eip155:43114", "eip155:1329"] // Solana mainnet off until the receiver has a USDC token account; enable via X402_NETWORKS
+    ? ["eip155:8453", "eip155:137", "eip155:42161", SOLANA_MAINNET, "eip155:43114", "eip155:1329"] // Solana payTo has an initialized USDC ATA
     : ["eip155:84532", SOLANA_DEVNET];
 const NETWORKS: string[] = (process.env.X402_NETWORKS?.split(",").map((n) => n.trim()).filter(Boolean) ?? DEFAULT_NETWORKS).filter((n) => {
   const info = NETWORK_INFO[n];
@@ -89,6 +95,8 @@ const PAID = {
   "/report": REPORT_PRICE,
   "/read": READ_PRICE,
   "/check": CHECK_PRICE,
+  "/news": NEWS_PRICE,
+  "/price": TOKEN_PRICE,
 } as const;
 type PaidPath = keyof typeof PAID;
 
@@ -212,7 +220,7 @@ async function main() {
           network: pr.network ?? NETWORKS[0],
           payer: pr.payer ?? null,
           transaction: pr.transaction ?? null,
-          query: String(req.query.q ?? req.query.url ?? "").slice(0, 200),
+          query: String(req.query.q ?? req.query.url ?? req.query.token ?? "").slice(0, 200),
         });
       }
     });
@@ -289,6 +297,38 @@ async function main() {
     fixes: ["tags_set: missing (resource.tags, up to 5)"],
     checkedAt: "2026-10-03T18:00:00.000Z",
     note: "One unpaid probe; this service never pays the target.",
+  };
+
+  const newsExample = {
+    query: "bitcoin ETF",
+    terms: ["bitcoin", "etf"],
+    hours: 72,
+    count: 2,
+    articles: [
+      { title: "Bitcoin ETFs kick off 'Uptober' with $103M inflow", url: "https://cointelegraph.com/news/example", source: "Cointelegraph", publishedAt: "2026-10-02T08:20:00.000Z", provider: "rss", score: 1 },
+      { title: "Spot bitcoin ETFs log $2.7 billion in September inflows", url: "https://www.theblock.co/post/example", source: "The Block", publishedAt: "2026-10-02T05:50:00.000Z", provider: "rss", score: 1 },
+    ],
+    outlets: ["Cointelegraph", "The Block"],
+    providers: ["rss"],
+    providerStatus: { gdelt: "ok", hackernews: 0, rssFeeds: "25/26" },
+    note: "Headlines and links only; open the url (or use /read) for full text.",
+    latencyMs: 410,
+    generatedAt: "2026-10-03T18:00:00.000Z",
+  };
+
+  const priceExample = {
+    token: { symbol: "WETH", name: "Wrapped Ether", address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", decimals: 18, chain: "ethereum" },
+    priceUsd: 2690.6431,
+    confidence: "high",
+    poolSpreadPct: 0.54,
+    totalDepthUsd: 330722389,
+    pools: [{ dex: "uniswap-v3", pool: "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640", feeTier: 500, quote: "USDC", priceUsd: 2690.12, depthUsd: 120000000, explorer: "https://etherscan.io/address/0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640" }],
+    block: { number: 23500000, timestamp: "2026-10-03T18:00:00.000Z" },
+    method: "Uniswap v3 spot price (slot0) from public RPC; depth-weighted across pools within 3% of the deepest; USDC/USDT treated as $1",
+    note: "priced as WETH",
+    cached: false,
+    latencyMs: 470,
+    generatedAt: "2026-10-03T18:00:00.000Z",
   };
 
   const strArr = { type: "array", items: { type: "string" } };
@@ -430,7 +470,101 @@ async function main() {
         }),
       },
     },
+    "GET /news": {
+      accepts: accept(NEWS_PRICE),
+      description:
+        `Recent news headlines on any topic. Use when an agent needs what happened in the last 1-7 days. Pass q (keywords). Returns deduplicated headlines with outlet, link, publish time and match score from major outlets (BBC, NPR, Guardian, CNBC, NYT, TechCrunch, crypto press), GDELT and Hacker News. Headlines + links only. ${usd(NEWS_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+      mimeType: "application/json",
+      serviceName: SERVICE_NAME,
+      tags: ["news", "headlines", "current-events", "search", "monitoring"],
+      iconUrl: ICON_URL,
+      extensions: {
+        ...declareDiscoveryExtension({
+          input: { q: "bitcoin ETF" },
+          inputSchema: {
+            properties: {
+              q: { type: "string", minLength: 2, maxLength: 200, description: "Keywords, e.g. 'bitcoin ETF', 'OpenAI', 'Federal Reserve rate cut'" },
+              hours: { type: "integer", minimum: 1, maximum: 168, description: "Look-back window in hours (default 72, max 168)" },
+              limit: { type: "integer", minimum: 1, maximum: 25, description: "Max articles (default 10, max 25)" },
+            },
+            required: ["q"],
+          },
+          output: {
+            example: newsExample,
+            schema: {
+              properties: {
+                query: { type: "string" },
+                terms: strArr,
+                hours: { type: "integer" },
+                count: { type: "integer" },
+                articles: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      title: { type: "string" },
+                      url: { type: "string" },
+                      source: { type: "string", description: "Outlet or domain" },
+                      publishedAt: { type: ["string", "null"] },
+                      provider: { type: "string", enum: ["gdelt", "hackernews", "rss"] },
+                      score: { type: "number", description: "0-1 keyword match (IDF-weighted)" },
+                      partialMatch: { type: "boolean", description: "true if not every keyword matched" },
+                    },
+                    required: ["title", "url", "source"],
+                  },
+                },
+                outlets: strArr,
+                providers: strArr,
+                providerStatus: { type: "object" },
+                latencyMs: { type: "integer" },
+                generatedAt: { type: "string" },
+              },
+              required: ["query", "count", "articles"],
+            },
+          },
+        }),
+      },
+    },
+    "GET /price": {
+      accepts: accept(TOKEN_PRICE),
+      description:
+        `Onchain USD price of an ERC-20 token (ETH, BTC, LINK, UNI, PEPE... or any address on Ethereum, Base, Arbitrum, Polygon). Use when an agent needs a verifiable spot price. Pass token (symbol or 0x address), optional chain. Returns price, Uniswap v3 pools, depth, cross-pool spread, confidence, block. ${usd(TOKEN_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+      mimeType: "application/json",
+      serviceName: SERVICE_NAME,
+      tags: ["crypto", "token-price", "defi", "onchain", "market-data"],
+      iconUrl: ICON_URL,
+      extensions: {
+        ...declareDiscoveryExtension({
+          input: { token: "ETH" },
+          inputSchema: {
+            properties: {
+              token: { type: "string", minLength: 1, maxLength: 42, description: `Symbol (${PRICE_SYMBOLS.slice(0, 12).join(", ")}, ...) or ERC-20 contract address` },
+              chain: { type: "string", enum: PRICE_CHAINS, description: "Chain for an address (default ethereum); symbols use their deepest chain" },
+            },
+            required: ["token"],
+          },
+          output: {
+            example: priceExample,
+            schema: {
+              properties: {
+                token: { type: "object", properties: { symbol: { type: ["string", "null"] }, name: { type: ["string", "null"] }, address: { type: "string" }, decimals: { type: "integer" }, chain: { type: "string" } } },
+                priceUsd: { type: "number" },
+                confidence: { type: "string", enum: ["high", "medium", "low"] },
+                poolSpreadPct: { type: "number" },
+                totalDepthUsd: { type: "number" },
+                pools: { type: "array", items: { type: "object" } },
+                block: { type: "object", properties: { number: { type: "integer" }, timestamp: { type: "string" } } },
+                method: { type: "string" },
+                generatedAt: { type: "string" },
+              },
+              required: ["token", "priceUsd", "pools", "block"],
+            },
+          },
+        }),
+      },
+    },
   };
+  for (const [k, r] of Object.entries(routes)) if (r.description.length > 500) console.warn(`description too long (${r.description.length}) for ${k}`);
 
   // Facilitators: CDP first so it wins every network it supports (Bazaar indexing);
   // PayAI picks up the rest (Avalanche, Sei). First facilitator listing a network wins.
@@ -494,7 +628,7 @@ async function main() {
       res.type("text/plain").send(llmsTxt());
       return;
     }
-    res.json({ name: SERVICE_NAME, description: `Pay-per-call research tools for AI agents over x402 (${ON_NETWORKS}).`, docs: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json`, resources: catalog() });
+    res.json({ name: SERVICE_NAME, description: `Pay-per-call research tools for AI agents over x402 (${ON_NETWORKS}): cited research briefs, web page to markdown, news headlines, onchain token prices, x402 endpoint checks.`, docs: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json`, resources: catalog() });
   });
 
   const llmsTxt = () =>
@@ -502,13 +636,15 @@ async function main() {
       `# ${SERVICE_NAME} (x402)`,
       "",
       `> Pay-per-call research tools for autonomous AI agents. No API key, no signup: pay per request in ${ON_NETWORKS}`,
-      `> (${NETWORKS.join(", ")}) with the x402 protocol (HTTP 402 + PAYMENT-REQUIRED / PAYMENT-SIGNATURE headers, CDP facilitator).`,
+      `> (${NETWORKS.join(", ")}) with the x402 protocol (HTTP 402 + PAYMENT-REQUIRED / PAYMENT-SIGNATURE headers; CDP facilitator, PayAI for Avalanche/Sei).`,
       `> Pay to: ${payToAddr} (EVM chains)${payToSolana ? `, ${payToSolana} (Solana)` : ""}. ${ERRORS_DOC}`,
       "",
       "## Paid endpoints",
       `- GET ${PUBLIC_URL}/report?q=<question>  (${REPORT_PRICE}) — research brief with citations: summary, 3-6 cited bullets, sources from official docs, Wikipedia, Stack Overflow, GitHub, HN-linked articles, Crossref (off-topic sources dropped). Optional depth=quick|standard, lang=en.`,
       `- GET ${PUBLIC_URL}/read?url=<https url>  (${READ_PRICE}) — web page to clean LLM-ready markdown with title, description, publish date, headings, links. Optional maxChars (default 20000).`,
       `- GET ${PUBLIC_URL}/check?url=<https x402 endpoint>  (${CHECK_PRICE}) — x402 readiness + Bazaar ranking check; one unpaid probe, score + fixes. Optional method=GET|POST.`,
+      `- GET ${PUBLIC_URL}/news?q=<keywords>  (${NEWS_PRICE}) — recent news headlines (outlet, link, publish time, match score) from major publisher feeds, GDELT and Hacker News. Optional hours=1-168 (default 72), limit=1-25 (default 10). Headlines + links only; use /read for full text.`,
+      `- GET ${PUBLIC_URL}/price?token=<symbol|0x address>  (${TOKEN_PRICE}) — onchain USD spot price from Uniswap v3 pools (${PRICE_CHAINS.join(", ")}) via public RPC: price, pool addresses, depth, cross-pool spread, confidence, block number. Optional chain=. Pools under $25k depth -> 422 (not charged).`,
       "",
       "## How to pay",
       `1. Call the endpoint without payment -> HTTP 402 with base64 JSON in the PAYMENT-REQUIRED header (x402Version 2, scheme exact; one accepts entry per network: ${NETWORKS.map((n) => `${NETWORK_INFO[n]!.name} USDC ${NETWORK_INFO[n]!.usdc}`).join("; ")}).`,
@@ -528,7 +664,7 @@ async function main() {
   app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt()));
 
   app.get("/robots.txt", (_req, res) => {
-    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", `Sitemap: ${PUBLIC_URL}/openapi.json`, ""].join("\n"));
+    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", `Sitemap: ${PUBLIC_URL}/openapi.json`, ""].join("\n"));
   });
 
   app.get("/icon.svg", (_req, res) => {
@@ -541,7 +677,7 @@ async function main() {
   const wellKnown = () => ({
     version: 1,
     name: SERVICE_NAME,
-    description: `Pay-per-call research tools for AI agents: cited research briefs, web page to markdown, x402 endpoint checks. ${ON_NETWORKS} via x402.`,
+    description: `Pay-per-call research tools for AI agents: cited research briefs, web page to markdown, news headlines, onchain token prices, x402 endpoint checks. ${ON_NETWORKS} via x402.`,
     resources: catalog().map((c) => c.url),
     items: catalog(),
     network: NETWORKS[0],
@@ -581,7 +717,7 @@ async function main() {
         version: "2.0.0",
         description: `Pay-per-call research tools for AI agents over x402 (${ON_NETWORKS}). ` + ERRORS_DOC,
         "x-guidance":
-          "Use /report for a cited answer to a question, /read to turn a known URL into markdown, /check to validate an x402 endpoint. Call without payment to get the 402 challenge, then retry with PAYMENT-SIGNATURE.",
+          "Use /report for a cited answer to a question, /read to turn a known URL into markdown, /news for recent headlines on a topic, /price for a verifiable onchain token price, /check to validate an x402 endpoint. Call without payment to get the 402 challenge, then retry with PAYMENT-SIGNATURE.",
       },
       servers: [{ url: PUBLIC_URL }],
       paths: {
@@ -622,6 +758,35 @@ async function main() {
             parameters: [qp("url", { type: "string", format: "uri" }, true, "x402 endpoint URL"), qp("method", { type: "string", enum: ["GET", "POST"] }, false, "Probe method")],
             ...pay(CHECK_PRICE),
             responses: { "200": { description: "Score and fixes", content: { "application/json": { schema: r["GET /check"].extensions.bazaar.schema.properties.output.properties.example, example: checkExample } } }, ...errs },
+          },
+        },
+        "/news": {
+          get: {
+            operationId: "newsSearch",
+            summary: "Recent news headlines on a topic",
+            description: r["GET /news"].description,
+            tags: ["News"],
+            parameters: [
+              qp("q", { type: "string", minLength: 2, maxLength: 200 }, true, "Keywords"),
+              qp("hours", { type: "integer", minimum: 1, maximum: 168 }, false, "Look-back window in hours (default 72)"),
+              qp("limit", { type: "integer", minimum: 1, maximum: 25 }, false, "Max articles (default 10)"),
+            ],
+            ...pay(NEWS_PRICE),
+            responses: { "200": { description: "Headlines", content: { "application/json": { schema: r["GET /news"].extensions.bazaar.schema.properties.output.properties.example, example: newsExample } } }, ...errs },
+          },
+        },
+        "/price": {
+          get: {
+            operationId: "tokenPrice",
+            summary: "Onchain ERC-20 token USD price (Uniswap v3)",
+            description: r["GET /price"].description,
+            tags: ["Crypto"],
+            parameters: [
+              qp("token", { type: "string", minLength: 1, maxLength: 42 }, true, "Symbol or ERC-20 address"),
+              qp("chain", { type: "string", enum: PRICE_CHAINS }, false, "Chain for an address (default ethereum)"),
+            ],
+            ...pay(TOKEN_PRICE),
+            responses: { "200": { description: "Price with pool evidence", content: { "application/json": { schema: r["GET /price"].extensions.bazaar.schema.properties.output.properties.example, example: priceExample } } }, ...errs },
           },
         },
       },
@@ -681,6 +846,51 @@ async function main() {
     }
   });
 
+  app.get("/news", async (req, res) => {
+    res.locals.paidHandlerRan = true;
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    if (q.length < 2 || q.length > 200) {
+      res.status(400).json({ error: "bad_input", message: "q is required (2-200 chars). You were not charged." });
+      return;
+    }
+    const num = (v: unknown) => (v === undefined || v === "" ? undefined : Number(v));
+    try {
+      const out: any = await newsSearch(q, { hours: num(req.query.hours), limit: num(req.query.limit) });
+      if (out.error === "no_search_terms") {
+        res.status(400).json({ ...out, message: "q has no searchable keywords. You were not charged." });
+        return;
+      }
+      if (out.error) {
+        res.status(422).json({ ...out, message: "No matching headlines in the window; try broader keywords or more hours. You were not charged." });
+        return;
+      }
+      res.json(out);
+    } catch (err) {
+      res.status(503).json({ error: "news_unavailable", message: `${err instanceof Error ? err.message : String(err)}. You were not charged.` });
+    }
+  });
+
+  app.get("/price", async (req, res) => {
+    res.locals.paidHandlerRan = true;
+    const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
+    if (!token || token.length > 42) {
+      res.status(400).json({ error: "bad_input", message: "token is required (symbol like ETH or an 0x ERC-20 address). You were not charged." });
+      return;
+    }
+    try {
+      const out: any = await tokenPrice(token, typeof req.query.chain === "string" ? req.query.chain : undefined);
+      if (out.error) {
+        res.status(422).json({ ...out, message: `${out.message}. You were not charged.` });
+        return;
+      }
+      res.json(out);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (err instanceof PriceInputError) res.status(400).json({ error: "bad_input", message: `${msg}. You were not charged.` });
+      else res.status(503).json({ error: "rpc_unavailable", message: "Public RPC nodes did not answer; retry shortly. You were not charged." });
+    }
+  });
+
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     const message = err instanceof Error ? err.message : String(err);
     appendPaymentLog({ type: "error", kind: "express_error", message });
@@ -688,8 +898,9 @@ async function main() {
   });
 
   app.listen(PORT, "0.0.0.0", () => {
+    warmNews();
     console.log(`x402 seller listening on http://localhost:${PORT}  env=${X402_ENV} networks=${NETWORKS.join(",")} (${NETWORK_LABEL})`);
-    console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}`);
+    console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}, /news ${NEWS_PRICE}, /price ${TOKEN_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}`);
   });
 }
 

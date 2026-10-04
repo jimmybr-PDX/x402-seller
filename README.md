@@ -12,6 +12,8 @@ Arbitrum (`eip155:42161`), Solana mainnet (CDP facilitator) or Avalanche (`eip15
 | `GET /report?q=<question>` | $0.01 | You need a quick, cited answer or background on a topic | `summary`, 3-6 cited `bullets`, `sources[]` (official docs, Wikipedia, Stack Overflow, GitHub, papers; off-topic sources dropped) with URLs + dates |
 | `GET /read?url=<https url>` | $0.005 | You have a URL and need its text for an LLM | `title`, `description`, `publishedAt`, clean `markdown`, `wordCount`, `headings[]`, `links[]` |
 | `GET /check?url=<x402 endpoint>` | $0.005 | You are about to pay for or list an x402 API | readiness `score`, per-check results, `fixes[]` (one unpaid probe; never pays the target) |
+| `GET /news?q=<keywords>` | $0.005 | You need what happened on a topic in the last 1-7 days | `articles[]` (title, url, outlet, `publishedAt`, match `score`, `partialMatch`), `outlets`, provider status. Optional `hours` (1-168, default 72), `limit` (1-25). Headlines + links only |
+| `GET /price?token=<symbol or 0x address>` | $0.002 | You need a verifiable USD spot price for an ERC-20 | `priceUsd`, `confidence`, `poolSpreadPct`, `totalDepthUsd`, Uniswap v3 `pools[]` with explorer links, `block` number + time. Optional `chain` (ethereum, base, arbitrum, polygon) |
 
 **Never charged for errors:** 400 bad input, 422 nothing found / target unreachable, 503 unavailable.
 The x402 middleware only settles a payment when the handler returns 2xx.
@@ -48,7 +50,7 @@ npm ci && npm run dev  # http://localhost:8402
 | `X402_SOLANA_PAY_TO` | built-in public address | Solana receive address (public key only; the secret never lives in this repo) |
 | `PAYAI_FACILITATOR_URL` | `https://facilitator.payai.network` | Facilitator for Avalanche/Sei (free tier, no API key) |
 | `X402_PAY_TO` | — | Your EVM receive address (else CDP provisions one; needs `CDP_WALLET_SECRET`) |
-| `REPORT_PRICE` / `READ_PRICE` / `CHECK_PRICE` | `$0.01` / `$0.005` / `$0.005` | Per-call prices |
+| `REPORT_PRICE` / `READ_PRICE` / `CHECK_PRICE` / `NEWS_PRICE` / `TOKEN_PRICE` | `$0.01` / `$0.005` / `$0.005` / `$0.005` / `$0.002` | Per-call prices |
 | `PUBLIC_URL` | Render URL | Used in discovery docs |
 | `DAILY_SPEND_CAP_USD` | `50` | Runaway guard on confirmed settlements per UTC day |
 | `GROK_API_KEY` or `OPENAI_API_KEY` | — | Optional: LLM synthesis over the cited sources; without it `/report` is extractive |
@@ -68,6 +70,11 @@ Free routes: `/health`, `/llms.txt`, `/openapi.json`, `/.well-known/x402`, `/rob
 
 - Settlements are logged to `payments.jsonl` (gitignored) only after the facilitator confirms, with payer + tx hash.
 - Circuit breaker: 3 failed settlements (verified payment, settle failed) in 10 minutes -> 503 (uncharged) for paid calls.
+- `/news` sources: GDELT DOC API (open data; serialized, backs off on 429), Hacker News (Algolia API) and ~26 publisher
+  RSS/Atom feeds (cached 10 min). Only headlines, links, outlet and time are returned, never article text.
+- `/price` reads Uniswap v3 pool state (`slot0`, reserves) straight from public RPC nodes via Multicall: no third-party
+  price API, so every number is verifiable onchain at the returned block. Pools under $25k quote-side depth are ignored;
+  no qualifying pool -> 422 (uncharged). Non-EVM assets (SOL, XRP, ...) are not priced. Cached 30 s.
 - `/read` and `/check` only fetch public `https` hosts (private/loopback/link-local IPs blocked, redirects re-checked, 3 MB / 15 s caps).
 
 MIT-style: use freely. No secrets in this repo; never commit `.env`.
