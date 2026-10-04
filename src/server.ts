@@ -69,7 +69,7 @@ const PAY_TO_SVM = process.env.X402_SOLANA_PAY_TO?.trim() || "6uiGPwhN7iQ1wCswy9
 const PAYAI_FACILITATOR_URL = process.env.PAYAI_FACILITATOR_URL?.trim() || "https://facilitator.payai.network";
 const DEFAULT_NETWORKS =
   X402_ENV === "production"
-    ? ["eip155:8453", "eip155:137", "eip155:42161", SOLANA_MAINNET, "eip155:43114", "eip155:1329"]
+    ? ["eip155:8453", "eip155:137", "eip155:42161", "eip155:43114", "eip155:1329"] // Solana mainnet off until the receiver has a USDC token account; enable via X402_NETWORKS
     : ["eip155:84532", SOLANA_DEVNET];
 const NETWORKS: string[] = (process.env.X402_NETWORKS?.split(",").map((n) => n.trim()).filter(Boolean) ?? DEFAULT_NETWORKS).filter((n) => {
   const info = NETWORK_INFO[n];
