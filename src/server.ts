@@ -2,7 +2,7 @@
  * x402 research tools for AI agents — Coinbase CDP createX402Server + Express.
  * Pattern: https://docs.cdp.coinbase.com/x402/quickstart-for-sellers
  *
- * Paid (USDC on Base via x402, CDP facilitator):
+ * Paid (USDC on Base, Polygon or Arbitrum via x402, CDP facilitator):
  *   GET /report?q=   cited research brief (official docs, Wikipedia, Stack Overflow, GitHub, HN-linked articles, Crossref; relevance-filtered extractive summary)
  *   GET /read?url=   any public web page -> clean LLM-ready markdown + title, headings, links
  *   GET /check?url=  x402 endpoint readiness + Bazaar ranking check (one unpaid probe)
@@ -43,11 +43,26 @@ const CHECK_PRICE = process.env.CHECK_PRICE ?? "$0.005";
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
 const ICON_URL = `${PUBLIC_URL}/icon.svg`;
 
-const NETWORKS =
-  X402_ENV === "production"
-    ? (["eip155:8453"] as const) // Base mainnet
-    : (["eip155:84532"] as const); // Base Sepolia
-const NETWORK_LABEL = X402_ENV === "production" ? "Base mainnet" : "Base Sepolia";
+// Accepted networks (all settled by the CDP facilitator, same EVM payTo on every chain).
+// Base stays first: most x402 clients pick the first matching accepts entry.
+// CDP has no Polygon/Arbitrum testnet, so development stays Base Sepolia only.
+// Override with X402_NETWORKS=eip155:8453,eip155:137 (comma-separated CAIP-2 ids).
+const NETWORK_INFO: Record<string, { name: string; usdc: string }> = {
+  "eip155:8453": { name: "Base", usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" },
+  "eip155:137": { name: "Polygon", usdc: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359" },
+  "eip155:42161": { name: "Arbitrum", usdc: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831" },
+  "eip155:84532": { name: "Base Sepolia", usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" },
+};
+const DEFAULT_NETWORKS = X402_ENV === "production" ? ["eip155:8453", "eip155:137", "eip155:42161"] : ["eip155:84532"];
+const NETWORKS: string[] = (process.env.X402_NETWORKS?.split(",").map((n) => n.trim()).filter(Boolean) ?? DEFAULT_NETWORKS).filter((n) => {
+  if (NETWORK_INFO[n]) return true;
+  console.warn(`ignoring unsupported network ${n}`);
+  return false;
+});
+if (!NETWORKS.length) throw new Error("No supported networks configured (X402_NETWORKS)");
+const NETWORK_NAMES = NETWORKS.map((n) => NETWORK_INFO[n]!.name);
+const NETWORK_LABEL = NETWORK_NAMES.length > 1 ? `${NETWORK_NAMES.slice(0, -1).join(", ")} or ${NETWORK_NAMES.at(-1)}` : NETWORK_NAMES[0]!;
+const ON_NETWORKS = `USDC on ${NETWORK_LABEL}`;
 
 const PAID = {
   "/report": REPORT_PRICE,
@@ -109,7 +124,7 @@ function decodeB64Json(v: unknown): any {
 
 const usd = (p: string) => p.replace(/^\$/, "");
 const ERRORS_DOC =
-  "Errors are never charged: 400 bad/missing input, 422 nothing usable found or target unreachable, 503 temporarily unavailable.";
+  "Errors are never charged: 400 bad input, 422 nothing found or target unreachable, 503 busy.";
 
 async function main() {
   const app = express();
@@ -184,13 +199,15 @@ async function main() {
     next();
   });
 
-  const accept = (price: string) => ({
-    scheme: "exact",
-    price,
-    network: NETWORKS[0],
-    payTo: payTo ?? "",
-    maxTimeoutSeconds: 300,
-  });
+  // One accepts entry per network; CDP resolves "$0.01" to each chain's native USDC.
+  const accept = (price: string) =>
+    NETWORKS.map((network) => ({
+      scheme: "exact",
+      price,
+      network,
+      payTo: payTo ?? "",
+      maxTimeoutSeconds: 300,
+    }));
 
   const reportExample = {
     query: "What is retrieval-augmented generation?",
@@ -259,7 +276,7 @@ async function main() {
     "GET /report": {
       accepts: accept(REPORT_PRICE),
       description:
-        `Research brief with citations for any question or topic. Use when an agent needs a quick, sourced answer or background before writing, deciding, or searching deeper. Pass q (question). Returns summary, 3-6 cited bullets, and a source list (official docs, Wikipedia, Stack Overflow, GitHub, papers) with URLs and dates; off-topic ones dropped. ${usd(REPORT_PRICE)} USDC on Base. ${ERRORS_DOC}`,
+        `Research brief with citations for any question or topic. Use when an agent needs a quick, sourced answer or background before writing, deciding, or searching deeper. Pass q (question). Returns summary, 3-6 cited bullets, and a source list (official docs, Wikipedia, Stack Overflow, GitHub, papers) with URLs and dates; off-topic ones dropped. ${usd(REPORT_PRICE)} ${ON_NETWORKS}. ${ERRORS_DOC}`,
       mimeType: "application/json",
       serviceName: SERVICE_NAME,
       tags: ["research", "web-search", "citations", "summarization", "knowledge"],
@@ -315,7 +332,7 @@ async function main() {
     "GET /read": {
       accepts: accept(READ_PRICE),
       description:
-        `Read any public web page and get clean, LLM-ready markdown. Use when an agent has a URL (article, docs, blog, product page) and needs its text without HTML, scripts, or nav clutter. Pass url (https). Returns title, meta description, publish date, markdown, word count, headings, and outbound links. ${usd(READ_PRICE)} USDC on Base. ${ERRORS_DOC}`,
+        `Read any public web page and get clean, LLM-ready markdown. Use when an agent has a URL (article, docs, blog, product page) and needs its text without HTML, scripts, or nav clutter. Pass url (https). Returns title, meta description, publish date, markdown, word count, headings, and outbound links. ${usd(READ_PRICE)} ${ON_NETWORKS}. ${ERRORS_DOC}`,
       mimeType: "application/json",
       serviceName: SERVICE_NAME,
       tags: ["web-scraping", "html-to-markdown", "web-reader", "content-extraction", "llm-ready"],
@@ -356,7 +373,7 @@ async function main() {
     "GET /check": {
       accepts: accept(CHECK_PRICE),
       description:
-        `x402 endpoint readiness and Bazaar ranking check. Use before paying for or listing an x402 API. Makes one unpaid probe (never pays the target) and grades the 402 challenge: PAYMENT-REQUIRED header, accepts, amount, payTo, network, description, mimeType, serviceName, tags, bazaar schemas and examples, latency. Returns a score and fixes. ${usd(CHECK_PRICE)} USDC on Base. ${ERRORS_DOC}`,
+        `x402 endpoint readiness and Bazaar ranking check. Use before paying for or listing an x402 API. Makes one unpaid probe (never pays the target) and grades the 402 challenge: PAYMENT-REQUIRED header, accepts, amount, payTo, network, description, mimeType, serviceName, tags, bazaar schemas and examples, latency. Returns a score and fixes. ${usd(CHECK_PRICE)} ${ON_NETWORKS}. ${ERRORS_DOC}`,
       mimeType: "application/json",
       serviceName: SERVICE_NAME,
       tags: ["x402", "api-testing", "validation", "bazaar", "developer-tools"],
@@ -417,6 +434,7 @@ async function main() {
         price: PAID[p],
         priceUsd: parsePriceUsd(PAID[p]),
         network: NETWORKS[0],
+        networks: NETWORKS,
         asset: "USDC",
         description: r.description,
         tags: r.tags,
@@ -446,15 +464,15 @@ async function main() {
       res.type("text/plain").send(llmsTxt());
       return;
     }
-    res.json({ name: SERVICE_NAME, description: "Pay-per-call research tools for AI agents over x402 (USDC on Base).", docs: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json`, resources: catalog() });
+    res.json({ name: SERVICE_NAME, description: `Pay-per-call research tools for AI agents over x402 (${ON_NETWORKS}).`, docs: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json`, resources: catalog() });
   });
 
   const llmsTxt = () =>
     [
       `# ${SERVICE_NAME} (x402)`,
       "",
-      "> Pay-per-call research tools for autonomous AI agents. No API key, no signup: pay per request in USDC on Base",
-      `> (${NETWORKS[0]}) with the x402 protocol (HTTP 402 + PAYMENT-REQUIRED / PAYMENT-SIGNATURE headers, CDP facilitator).`,
+      `> Pay-per-call research tools for autonomous AI agents. No API key, no signup: pay per request in ${ON_NETWORKS}`,
+      `> (${NETWORKS.join(", ")}) with the x402 protocol (HTTP 402 + PAYMENT-REQUIRED / PAYMENT-SIGNATURE headers, CDP facilitator).`,
       `> Pay to: ${payToAddr ?? "(see /health)"}. ${ERRORS_DOC}`,
       "",
       "## Paid endpoints",
@@ -463,7 +481,7 @@ async function main() {
       `- GET ${PUBLIC_URL}/check?url=<https x402 endpoint>  (${CHECK_PRICE}) — x402 readiness + Bazaar ranking check; one unpaid probe, score + fixes. Optional method=GET|POST.`,
       "",
       "## How to pay",
-      "1. Call the endpoint without payment -> HTTP 402 with base64 JSON in the PAYMENT-REQUIRED header (x402Version 2, scheme exact, USDC 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913).",
+      `1. Call the endpoint without payment -> HTTP 402 with base64 JSON in the PAYMENT-REQUIRED header (x402Version 2, scheme exact; one accepts entry per network: ${NETWORKS.map((n) => `${NETWORK_INFO[n]!.name} USDC ${NETWORK_INFO[n]!.usdc}`).join("; ")}).`,
       "2. Sign an EIP-3009 USDC authorization for `amount` (atomic units, 6 decimals) to `payTo`; retry with the PAYMENT-SIGNATURE header.",
       "3. Response 200 + JSON body + PAYMENT-RESPONSE header (settlement tx). Any x402 client works: @x402/fetch, @x402/axios, x402 Python, Coinbase Agentic Wallet / CDP MCP.",
       "",
@@ -493,10 +511,11 @@ async function main() {
   const wellKnown = () => ({
     version: 1,
     name: SERVICE_NAME,
-    description: "Pay-per-call research tools for AI agents: cited research briefs, web page to markdown, x402 endpoint checks. USDC on Base via x402.",
+    description: `Pay-per-call research tools for AI agents: cited research briefs, web page to markdown, x402 endpoint checks. ${ON_NETWORKS} via x402.`,
     resources: catalog().map((c) => c.url),
     items: catalog(),
     network: NETWORKS[0],
+    networks: NETWORKS,
     payTo: payToAddr,
     openapi: `${PUBLIC_URL}/openapi.json`,
     llms: `${PUBLIC_URL}/llms.txt`,
@@ -519,7 +538,7 @@ async function main() {
     };
     const pay = (price: string) => ({
       "x-payment-info": {
-        protocols: [{ x402: { version: 2, scheme: "exact", network: NETWORKS[0], asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: payToAddr } }],
+        protocols: NETWORKS.map((network) => ({ x402: { version: 2, scheme: "exact", network, asset: NETWORK_INFO[network]!.usdc, payTo: payToAddr } })),
         price: { mode: "fixed", currency: "USD", amount: usd(price) },
       },
     });
@@ -529,7 +548,7 @@ async function main() {
       info: {
         title: SERVICE_NAME,
         version: "2.0.0",
-        description: "Pay-per-call research tools for AI agents over x402 (USDC on Base). " + ERRORS_DOC,
+        description: `Pay-per-call research tools for AI agents over x402 (${ON_NETWORKS}). ` + ERRORS_DOC,
         "x-guidance":
           "Use /report for a cited answer to a question, /read to turn a known URL into markdown, /check to validate an x402 endpoint. Call without payment to get the 402 challenge, then retry with PAYMENT-SIGNATURE.",
       },
