@@ -5,6 +5,7 @@
  * keep date/outlet/url/title for the last NEWS_GKG_HOURS hours (default 24) in memory, and
  * search titles locally. Backfills newest-first at startup, then polls every 5 minutes.
  */
+import https from "node:https";
 import { promisify } from "node:util";
 import zlib from "node:zlib";
 
@@ -22,6 +23,54 @@ const seenUrls = new Set<string>();
 const loaded = new Set<string>();
 let started = false;
 let lastError: string | null = null;
+let lastErrorAt: string | null = null;
+let lastOkAt: string | null = null;
+let transport: "fetch" | "https-ipv4" | null = null;
+let failures = 0;
+let retryTimer: NodeJS.Timeout | null = null;
+
+/** undici's "fetch failed" hides the real reason in err.cause; surface it (code + message). */
+const errText = (e: any) => {
+  const c = e?.cause;
+  const cause = c ? ` (${[c.code, c.message ?? String(c)].filter(Boolean).join(": ")})` : "";
+  return `${e?.name === "TimeoutError" ? "timeout" : String(e?.message ?? e)}${cause}`.slice(0, 300);
+};
+const setError = (e: any) => {
+  lastError = errText(e);
+  lastErrorAt = new Date().toISOString();
+};
+
+/** Plain node:https GET forced to IPv4 — fallback for hosts where fetch fails (e.g. IPv6 route missing). */
+function httpsGetV4(url: string, timeoutMs: number): Promise<{ status: number; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { family: 4, headers: { "user-agent": USER_AGENT }, timeout: timeoutMs }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks) }));
+      res.on("error", reject);
+    });
+    req.on("timeout", () => req.destroy(new Error(`timeout after ${timeoutMs} ms`)));
+    req.on("error", reject);
+  });
+}
+
+/** GET with fetch first; on a network-level failure retry once over IPv4-only node:https and stick with what works. */
+async function getBuf(url: string, timeoutMs: number): Promise<{ status: number; body: Buffer }> {
+  if (transport !== "https-ipv4") {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers: { "user-agent": USER_AGENT } });
+      const body = Buffer.from(await res.arrayBuffer());
+      transport = "fetch";
+      return { status: res.status, body };
+    } catch (e) {
+      if (transport === "fetch") throw e; // fetch has worked before: treat as a transient error
+      setError(e);
+    }
+  }
+  const r = await httpsGetV4(url, timeoutMs);
+  transport = "https-ipv4";
+  return r;
+}
 let newestTs: string | null = null;
 
 const ENT: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", "#39": "'" };
@@ -49,13 +98,13 @@ async function unzipSingle(buf: Buffer): Promise<Buffer> {
 
 async function loadFile(ts: string): Promise<number> {
   if (loaded.has(ts)) return 0;
-  const res = await fetch(`${BASE}${ts}.gkg.csv.zip`, { signal: AbortSignal.timeout(30_000), headers: { "user-agent": USER_AGENT } });
+  const res = await getBuf(`${BASE}${ts}.gkg.csv.zip`, 30_000);
   if (res.status === 404) {
     loaded.add(ts);
     return 0;
   }
-  if (!res.ok) throw new Error(`gkg ${res.status}`);
-  const text = (await unzipSingle(Buffer.from(await res.arrayBuffer()))).toString("utf8");
+  if (res.status !== 200) throw new Error(`gkg ${ts} HTTP ${res.status}`);
+  const text = (await unzipSingle(res.body)).toString("utf8");
   const fresh: GkgItem[] = [];
   // Scan with indexOf instead of split(): rows are ~27 tab-separated columns of up to 100 KB, and we
   // only need columns 1, 3, 4 and the PAGE_TITLE tag. Yield to the event loop every 1,000 rows so a
@@ -107,14 +156,18 @@ function prune() {
 }
 
 async function latestTs(): Promise<string> {
-  const res = await fetch(`${BASE}lastupdate.txt`, { signal: AbortSignal.timeout(10_000), headers: { "user-agent": USER_AGENT } });
-  const txt = await res.text();
+  const res = await getBuf(`${BASE}lastupdate.txt`, 15_000);
+  if (res.status !== 200) throw new Error(`lastupdate.txt HTTP ${res.status}`);
+  const txt = res.body.toString("utf8");
   const m = txt.match(/(\d{14})\.gkg\.csv\.zip/);
   if (!m) throw new Error("no gkg in lastupdate");
   return m[1]!;
 }
 
-async function sync(backfill: boolean) {
+async function sync(backfillReq: boolean) {
+  // Keep backfilling (full window) until it has been filled once, so a failed first load is not
+  // downgraded to the 2-hour poll window.
+  const backfill = backfillReq || !backfilled;
   try {
     const latest = await latestTs();
     const want: string[] = [];
@@ -122,16 +175,40 @@ async function sync(backfill: boolean) {
     for (let i = 0; i < n; i++) want.push(msToTs(tsToMs(latest) - i * 15 * 60_000));
     const todo = want.filter((t) => !loaded.has(t));
     // Newest first, one at a time; a pause between files keeps CPU/network gentle on small instances.
+    let ok = 0;
+    let failed = 0;
     for (const t of todo) {
-      await loadFile(t).catch((e) => void (lastError = String(e?.message ?? e)));
+      await loadFile(t).then(
+        () => ok++,
+        (e) => {
+          failed++;
+          setError(e);
+        },
+      );
       if (backfill) await new Promise((r) => setTimeout(r, 400));
     }
     prune();
-    lastError = null;
+    if (failed === 0 || ok > 0) {
+      lastOkAt = new Date().toISOString();
+      failures = 0;
+      if (backfill && failed === 0) backfilled = true;
+      if (failed === 0) lastError = null;
+    } else throw new Error(lastError ?? "all gkg files failed");
   } catch (e: any) {
-    lastError = String(e?.message ?? e);
+    if (!lastError || !String(e?.message).startsWith("all gkg")) setError(e);
+    failures++;
+    // Retry sooner than the 5-minute poll: 30 s, 60 s, 120 s, then 240 s.
+    if (!retryTimer) {
+      const delay = Math.min(240_000, 30_000 * 2 ** Math.min(3, failures - 1));
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        void sync(false);
+      }, delay);
+      retryTimer.unref();
+    }
   }
 }
+let backfilled = false;
 
 export function startGkg(): void {
   if (started || HOURS <= 0) return;
@@ -151,6 +228,10 @@ export function gkgStatus() {
     files: loaded.size,
     articles: items.length,
     newest: newestTs ? new Date(tsToMs(newestTs)).toISOString() : null,
+    transport,
+    lastOkAt,
+    lastErrorAt,
+    consecutiveFailures: failures,
     ...(lastError ? { lastError } : {}),
   };
 }
