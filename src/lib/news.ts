@@ -1,12 +1,22 @@
 /**
  * News search over free, keyless sources:
- *  - GDELT DOC 2.0 API (open data, any use). Hard limit 1 request / 5 s per IP: we
+ *  - GDELT GKG 15-minute article files (open data, any use): a local index of every headline
+ *    GDELT saw in the last 24 h (see gkg.ts). No API, so no per-IP rate limit.
+ *  - GDELT DOC 2.0 API (optional, NEWS_GDELT_API=1). Hard limit 1 request / 5 s per IP: we
  *    serialize calls (>= 6 s apart), cache 10 min, and back off 5 min after a 429.
  *  - Hacker News via the public Algolia HN Search API (tech coverage).
  *  - A pool of publisher RSS/Atom headline feeds, refreshed at most every 10 min.
  *    Only headline, link, outlet and timestamp are returned (no article text).
  */
 import { USER_AGENT, getJson } from "./net.js";
+import { gkgItems, gkgStatus, lcWords, startGkg } from "./gkg.js";
+
+const GDELT_API = process.env.NEWS_GDELT_API === "1";
+// Outlets that get a small ranking boost over the long tail of GDELT sources.
+const MAJOR = new Set(
+  "reuters.com apnews.com bbc.co.uk bbc.com nytimes.com theguardian.com cnbc.com bloomberg.com wsj.com ft.com washingtonpost.com npr.org cnn.com foxnews.com aljazeera.com axios.com politico.com theverge.com techcrunch.com arstechnica.com wired.com coindesk.com cointelegraph.com theblock.co decrypt.co forbes.com businessinsider.com finance.yahoo.com yahoo.com marketwatch.com nbcnews.com cbsnews.com abcnews.go.com usatoday.com independent.co.uk news.sky.com sky.com dw.com france24.com economist.com time.com newsweek.com latimes.com thehill.com engadget.com variety.com hollywoodreporter.com billboard.com espn.com nature.com science.org space.com"
+    .split(" "),
+);
 
 export type NewsArticle = {
   title: string;
@@ -81,10 +91,10 @@ function stem(w: string): string {
   if (w.length <= 4) return w;
   return w.replace(/(ations?|ators?|atory|ings?|ions?|ers?|ed|es|s|y)$/, "") || w;
 }
-const titleWords = (title: string) => title.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}\s.$-]/gu, " ").split(/\s+/).filter(Boolean);
-const hasTerm = (words: string[], w: string) => {
+// lc = " word1 word2 ... " (see lcWords): whole-word and prefix tests become substring tests.
+const hasTerm = (lc: string, w: string) => {
   const st = stem(w);
-  return words.some((x) => x === w || (st.length >= 4 ? x.startsWith(st) : x === `${w}s` || x === `${w}'s`));
+  return lc.includes(` ${w} `) || (st.length >= 4 ? lc.includes(` ${st}`) : lc.includes(` ${w}s `));
 };
 /** Which query terms appear in the title (stemmed, whole-word). */
 // Common headline abbreviations: a title word on the right counts as all query words on the left.
@@ -96,13 +106,10 @@ const ALIASES: [string[], string[]][] = [
   [["interest", "rates"], ["rates"]],
   [["interest", "rate"], ["rate"]],
 ];
-function matched(title: string, ts: string[]): boolean[] {
-  const words = titleWords(title);
-  const m = ts.map((w) => hasTerm(words, w));
-  for (const [phrase, abbrs] of ALIASES) {
-    const idx = phrase.map((p) => ts.indexOf(p));
-    if (idx.every((i) => i >= 0) && abbrs.some((a) => words.includes(a))) for (const i of idx) m[i] = true;
-  }
+const ACTIVE_ALIASES = (ts: string[]) => ALIASES.map(([phrase, abbrs]) => ({ idx: phrase.map((p) => ts.indexOf(p)), abbrs })).filter((a) => a.idx.every((i) => i >= 0));
+function matched(lc: string, ts: string[], aliases = ACTIVE_ALIASES(ts)): boolean[] {
+  const m = ts.map((w) => hasTerm(lc, w));
+  for (const { idx, abbrs } of aliases) if (abbrs.some((a) => lc.includes(` ${a} `))) for (const i of idx) m[i] = true;
   return m;
 }
 
@@ -139,6 +146,10 @@ async function rssPool() {
 }
 export function warmNews(): void {
   void refreshRss().catch(() => {});
+  startGkg();
+}
+export function newsStatus() {
+  return { gdeltGkg: gkgStatus(), gdeltApi: GDELT_API ? (Date.now() < gdeltBackoffUntil ? "backoff" : "on") : "off", rssFeedsOk: rssCache ? `${rssCache.ok}/${FEEDS.length}` : "warming", rssItems: rssCache?.items.length ?? 0 };
 }
 async function refreshRss() {
   if (rssInflight) return rssInflight;
@@ -165,6 +176,7 @@ async function gdelt(q: string, hours: number, max: number): Promise<{ items: Ne
   const key = `${q}|${hours}`;
   const hit = gdeltCache.get(key);
   if (hit && Date.now() - hit.at < QUERY_TTL_MS) return { items: hit.items, status: "cache" };
+  if (!GDELT_API) return { items: [], status: "off" };
   if (Date.now() < gdeltBackoffUntil) return { items: [], status: "backoff" };
   // Serialize: one call at a time, >= 6 s apart. Give up if we would wait > 7 s.
   if (gdeltNextAt - Date.now() > 7000) return { items: [], status: "busy" };
@@ -262,19 +274,35 @@ export async function newsSearch(qRaw: string, opts: { hours?: number; limit?: n
     .filter((i) => !i.publishedAt || Date.parse(i.publishedAt) >= cutoff)
     .map((i) => ({ ...i, provider: "rss" as const }));
 
+  // GDELT GKG index: only titles that contain at least one query term become candidates.
+  const aliases = ACTIVE_ALIASES(ts);
+  const gk = gkgItems();
+  const gkC: NewsArticle[] = [];
+  const gkM: boolean[][] = [];
+  for (const it of gk) {
+    if (it.t < cutoff) continue;
+    const m = matched(it.lc, ts, aliases);
+    if (!m.some(Boolean)) continue;
+    gkC.push({ title: it.title, url: it.url, source: it.source, publishedAt: new Date(it.t).toISOString(), provider: "gdelt" });
+    gkM.push(m);
+  }
   // IDF weights from the candidate pool: rare terms ("Starship") matter more than common ones ("launch").
-  const cands = [...rss, ...g.items, ...hn];
-  const marks = cands.map((a) => matched(a.title, ts));
-  const N = cands.length + 1;
+  const small = [...rss, ...g.items, ...hn];
+  const cands = [...small, ...gkC];
+  const marks = [...small.map((a) => matched(lcWords(a.title), ts, aliases)), ...gkM];
+  const N = rss.length + g.items.length + hn.length + gk.length + 1;
   const idf = ts.map((_, i) => Math.log(N / (1 + marks.filter((m) => m[i]).length)) + 0.1);
   // Terms that never occur in any candidate can't help rank; weight only the ones that do.
   const present = ts.map((_, i) => marks.some((m) => m[i]));
-  const idfSum = idf.reduce((x, y, i) => x + (present[i] ? y : 0), 0) || 1;
+  // A term found nowhere still counts (at 70% weight): "Oregon wildfire" with no wildfire
+  // headlines should come back empty (uncharged), not as a list of unrelated Oregon stories.
+  const idfSum = idf.reduce((x, y, i) => x + (present[i] ? y : 0.7 * y), 0) || 1;
   const top = idf.reduce((best, v, i) => (present[i] && (best < 0 || v > idf[best]!) ? i : best), -1);
 
   const all: NewsArticle[] = [];
   const seenU = new Set<string>();
   const seenT = new Set<string>();
+  const gdeltDocUrls = new Set(g.items.map((a) => a.url));
   for (const [i, a] of cands.entries()) {
     const m = marks[i]!;
     const hitCount = m.filter(Boolean).length;
@@ -282,7 +310,9 @@ export async function newsSearch(qRaw: string, opts: { hours?: number; limit?: n
     const hasTop = top >= 0 && m[top]!;
     // GDELT already matched article body text; keep it unless its title is clearly off-topic.
     const strictOk = hitCount === ts.length || (ts.length > 2 && hitCount >= ts.length - 1 && cover >= 0.8 && hasTop);
-    const relaxedOk = a.provider === "gdelt" ? hitCount > 0 || ts.length === 1 : cover >= 0.5 && hasTop;
+    // GDELT DOC API results already matched article body text; keep unless the title is clearly off-topic.
+    // Two-word queries need the matched word to carry most of the weight (>= 0.6) for a partial hit.
+    const relaxedOk = gdeltDocUrls.has(a.url) ? hitCount > 0 || ts.length === 1 : cover >= (ts.length === 2 ? 0.6 : 0.5) && hasTop;
     if (!strictOk && !relaxedOk) continue;
     const s = strictOk ? need : relaxed;
     if (a.publishedAt && Date.parse(a.publishedAt) < cutoff) continue;
@@ -293,14 +323,23 @@ export async function newsSearch(qRaw: string, opts: { hours?: number; limit?: n
     seenT.add(t);
     const ageH = a.publishedAt ? (Date.now() - Date.parse(a.publishedAt)) / 3.6e6 : hours;
     const pop = a.provider === "hackernews" ? Math.min(1, Math.log10(1 + (a.points ?? 0)) / 3) : 0;
-    all.push({ ...a, partialMatch: s < need, score: Math.round((s / 2 + Math.max(0, 1 - ageH / hours) * 0.5 + pop * 0.3) * 1000) / 1000 } as NewsArticle);
+    const major = a.provider === "rss" || MAJOR.has(a.source.replace(/^www\./, "")) ? 0.15 : 0;
+    all.push({ ...a, partialMatch: s < need, score: Math.round((s / 2 + Math.max(0, 1 - ageH / hours) * 0.5 + pop * 0.3 + major) * 1000) / 1000 } as NewsArticle);
   }
   all.sort((a, b) => b.score! - a.score! || (Date.parse(b.publishedAt ?? "") || 0) - (Date.parse(a.publishedAt ?? "") || 0));
   const strict = all.filter((a) => !a.partialMatch);
   // Only fall back to partial matches when strict matches are thin.
-  const pick = strict.length >= Math.min(3, limit) ? strict : [...strict, ...all.filter((a) => a.partialMatch)];
+  const pick0 = strict.length >= Math.min(3, limit) ? strict : [...strict, ...all.filter((a) => a.partialMatch)];
+  // Outlet diversity: at most 3 headlines per outlet.
+  const perSource = new Map<string, number>();
+  const pick = pick0.filter((a) => {
+    const n = (perSource.get(a.source) ?? 0) + 1;
+    perSource.set(a.source, n);
+    return n <= 3;
+  });
   const articles = pick.slice(0, limit).map(({ points, ...a }) => (points ? { ...a, points } : a));
-  if (!articles.length) return { error: "no_recent_articles" as const, query: q, hours, providerStatus: { gdelt: g.status, hackernews: hn.length, rssFeedsOk: pool.ok } };
+  const gs = gkgStatus();
+  if (!articles.length) return { error: "no_recent_articles" as const, query: q, hours, providerStatus: { gdeltIndex: gs.articles, gdeltApi: g.status, hackernews: hn.length, rssFeedsOk: pool.ok } };
   return {
     query: q,
     terms: ts,
@@ -309,8 +348,9 @@ export async function newsSearch(qRaw: string, opts: { hours?: number; limit?: n
     articles,
     outlets: [...new Set(articles.map((a) => a.source))].slice(0, 15),
     providers: [...new Set(articles.map((a) => a.provider))],
-    providerStatus: { gdelt: g.status, hackernews: hn.length, rssFeeds: `${pool.ok}/${FEEDS.length}`, rssPoolAgeSec: Math.round((Date.now() - pool.at) / 1000) },
-    note: "Headlines and links only; open the url for the full article. GDELT is rate-limited upstream and may be skipped; RSS covers ~25 major outlets.",
+    totalMatches: all.length,
+    providerStatus: { gdeltIndex: { articles: gs.articles, hours: gs.hours, newest: gs.newest }, gdeltApi: g.status, hackernews: hn.length, rssFeeds: `${pool.ok}/${FEEDS.length}`, rssPoolAgeSec: Math.round((Date.now() - pool.at) / 1000) },
+    note: "Headlines and links only; open the url (or /read) for the full article. Sources: GDELT Project global news index (gdeltproject.org, last 24 h), ~26 major-outlet RSS feeds, Hacker News.",
     latencyMs: Date.now() - started,
     generatedAt: new Date().toISOString(),
   };

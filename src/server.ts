@@ -7,7 +7,11 @@
  *   GET /read?url=   any public web page -> clean LLM-ready markdown + title, headings, links
  *   GET /check?url=  x402 endpoint readiness + Bazaar ranking check (one unpaid probe)
  *   GET /news?q=     recent news headlines (GDELT, Hacker News, major publisher RSS feeds)
- *   GET /price?token= onchain ERC-20 USD price from Uniswap v3 pools via public RPC (verifiable)
+ *   GET /price?token= onchain token USD price + 24h change (Uniswap v3 on EVM; Orca/Raydium/PumpSwap on Solana)
+ *   GET /solana-price?token=  Solana token price by symbol or mint (Orca, Raydium CLMM, PumpSwap, pump.fun curve)
+ *   GET /balance?address=     wallet balances + USD (EVM chains or Solana; ENS supported)
+ *   GET /tx?hash=             transaction status + decoded token transfers (EVM chains or Solana)
+ *   GET /gas                  live gas / priority fees + USD cost per tx type (EVM chains + Solana)
  *
  * Buyers are only charged on HTTP 2xx: @x402/express skips settlement when the handler
  * answers >= 400, so bad input, no sources, or an unreachable target cost nothing.
@@ -28,8 +32,12 @@ import { InputError, PUBLIC_URL } from "./lib/net.js";
 import { researchBrief } from "./lib/research.js";
 import { readPage } from "./lib/read.js";
 import { checkX402Endpoint } from "./lib/check.js";
-import { newsSearch, warmNews } from "./lib/news.js";
+import { newsSearch, newsStatus, warmNews } from "./lib/news.js";
 import { PRICE_CHAINS, PRICE_SYMBOLS, PriceInputError, tokenPrice } from "./lib/price.js";
+import { SOLANA_PRICE_SYMBOLS, SolanaInputError, solanaTokenPrice } from "./lib/solana.js";
+import { WalletInputError, walletBalances } from "./lib/wallet.js";
+import { TxInputError, txLookup } from "./lib/tx.js";
+import { GasInputError, gasNow } from "./lib/gas.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -47,6 +55,10 @@ const READ_PRICE = process.env.READ_PRICE ?? "$0.005";
 const CHECK_PRICE = process.env.CHECK_PRICE ?? "$0.005";
 const NEWS_PRICE = process.env.NEWS_PRICE ?? "$0.005";
 const TOKEN_PRICE = process.env.TOKEN_PRICE ?? "$0.002";
+const SOL_PRICE = process.env.SOL_PRICE ?? "$0.002";
+const BALANCE_PRICE = process.env.BALANCE_PRICE ?? "$0.003";
+const TX_PRICE = process.env.TX_PRICE ?? "$0.003";
+const GAS_PRICE = process.env.GAS_PRICE ?? "$0.002";
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
 const ICON_URL = `${PUBLIC_URL}/icon.svg`;
 
@@ -97,6 +109,10 @@ const PAID = {
   "/check": CHECK_PRICE,
   "/news": NEWS_PRICE,
   "/price": TOKEN_PRICE,
+  "/solana-price": SOL_PRICE,
+  "/balance": BALANCE_PRICE,
+  "/tx": TX_PRICE,
+  "/gas": GAS_PRICE,
 } as const;
 type PaidPath = keyof typeof PAID;
 
@@ -220,7 +236,7 @@ async function main() {
           network: pr.network ?? NETWORKS[0],
           payer: pr.payer ?? null,
           transaction: pr.transaction ?? null,
-          query: String(req.query.q ?? req.query.url ?? req.query.token ?? "").slice(0, 200),
+          query: String(req.query.q ?? req.query.url ?? req.query.token ?? req.query.address ?? req.query.hash ?? req.query.chain ?? "").slice(0, 200),
         });
       }
     });
@@ -319,6 +335,9 @@ async function main() {
   const priceExample = {
     token: { symbol: "WETH", name: "Wrapped Ether", address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", decimals: 18, chain: "ethereum" },
     priceUsd: 2690.6431,
+    change24hPct: 1.45,
+    priceUsd24hAgo: 2652.18,
+    change24h: { pool: "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640", at: "2026-10-02T18:00:11.000Z", method: "archive slot0 at block 26116021" },
     confidence: "high",
     poolSpreadPct: 0.54,
     totalDepthUsd: 330722389,
@@ -331,15 +350,68 @@ async function main() {
     generatedAt: "2026-10-03T18:00:00.000Z",
   };
 
+  const solPriceExample = {
+    token: { symbol: "JUP", name: "Jupiter", mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", decimals: 6, chain: "solana" },
+    priceUsd: 0.331471,
+    confidence: "medium",
+    poolSpreadPct: 0.49,
+    outlierPools: 0,
+    totalDepthUsd: 814354,
+    pools: [{ dex: "orca-whirlpool", pool: "C1MgLojNLWBKADvu9BHdtgzz1oZX4dZ5zGdGcgvvW8Wz", quote: "SOL", priceUsd: 0.33162, depthUsd: 512000, explorer: "https://solscan.io/account/C1MgLojNLWBKADvu9BHdtgzz1oZX4dZ5zGdGcgvvW8Wz" }],
+    change24hPct: null,
+    solUsd: 121.2119,
+    slot: 453447029,
+    method: "Orca Whirlpool + Raydium CLMM sqrt_price, PumpSwap reserves and pump.fun bonding curves read from public Solana RPC",
+    cached: false,
+    latencyMs: 440,
+    generatedAt: "2026-10-05T02:30:00.000Z",
+  };
+  const balanceExample = {
+    address: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    ens: "vitalik.eth",
+    chains: [
+      {
+        chain: "ethereum",
+        block: 26123221,
+        native: { symbol: "ETH", balance: 5.749318263, priceUsd: 2731.4, usd: 15703.67 },
+        tokens: [{ symbol: "WETH", address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", balance: 1.465109425, priceUsd: 2731.4, usd: 4001.8 }],
+        totalUsd: 20072.13,
+      },
+    ],
+    totalUsd: 33703.46,
+    generatedAt: "2026-10-05T02:30:00.000Z",
+  };
+  const txExample = {
+    chain: "base",
+    status: "success",
+    hash: "0xa565aff51f0109d9a9c9028faa45338b3ebab49543fc25457e82326664ca8c52",
+    blockNumber: 52088549,
+    timestamp: "2026-10-02T18:40:45.000Z",
+    from: "0x8F5cB67B49555E614892b7233CFdDEBFB746E531",
+    to: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    method: { selector: "0xe3ee160e", name: "transferWithAuthorization (EIP-3009, used by x402 USDC payments)" },
+    fee: { amount: 6.346e-7, symbol: "ETH", usd: 0.0017 },
+    tokenTransfers: [{ token: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", symbol: "USDC", standard: "erc20", from: "0x4C29Ec4F680CA88d0019edBfe3A8FF5c80499494", to: "0x079471E6F43b6feeF80895E19cBFcBB496904852", amount: 0.01 }],
+    explorer: "https://basescan.org/tx/0xa565aff51f0109d9a9c9028faa45338b3ebab49543fc25457e82326664ca8c52",
+  };
+  const gasExample = {
+    chains: [
+      { chain: "ethereum", block: 26123258, baseFeeGwei: 0.0714, priorityFeeGwei: { slow: 0.00001, standard: 0.0109, fast: 1 }, nativeUsd: 2732.59, costStandard: { nativeTransfer: { native: 0.0000017, usd: 0.0047 }, erc20Transfer: { native: 0.0000054, usd: 0.0146 }, swap: { native: 0.0000148, usd: 0.0405 } } },
+      { chain: "solana", slot: 453448050, baseFeeLamportsPerSignature: 5000, priorityFeeMicroLamportsPerCu: { slow: 0, standard: 796, fast: 2936 }, nativeUsd: 121.4 },
+    ],
+    cheapestEvmForErc20Transfer: "base",
+    generatedAt: "2026-10-05T02:30:00.000Z",
+  };
+
   const strArr = { type: "array", items: { type: "string" } };
   const routes = {
     "GET /report": {
       accepts: accept(REPORT_PRICE),
       description:
-        `Research brief with citations for any question or topic. Use when an agent needs a quick, sourced answer or background before writing, deciding, or searching deeper. Pass q (question). Returns summary, 3-6 cited bullets, and a source list (official docs, Wikipedia, Stack Overflow, GitHub, papers) with URLs and dates; off-topic ones dropped. ${usd(REPORT_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+        `Research brief with citations: a quick, sourced answer to any question or topic. Use before writing, deciding, or searching deeper. Pass q (question). Returns a summary, 3-6 cited bullets and sources (official docs, Wikipedia, Stack Overflow, GitHub, papers) with URLs and dates; off-topic sources dropped. ${usd(REPORT_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
       mimeType: "application/json",
-      serviceName: SERVICE_NAME,
-      tags: ["research", "web-search", "citations", "summarization", "knowledge"],
+      serviceName: "Research Brief with Citations",
+      tags: ["research brief", "web research", "answer with sources", "citations", "summarize topic"],
       iconUrl: ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
@@ -392,10 +464,10 @@ async function main() {
     "GET /read": {
       accepts: accept(READ_PRICE),
       description:
-        `Read any public web page and get clean, LLM-ready markdown. Use when an agent has a URL (article, docs, blog, product page) and needs its text without HTML, scripts, or nav clutter. Pass url (https). Returns title, meta description, publish date, markdown, word count, headings, and outbound links. ${usd(READ_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+        `URL to markdown: read any public web page as clean, LLM-ready markdown. Use when an agent has a URL (article, docs, blog, product page) and needs its text without HTML, scripts or nav clutter. Pass url (https). Returns title, description, publish date, markdown, word count, headings and links. ${usd(READ_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
       mimeType: "application/json",
-      serviceName: SERVICE_NAME,
-      tags: ["web-scraping", "html-to-markdown", "web-reader", "content-extraction", "llm-ready"],
+      serviceName: "URL to Markdown",
+      tags: ["url to markdown", "web page to markdown", "read url", "scrape article text", "html to markdown"],
       iconUrl: ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
@@ -435,8 +507,8 @@ async function main() {
       description:
         `x402 endpoint readiness and Bazaar ranking check. Use before paying for or listing an x402 API. Makes one unpaid probe (never pays the target) and grades the 402 challenge: PAYMENT-REQUIRED header, accepts, amount, payTo, network, description, mimeType, serviceName, tags, bazaar schemas and examples, latency. Returns a score and fixes. ${usd(CHECK_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
       mimeType: "application/json",
-      serviceName: SERVICE_NAME,
-      tags: ["x402", "api-testing", "validation", "bazaar", "developer-tools"],
+      serviceName: "x402 Endpoint Checker",
+      tags: ["x402 endpoint check", "validate x402 endpoint", "x402", "bazaar listing", "api testing"],
       iconUrl: ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
@@ -473,10 +545,10 @@ async function main() {
     "GET /news": {
       accepts: accept(NEWS_PRICE),
       description:
-        `Recent news headlines on any topic. Use when an agent needs what happened in the last 1-7 days. Pass q (keywords). Returns deduplicated headlines with outlet, link, publish time and match score from major outlets (BBC, NPR, Guardian, CNBC, NYT, TechCrunch, crypto press), GDELT and Hacker News. Headlines + links only. ${usd(NEWS_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+        `News search: recent headlines on any topic from 1,000s of outlets. Use when an agent needs what happened in the last 1-7 days. Pass q (keywords). Returns deduplicated headlines with outlet, link, publish time and match score, from the GDELT global news index, major-outlet feeds and Hacker News. ${usd(NEWS_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
       mimeType: "application/json",
-      serviceName: SERVICE_NAME,
-      tags: ["news", "headlines", "current-events", "search", "monitoring"],
+      serviceName: "News Search",
+      tags: ["news search", "news headlines", "crypto news", "current events", "breaking news"],
       iconUrl: ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
@@ -528,10 +600,10 @@ async function main() {
     "GET /price": {
       accepts: accept(TOKEN_PRICE),
       description:
-        `Onchain USD price of an ERC-20 token (ETH, BTC, LINK, UNI, PEPE... or any address on Ethereum, Base, Arbitrum, Polygon). Use when an agent needs a verifiable spot price. Pass token (symbol or 0x address), optional chain. Returns price, Uniswap v3 pools, depth, cross-pool spread, confidence, block. ${usd(TOKEN_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+        `Token price: live USD price + 24h change for a crypto token, read onchain (Uniswap v3 on Ethereum/Base/Arbitrum/Polygon; Orca, Raydium, PumpSwap on Solana). Pass token (ETH, BTC, SOL, PEPE... or contract/mint address), optional chain. Returns price, 24h change, pools, depth, spread, confidence, block. ${usd(TOKEN_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
       mimeType: "application/json",
-      serviceName: SERVICE_NAME,
-      tags: ["crypto", "token-price", "defi", "onchain", "market-data"],
+      serviceName: "Token Price (Onchain)",
+      tags: ["token price", "crypto price", "onchain price", "dex price", "price change 24h"],
       iconUrl: ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
@@ -549,6 +621,8 @@ async function main() {
               properties: {
                 token: { type: "object", properties: { symbol: { type: ["string", "null"] }, name: { type: ["string", "null"] }, address: { type: "string" }, decimals: { type: "integer" }, chain: { type: "string" } } },
                 priceUsd: { type: "number" },
+                change24hPct: { type: ["number", "null"], description: "% change vs ~24 h ago (EVM: pool oracle or archive node; null on Solana)" },
+                priceUsd24hAgo: { type: "number" },
                 confidence: { type: "string", enum: ["high", "medium", "low"] },
                 poolSpreadPct: { type: "number" },
                 totalDepthUsd: { type: "number" },
@@ -558,6 +632,144 @@ async function main() {
                 generatedAt: { type: "string" },
               },
               required: ["token", "priceUsd", "pools", "block"],
+            },
+          },
+        }),
+      },
+    },
+    "GET /solana-price": {
+      accepts: accept(SOL_PRICE),
+      description:
+        `Solana token price: live USD price of any SPL token by symbol or mint, read onchain from Orca Whirlpool, Raydium CLMM, PumpSwap and pump.fun bonding curves (no third-party API). Pass token (SOL, JUP, BONK, WIF... or mint). Returns price, pools with depth, spread, confidence, slot. ${usd(SOL_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+      mimeType: "application/json",
+      serviceName: "Solana Token Price",
+      tags: ["solana token price", "sol price", "spl token price", "pump.fun price", "memecoin price"],
+      iconUrl: ICON_URL,
+      extensions: {
+        ...declareDiscoveryExtension({
+          input: { token: "JUP" },
+          inputSchema: {
+            properties: { token: { type: "string", minLength: 1, maxLength: 44, description: `Symbol (${SOLANA_PRICE_SYMBOLS.slice(0, 10).join(", ")}, ...) or SPL mint address (incl. pump.fun mints)` } },
+            required: ["token"],
+          },
+          output: {
+            example: solPriceExample,
+            schema: {
+              properties: {
+                token: { type: "object", properties: { symbol: { type: ["string", "null"] }, name: { type: ["string", "null"] }, mint: { type: "string" }, decimals: { type: "integer" }, chain: { type: "string" } } },
+                priceUsd: { type: "number" },
+                confidence: { type: "string", enum: ["high", "medium", "low"] },
+                thinLiquidity: { type: "boolean" },
+                poolSpreadPct: { type: "number" },
+                totalDepthUsd: { type: "number" },
+                pools: { type: "array", items: { type: "object" } },
+                solUsd: { type: "number" },
+                slot: { type: "integer" },
+                generatedAt: { type: "string" },
+              },
+              required: ["token", "priceUsd", "pools", "slot"],
+            },
+          },
+        }),
+      },
+    },
+    "GET /balance": {
+      accepts: accept(BALANCE_PRICE),
+      description:
+        `Wallet balance: native coin + token balances with USD values for any wallet, read live onchain. EVM (Ethereum, Base, Arbitrum, Polygon in one call; ENS names work) or Solana (SOL + SPL tokens). Pass address, optional chain and tokens. Returns per-chain balances, prices and total USD. ${usd(BALANCE_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+      mimeType: "application/json",
+      serviceName: "Wallet Balance (EVM + Solana)",
+      tags: ["wallet balance", "erc20 balance", "token balances", "portfolio value", "solana wallet"],
+      iconUrl: ICON_URL,
+      extensions: {
+        ...declareDiscoveryExtension({
+          input: { address: "vitalik.eth" },
+          inputSchema: {
+            properties: {
+              address: { type: "string", minLength: 3, maxLength: 64, description: "0x EVM address, ENS name (name.eth) or Solana address" },
+              chain: { type: "string", enum: ["all", "ethereum", "base", "arbitrum", "polygon", "solana"], description: "EVM: one chain or all (default). Solana addresses are detected automatically" },
+              tokens: { type: "string", description: "Optional extra token contracts (EVM, single chain) or SPL mints, comma-separated, max 20" },
+            },
+            required: ["address"],
+          },
+          output: {
+            example: balanceExample,
+            schema: {
+              properties: {
+                address: { type: "string" },
+                ens: { type: "string" },
+                chains: { type: "array", items: { type: "object", properties: { chain: { type: "string" }, native: { type: "object" }, tokens: { type: "array", items: { type: "object" } }, totalUsd: { type: "number" } } } },
+                totalUsd: { type: "number" },
+                generatedAt: { type: "string" },
+              },
+              required: ["address", "chains", "totalUsd"],
+            },
+          },
+        }),
+      },
+    },
+    "GET /tx": {
+      accepts: accept(TX_PRICE),
+      description:
+        `Transaction lookup: status and decoded details for any tx hash or Solana signature, read onchain. EVM (auto-detects Ethereum, Base, Arbitrum, Polygon): success/reverted, block time, from/to, method, fee in USD, every token transfer decoded; flags x402/EIP-3009 USDC payments. Solana: status, fee, SOL + token balance changes. ${usd(TX_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+      mimeType: "application/json",
+      serviceName: "Transaction Lookup & Decode",
+      tags: ["transaction receipt", "tx status", "decode transaction", "token transfers", "verify payment"],
+      iconUrl: ICON_URL,
+      extensions: {
+        ...declareDiscoveryExtension({
+          input: { hash: "0xa565aff51f0109d9a9c9028faa45338b3ebab49543fc25457e82326664ca8c52" },
+          inputSchema: {
+            properties: {
+              hash: { type: "string", minLength: 64, maxLength: 90, description: "0x tx hash (EVM) or base58 transaction signature (Solana)" },
+              chain: { type: "string", enum: ["ethereum", "base", "arbitrum", "polygon", "solana"], description: "Optional; EVM hashes are searched on all four chains when omitted" },
+            },
+            required: ["hash"],
+          },
+          output: {
+            example: txExample,
+            schema: {
+              properties: {
+                chain: { type: "string" },
+                status: { type: "string", enum: ["success", "reverted", "failed", "pending"] },
+                timestamp: { type: ["string", "null"] },
+                from: { type: "string" },
+                to: { type: ["string", "null"] },
+                method: { type: "object" },
+                fee: { type: "object" },
+                tokenTransfers: { type: "array", items: { type: "object" } },
+                tokenChanges: { type: "array", items: { type: "object" } },
+                explorer: { type: "string" },
+              },
+              required: ["chain", "status", "explorer"],
+            },
+          },
+        }),
+      },
+    },
+    "GET /gas": {
+      accepts: accept(GAS_PRICE),
+      description:
+        `Gas price tracker: live gas and priority fees for Ethereum, Base, Arbitrum, Polygon and Solana in one call, from public nodes. Returns base fee, slow/standard/fast tips, max fee, block congestion, and the USD cost of a transfer, an ERC-20 transfer and a swap, plus the cheapest chain. Optional chain. ${usd(GAS_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+      mimeType: "application/json",
+      serviceName: "Gas Price Tracker",
+      tags: ["gas price", "gas fees", "estimate gas", "network fees", "solana priority fee"],
+      iconUrl: ICON_URL,
+      extensions: {
+        ...declareDiscoveryExtension({
+          input: { chain: "all" },
+          inputSchema: {
+            properties: { chain: { type: "string", enum: ["all", "ethereum", "base", "arbitrum", "polygon", "solana"], description: "One chain or all (default)" } },
+          },
+          output: {
+            example: gasExample,
+            schema: {
+              properties: {
+                chains: { type: "array", items: { type: "object", properties: { chain: { type: "string" }, baseFeeGwei: { type: "number" }, priorityFeeGwei: { type: "object" }, costStandard: { type: "object" } } } },
+                cheapestEvmForErc20Transfer: { type: ["string", "null"] },
+                generatedAt: { type: "string" },
+              },
+              required: ["chains"],
             },
           },
         }),
@@ -620,6 +832,8 @@ async function main() {
       payToEvmAddress: payToAddr,
       payToSolanaAddress: payToSolana,
       facilitators: Object.fromEntries(NETWORKS.map((n) => [n, NETWORK_INFO[n]!.facilitator])),
+      news: newsStatus(),
+      memoryMb: Math.round(process.memoryUsage().rss / 1048576),
     });
   });
 
@@ -628,7 +842,7 @@ async function main() {
       res.type("text/plain").send(llmsTxt());
       return;
     }
-    res.json({ name: SERVICE_NAME, description: `Pay-per-call research tools for AI agents over x402 (${ON_NETWORKS}): cited research briefs, web page to markdown, news headlines, onchain token prices, x402 endpoint checks.`, docs: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json`, resources: catalog() });
+    res.json({ name: SERVICE_NAME, description: `Pay-per-call research and onchain data tools for AI agents over x402 (${ON_NETWORKS}): cited research briefs, URL to markdown, news search, token prices (EVM + Solana), wallet balances, transaction lookup, gas prices, x402 endpoint checks.`, docs: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json`, resources: catalog() });
   });
 
   const llmsTxt = () =>
@@ -643,8 +857,12 @@ async function main() {
       `- GET ${PUBLIC_URL}/report?q=<question>  (${REPORT_PRICE}) — research brief with citations: summary, 3-6 cited bullets, sources from official docs, Wikipedia, Stack Overflow, GitHub, HN-linked articles, Crossref (off-topic sources dropped). Optional depth=quick|standard, lang=en.`,
       `- GET ${PUBLIC_URL}/read?url=<https url>  (${READ_PRICE}) — web page to clean LLM-ready markdown with title, description, publish date, headings, links. Optional maxChars (default 20000).`,
       `- GET ${PUBLIC_URL}/check?url=<https x402 endpoint>  (${CHECK_PRICE}) — x402 readiness + Bazaar ranking check; one unpaid probe, score + fixes. Optional method=GET|POST.`,
-      `- GET ${PUBLIC_URL}/news?q=<keywords>  (${NEWS_PRICE}) — recent news headlines (outlet, link, publish time, match score) from major publisher feeds, GDELT and Hacker News. Optional hours=1-168 (default 72), limit=1-25 (default 10). Headlines + links only; use /read for full text.`,
-      `- GET ${PUBLIC_URL}/price?token=<symbol|0x address>  (${TOKEN_PRICE}) — onchain USD spot price from Uniswap v3 pools (${PRICE_CHAINS.join(", ")}) via public RPC: price, pool addresses, depth, cross-pool spread, confidence, block number. Optional chain=. Pools under $25k depth -> 422 (not charged).`,
+      `- GET ${PUBLIC_URL}/news?q=<keywords>  (${NEWS_PRICE}) — news search: recent headlines (outlet, link, publish time, match score) from the GDELT global news index (15-min updates), major publisher feeds and Hacker News. Optional hours=1-168 (default 72), limit=1-25 (default 10). Headlines + links only; use /read for full text.`,
+      `- GET ${PUBLIC_URL}/price?token=<symbol|address>  (${TOKEN_PRICE}) — token price read onchain: USD price + 24h change from Uniswap v3 pools (ethereum, base, arbitrum, polygon) or Orca/Raydium/PumpSwap (solana): pools, depth, cross-pool spread, confidence, block. Optional chain=. Pools under $25k depth -> 422 (not charged).`,
+      `- GET ${PUBLIC_URL}/solana-price?token=<symbol|mint>  (${SOL_PRICE}) — Solana token price by symbol or SPL mint from Orca Whirlpool, Raydium CLMM, PumpSwap and pump.fun bonding curves (public RPC): price, pools, depth, spread, confidence, slot. Pools under $5k depth -> 422; under $25k flagged thinLiquidity.`,
+      `- GET ${PUBLIC_URL}/balance?address=<0x|name.eth|solana address>  (${BALANCE_PRICE}) — wallet balance: native + major tokens with USD values on ethereum, base, arbitrum, polygon (all in one call) or Solana. Optional chain=, tokens=<comma-separated contracts or mints>.`,
+      `- GET ${PUBLIC_URL}/tx?hash=<0x hash|solana signature>  (${TX_PRICE}) — transaction lookup: status, block time, from/to, method, fee in USD, decoded token transfers (EVM chains auto-detected) or SOL/token balance changes (Solana). Optional chain=.`,
+      `- GET ${PUBLIC_URL}/gas  (${GAS_PRICE}) — gas price tracker: base fee, slow/standard/fast priority fees, USD cost of a transfer, ERC-20 transfer and swap on ethereum, base, arbitrum, polygon + Solana priority fees. Optional chain=.`,
       "",
       "## How to pay",
       `1. Call the endpoint without payment -> HTTP 402 with base64 JSON in the PAYMENT-REQUIRED header (x402Version 2, scheme exact; one accepts entry per network: ${NETWORKS.map((n) => `${NETWORK_INFO[n]!.name} USDC ${NETWORK_INFO[n]!.usdc}`).join("; ")}).`,
@@ -664,7 +882,7 @@ async function main() {
   app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt()));
 
   app.get("/robots.txt", (_req, res) => {
-    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", `Sitemap: ${PUBLIC_URL}/openapi.json`, ""].join("\n"));
+    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", "Disallow: /solana-price", "Disallow: /balance", "Disallow: /tx", "Disallow: /gas", `Sitemap: ${PUBLIC_URL}/openapi.json`, ""].join("\n"));
   });
 
   app.get("/icon.svg", (_req, res) => {
@@ -677,7 +895,7 @@ async function main() {
   const wellKnown = () => ({
     version: 1,
     name: SERVICE_NAME,
-    description: `Pay-per-call research tools for AI agents: cited research briefs, web page to markdown, news headlines, onchain token prices, x402 endpoint checks. ${ON_NETWORKS} via x402.`,
+    description: `Pay-per-call research and onchain data tools for AI agents: cited research briefs, URL to markdown, news search, token prices (EVM + Solana), wallet balances, transaction lookup, gas prices, x402 endpoint checks. ${ON_NETWORKS} via x402.`,
     resources: catalog().map((c) => c.url),
     items: catalog(),
     network: NETWORKS[0],
@@ -715,9 +933,9 @@ async function main() {
       info: {
         title: SERVICE_NAME,
         version: "2.0.0",
-        description: `Pay-per-call research tools for AI agents over x402 (${ON_NETWORKS}). ` + ERRORS_DOC,
+        description: `Pay-per-call research and onchain data tools for AI agents over x402 (${ON_NETWORKS}). ` + ERRORS_DOC,
         "x-guidance":
-          "Use /report for a cited answer to a question, /read to turn a known URL into markdown, /news for recent headlines on a topic, /price for a verifiable onchain token price, /check to validate an x402 endpoint. Call without payment to get the 402 challenge, then retry with PAYMENT-SIGNATURE.",
+          "Use /report for a cited answer to a question, /read to turn a known URL into markdown, /news for recent headlines on a topic, /price or /solana-price for a verifiable onchain token price (+24h change on EVM), /balance for wallet holdings, /tx to check or decode a transaction, /gas for current fees, /check to validate an x402 endpoint. Call without payment to get the 402 challenge, then retry with PAYMENT-SIGNATURE.",
       },
       servers: [{ url: PUBLIC_URL }],
       paths: {
@@ -778,15 +996,66 @@ async function main() {
         "/price": {
           get: {
             operationId: "tokenPrice",
-            summary: "Onchain ERC-20 token USD price (Uniswap v3)",
+            summary: "Token price + 24h change, read onchain (EVM Uniswap v3, Solana DEXs)",
             description: r["GET /price"].description,
             tags: ["Crypto"],
             parameters: [
-              qp("token", { type: "string", minLength: 1, maxLength: 42 }, true, "Symbol or ERC-20 address"),
-              qp("chain", { type: "string", enum: PRICE_CHAINS }, false, "Chain for an address (default ethereum)"),
+              qp("token", { type: "string", minLength: 1, maxLength: 44 }, true, "Symbol, ERC-20 address or Solana mint"),
+              qp("chain", { type: "string", enum: PRICE_CHAINS }, false, "Chain for an address (default ethereum; mints use solana)"),
             ],
             ...pay(TOKEN_PRICE),
             responses: { "200": { description: "Price with pool evidence", content: { "application/json": { schema: r["GET /price"].extensions.bazaar.schema.properties.output.properties.example, example: priceExample } } }, ...errs },
+          },
+        },
+        "/solana-price": {
+          get: {
+            operationId: "solanaTokenPrice",
+            summary: "Solana token price by symbol or mint (Orca, Raydium, PumpSwap, pump.fun)",
+            description: r["GET /solana-price"].description,
+            tags: ["Crypto"],
+            parameters: [qp("token", { type: "string", minLength: 1, maxLength: 44 }, true, "Symbol (SOL, JUP, BONK...) or SPL mint address")],
+            ...pay(SOL_PRICE),
+            responses: { "200": { description: "Price with pool evidence", content: { "application/json": { schema: r["GET /solana-price"].extensions.bazaar.schema.properties.output.properties.example, example: solPriceExample } } }, ...errs },
+          },
+        },
+        "/balance": {
+          get: {
+            operationId: "walletBalance",
+            summary: "Wallet balances with USD values (EVM chains or Solana)",
+            description: r["GET /balance"].description,
+            tags: ["Crypto"],
+            parameters: [
+              qp("address", { type: "string", minLength: 3, maxLength: 64 }, true, "0x address, ENS name or Solana address"),
+              qp("chain", { type: "string", enum: ["all", "ethereum", "base", "arbitrum", "polygon", "solana"] }, false, "Default all EVM chains"),
+              qp("tokens", { type: "string" }, false, "Extra token contracts or mints, comma-separated (max 20)"),
+            ],
+            ...pay(BALANCE_PRICE),
+            responses: { "200": { description: "Balances", content: { "application/json": { schema: r["GET /balance"].extensions.bazaar.schema.properties.output.properties.example, example: balanceExample } } }, ...errs },
+          },
+        },
+        "/tx": {
+          get: {
+            operationId: "transactionLookup",
+            summary: "Transaction status + decoded token transfers (EVM or Solana)",
+            description: r["GET /tx"].description,
+            tags: ["Crypto"],
+            parameters: [
+              qp("hash", { type: "string", minLength: 64, maxLength: 90 }, true, "0x tx hash or Solana signature"),
+              qp("chain", { type: "string", enum: ["ethereum", "base", "arbitrum", "polygon", "solana"] }, false, "Optional; auto-detected"),
+            ],
+            ...pay(TX_PRICE),
+            responses: { "200": { description: "Transaction", content: { "application/json": { schema: r["GET /tx"].extensions.bazaar.schema.properties.output.properties.example, example: txExample } } }, ...errs },
+          },
+        },
+        "/gas": {
+          get: {
+            operationId: "gasPrice",
+            summary: "Live gas / priority fees with USD cost per transaction type",
+            description: r["GET /gas"].description,
+            tags: ["Crypto"],
+            parameters: [qp("chain", { type: "string", enum: ["all", "ethereum", "base", "arbitrum", "polygon", "solana"] }, false, "Default all")],
+            ...pay(GAS_PRICE),
+            responses: { "200": { description: "Fees", content: { "application/json": { schema: r["GET /gas"].extensions.bazaar.schema.properties.output.properties.example, example: gasExample } } }, ...errs },
           },
         },
       },
@@ -873,8 +1142,8 @@ async function main() {
   app.get("/price", async (req, res) => {
     res.locals.paidHandlerRan = true;
     const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
-    if (!token || token.length > 42) {
-      res.status(400).json({ error: "bad_input", message: "token is required (symbol like ETH or an 0x ERC-20 address). You were not charged." });
+    if (!token || token.length > 44) {
+      res.status(400).json({ error: "bad_input", message: "token is required (symbol like ETH, an 0x ERC-20 address or a Solana mint). You were not charged." });
       return;
     }
     try {
@@ -886,10 +1155,74 @@ async function main() {
       res.json(out);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (err instanceof PriceInputError) res.status(400).json({ error: "bad_input", message: `${msg}. You were not charged.` });
+      if (err instanceof PriceInputError || err instanceof SolanaInputError) res.status(400).json({ error: "bad_input", message: `${msg}. You were not charged.` });
       else res.status(503).json({ error: "rpc_unavailable", message: "Public RPC nodes did not answer; retry shortly. You were not charged." });
     }
   });
+
+  /** Shared handler shape: input errors -> 400, { error } results -> 422, anything else -> 503. Never charged on non-2xx. */
+  const onchainHandler =
+    (run: (req: Request) => Promise<any>, inputErrors: Array<new (...a: any[]) => Error>, unavailable: string) =>
+    async (req: Request, res: Response) => {
+      res.locals.paidHandlerRan = true;
+      try {
+        const out = await run(req);
+        if (out?.error) {
+          res.status(422).json({ ...out, message: `${out.message ?? out.error}. You were not charged.` });
+          return;
+        }
+        res.json(out);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (inputErrors.some((E) => err instanceof E)) res.status(400).json({ error: "bad_input", message: `${msg}. You were not charged.` });
+        else {
+          console.warn(`[${req.path}] ${msg.slice(0, 200)}`);
+          res.status(503).json({ error: "rpc_unavailable", message: `${unavailable}; retry shortly. You were not charged.` });
+        }
+      }
+    };
+  const qs = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+
+  app.get(
+    "/solana-price",
+    onchainHandler(
+      async (req) => {
+        const token = qs(req.query.token);
+        if (!token || token.length > 44) throw new SolanaInputError("token is required (symbol like SOL/JUP/BONK or an SPL mint address)");
+        return solanaTokenPrice(token);
+      },
+      [SolanaInputError],
+      "Public Solana RPC nodes did not answer",
+    ),
+  );
+  app.get(
+    "/balance",
+    onchainHandler(
+      async (req) => {
+        const address = qs(req.query.address);
+        if (!address || address.length > 64) throw new WalletInputError("address is required (0x address, ENS name or Solana address)");
+        return walletBalances(address, { chain: qs(req.query.chain) || undefined, tokens: qs(req.query.tokens) || undefined });
+      },
+      [WalletInputError],
+      "Public RPC nodes did not answer",
+    ),
+  );
+  app.get(
+    "/tx",
+    onchainHandler(
+      async (req) => {
+        const hash = qs(req.query.hash);
+        if (!hash || hash.length > 100) throw new TxInputError("hash is required (0x transaction hash or Solana signature)");
+        return txLookup(hash, qs(req.query.chain) || undefined);
+      },
+      [TxInputError],
+      "Public RPC nodes did not answer",
+    ),
+  );
+  app.get(
+    "/gas",
+    onchainHandler(async (req) => gasNow(qs(req.query.chain) || undefined), [GasInputError], "Public RPC nodes did not answer"),
+  );
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     const message = err instanceof Error ? err.message : String(err);
@@ -900,7 +1233,7 @@ async function main() {
   app.listen(PORT, "0.0.0.0", () => {
     warmNews();
     console.log(`x402 seller listening on http://localhost:${PORT}  env=${X402_ENV} networks=${NETWORKS.join(",")} (${NETWORK_LABEL})`);
-    console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}, /news ${NEWS_PRICE}, /price ${TOKEN_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}`);
+    console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}, /news ${NEWS_PRICE}, /price ${TOKEN_PRICE}, /solana-price ${SOL_PRICE}, /balance ${BALANCE_PRICE}, /tx ${TX_PRICE}, /gas ${GAS_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}`);
   });
 }
 

@@ -9,7 +9,7 @@ const PAY_TO = process.env.PAY_TO ?? "0x079471E6F43b6feeF80895E19cBFcBB496904852
 const ORIGIN = (process.env.ORIGIN ?? "https://x402-seller-pmlm.onrender.com").replace(/\/$/, "");
 const HOST = new URL(ORIGIN).host;
 const QUERIES = (process.env.QUERIES ??
-  "research brief|research brief with citations|answer a question with sources|web research|summarize a topic|wikipedia summary|read web page as markdown|url to markdown|web page to markdown|scrape article text|x402 endpoint check|validate x402 endpoint"
+  "research brief|research brief with citations|answer a question with sources|web research|summarize a topic|wikipedia summary|read web page as markdown|url to markdown|web page to markdown|scrape article text|x402 endpoint check|validate x402 endpoint|news search|news headlines|token price|crypto price|solana token price|sol price|wallet balance|token balances|transaction receipt|decode transaction|gas price|gas fees"
 ).split("|");
 const CDP = "https://api.cdp.coinbase.com/platform/v2/x402/discovery";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -25,7 +25,7 @@ const out = { at: new Date().toISOString(), origin: ORIGIN, payTo: PAY_TO };
 
 // 1. Live endpoints + latency
 out.live = [];
-for (const p of ["/health", "/llms.txt", "/openapi.json", "/.well-known/x402", "/report?q=test", "/read?url=https://example.com", "/check?url=https://example.com"]) {
+for (const p of ["/health", "/llms.txt", "/openapi.json", "/.well-known/x402", "/report?q=test", "/read?url=https://example.com", "/check?url=https://example.com", "/news?q=test", "/price?token=ETH", "/solana-price?token=SOL", "/balance?address=vitalik.eth", "/tx?hash=0x" + "ab".repeat(32), "/gas"]) {
   const t = Date.now();
   let status = 0;
   let hasChallenge = false;
@@ -65,7 +65,7 @@ for (const q of QUERIES) {
 }
 
 // 4. CDP validate (free)
-for (const path of ["/report", "/read", "/check"]) {
+for (const path of ["/report", "/read", "/check", "/news", "/price", "/solana-price", "/balance", "/tx", "/gas"]) {
   const v = await j("https://api.cdp.coinbase.com/platform/v2/x402/validate", {
     method: "POST",
     headers: { "content-type": "application/json" },

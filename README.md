@@ -13,7 +13,11 @@ Arbitrum (`eip155:42161`), Solana mainnet (CDP facilitator) or Avalanche (`eip15
 | `GET /read?url=<https url>` | $0.005 | You have a URL and need its text for an LLM | `title`, `description`, `publishedAt`, clean `markdown`, `wordCount`, `headings[]`, `links[]` |
 | `GET /check?url=<x402 endpoint>` | $0.005 | You are about to pay for or list an x402 API | readiness `score`, per-check results, `fixes[]` (one unpaid probe; never pays the target) |
 | `GET /news?q=<keywords>` | $0.005 | You need what happened on a topic in the last 1-7 days | `articles[]` (title, url, outlet, `publishedAt`, match `score`, `partialMatch`), `outlets`, provider status. Optional `hours` (1-168, default 72), `limit` (1-25). Headlines + links only |
-| `GET /price?token=<symbol or 0x address>` | $0.002 | You need a verifiable USD spot price for an ERC-20 | `priceUsd`, `confidence`, `poolSpreadPct`, `totalDepthUsd`, Uniswap v3 `pools[]` with explorer links, `block` number + time. Optional `chain` (ethereum, base, arbitrum, polygon) |
+| `GET /price?token=<symbol, 0x address or Solana mint>` | $0.002 | You need a verifiable USD price + 24h change for a token | `priceUsd`, `change24hPct` + `priceUsd24hAgo` (EVM), `confidence`, `poolSpreadPct`, `totalDepthUsd`, `pools[]` with explorer links, `block`/`slot`. Optional `chain` (ethereum, base, arbitrum, polygon, solana) |
+| `GET /solana-price?token=<symbol or mint>` | $0.002 | You need a Solana token price (incl. pump.fun / PumpSwap tokens) | `priceUsd`, `confidence`, `thinLiquidity`, `pools[]` (Orca Whirlpool, Raydium CLMM, PumpSwap, pump.fun curve) with depth, `poolSpreadPct`, `solUsd`, `slot` |
+| `GET /balance?address=<0x, name.eth or Solana address>` | $0.003 | You need what a wallet holds and what it is worth | per-chain `native` + `tokens[]` (balance, price, USD) and `totalUsd`; EVM = Ethereum, Base, Arbitrum, Polygon in one call. Optional `chain`, `tokens` (extra contracts/mints) |
+| `GET /tx?hash=<0x hash or Solana signature>` | $0.003 | You need to know if a tx/payment landed and what it did | `status`, `timestamp`, `confirmations`, `from`/`to`, decoded `method` (flags x402 / EIP-3009 USDC payments), `fee` in USD, decoded `tokenTransfers[]` (EVM) or SOL/token balance changes (Solana). Optional `chain` |
+| `GET /gas[?chain=]` | $0.002 | You need current fees before sending a tx | base fee, slow/standard/fast priority fees, `maxFeePerGas`, USD cost of a transfer / ERC-20 transfer / swap per EVM chain, Solana priority fees, `cheapestEvmForErc20Transfer` |
 
 **Never charged for errors:** 400 bad input, 422 nothing found / target unreachable, 503 unavailable.
 The x402 middleware only settles a payment when the handler returns 2xx.
@@ -51,6 +55,10 @@ npm ci && npm run dev  # http://localhost:8402
 | `PAYAI_FACILITATOR_URL` | `https://facilitator.payai.network` | Facilitator for Avalanche/Sei (free tier, no API key) |
 | `X402_PAY_TO` | — | Your EVM receive address (else CDP provisions one; needs `CDP_WALLET_SECRET`) |
 | `REPORT_PRICE` / `READ_PRICE` / `CHECK_PRICE` / `NEWS_PRICE` / `TOKEN_PRICE` | `$0.01` / `$0.005` / `$0.005` / `$0.005` / `$0.002` | Per-call prices |
+| `SOL_PRICE` / `BALANCE_PRICE` / `TX_PRICE` / `GAS_PRICE` | `$0.002` / `$0.003` / `$0.003` / `$0.002` | Per-call prices for `/solana-price`, `/balance`, `/tx`, `/gas` |
+| `NEWS_GKG_HOURS` | `24` | Hours of the GDELT GKG 15-minute news index kept in memory (0 = off). ~2.5 MB download per 15 min, ~50k headlines/day, ~60 MB RAM |
+| `NEWS_GDELT_API` | off | `1` = also query the GDELT DOC API (rate-limited; adds latency) |
+| `SOLANA_RPC_URLS` | Solana Foundation + PublicNode | Comma-separated Solana RPC URLs (first healthy one wins) |
 | `PUBLIC_URL` | Render URL | Used in discovery docs |
 | `DAILY_SPEND_CAP_USD` | `50` | Runaway guard on confirmed settlements per UTC day |
 | `GROK_API_KEY` or `OPENAI_API_KEY` | — | Optional: LLM synthesis over the cited sources; without it `/report` is extractive |
@@ -70,11 +78,18 @@ Free routes: `/health`, `/llms.txt`, `/openapi.json`, `/.well-known/x402`, `/rob
 
 - Settlements are logged to `payments.jsonl` (gitignored) only after the facilitator confirms, with payer + tx hash.
 - Circuit breaker: 3 failed settlements (verified payment, settle failed) in 10 minutes -> 503 (uncharged) for paid calls.
-- `/news` sources: GDELT DOC API (open data; serialized, backs off on 429), Hacker News (Algolia API) and ~26 publisher
-  RSS/Atom feeds (cached 10 min). Only headlines, links, outlet and time are returned, never article text.
+- `/news` sources: the GDELT GKG 15-minute files (open data, cite gdeltproject.org; indexed in memory so no API rate
+  limits), Hacker News (Algolia API) and ~26 publisher RSS/Atom feeds (cached 10 min). Only headlines, links, outlet and
+  time are returned, never article text.
 - `/price` reads Uniswap v3 pool state (`slot0`, reserves) straight from public RPC nodes via Multicall: no third-party
   price API, so every number is verifiable onchain at the returned block. Pools under $25k quote-side depth are ignored;
-  no qualifying pool -> 422 (uncharged). Non-EVM assets (SOL, XRP, ...) are not priced. Cached 30 s.
+  no qualifying pool -> 422 (uncharged). 24h change comes from the deepest pool's own TWAP oracle (`observe`) or an
+  archive `slot0` read ~24 h of blocks back. Cached 30 s.
+- `/solana-price` (and `/price` for Solana) derives Orca Whirlpool, Raydium CLMM, PumpSwap and pump.fun bonding-curve
+  accounts by PDA and reads them from public Solana RPC (no indexer, no API key). Not covered: Raydium AMM v4, Meteora.
+  No 24h change on Solana (public RPC keeps no price history). Under $5k depth -> 422; under $25k -> `thinLiquidity`.
+- `/balance`, `/tx`, `/gas` read public RPC nodes only (Multicall3 on EVM). Balances cover native + a curated list of
+  major tokens per chain plus any `tokens=` you pass (public RPC does not index every token a wallet holds).
 - `/read` and `/check` only fetch public `https` hosts (private/loopback/link-local IPs blocked, redirects re-checked, 3 MB / 15 s caps).
 
 MIT-style: use freely. No secrets in this repo; never commit `.env`.

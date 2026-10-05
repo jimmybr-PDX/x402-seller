@@ -6,14 +6,15 @@
  */
 import { createPublicClient, fallback, http, getAddress, isAddress, parseAbi, type Address, type PublicClient } from "viem";
 import { arbitrum, base, mainnet, polygon } from "viem/chains";
+import { SOL_SYMBOLS, SolanaInputError, solanaTokenPrice } from "./solana.js";
 
-type ChainKey = "ethereum" | "base" | "arbitrum" | "polygon";
+export type ChainKey = "ethereum" | "base" | "arbitrum" | "polygon";
 type ChainCfg = { chain: any; rpcs: string[]; factory: Address; usdc: Address; usdt?: Address; weth: Address; explorer: string };
 
-const CHAINS: Record<ChainKey, ChainCfg> = {
+export const CHAINS: Record<ChainKey, ChainCfg> = {
   ethereum: {
     chain: mainnet,
-    rpcs: ["https://ethereum-rpc.publicnode.com", "https://eth.llamarpc.com", "https://cloudflare-eth.com"],
+    rpcs: ["https://ethereum-rpc.publicnode.com", "https://eth.drpc.org", "https://eth-pokt.nodies.app"],
     factory: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
     usdc: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
     usdt: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
@@ -39,7 +40,7 @@ const CHAINS: Record<ChainKey, ChainCfg> = {
   },
   polygon: {
     chain: polygon,
-    rpcs: ["https://polygon-bor-rpc.publicnode.com", "https://polygon-rpc.com"],
+    rpcs: ["https://polygon-bor-rpc.publicnode.com", "https://polygon.drpc.org"],
     factory: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
     usdc: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
     usdt: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
@@ -77,12 +78,24 @@ const SYMBOLS: Record<string, { chain: ChainKey; address: Address; note?: string
   BRETT: { chain: "base", address: "0x532f27101965dd16442E59d40670FaF5eBB142E4" },
   VIRTUAL: { chain: "base", address: "0x0b3e328455c4059EEb9e3f84b5543F74E24e7E1b" },
 };
-const NON_EVM = new Set(["SOL", "XRP", "ADA", "DOGE", "TRX", "TON", "DOT", "AVAX", "BNB", "LTC", "BCH", "XLM", "ATOM", "NEAR", "APT", "SUI", "HBAR", "XMR", "ALGO", "SEI", "CSPR", "TAO"]);
+const NON_EVM = new Set(["XRP", "ADA", "DOGE", "TRX", "TON", "DOT", "AVAX", "BNB", "LTC", "BCH", "XLM", "ATOM", "NEAR", "APT", "SUI", "HBAR", "XMR", "ALGO", "SEI", "CSPR", "TAO"]);
 
 const FEES = [100, 500, 3000, 10000] as const;
 const MIN_DEPTH_USD = 25_000;
 const factoryAbi = parseAbi(["function getPool(address,address,uint24) view returns (address)"]);
-const poolAbi = parseAbi(["function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, uint8, bool)"]);
+const poolAbi = parseAbi([
+  "function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, uint8, bool)",
+  "function observe(uint32[] secondsAgos) view returns (int56[] tickCumulatives, uint160[] secondsPerLiquidityCumulativeX128s)",
+]);
+// Free public nodes that serve historical state (archive), used when a pool's onchain oracle
+// doesn't reach back 24 h. Block counts per day are approximate; the real block time is reported.
+const ARCHIVE: Record<string, string[]> = {
+  ethereum: ["https://eth.drpc.org", "https://eth-pokt.nodies.app"],
+  base: ["https://mainnet.base.org", "https://base.drpc.org"],
+  arbitrum: ["https://arbitrum-one.public.blastapi.io", "https://arb-pokt.nodies.app"],
+  polygon: ["https://polygon.drpc.org"],
+};
+const BLOCKS_PER_DAY: Record<string, bigint> = { ethereum: 7200n, base: 43200n, arbitrum: 345600n, polygon: 43200n };
 const erc20Abi = parseAbi([
   "function decimals() view returns (uint8)",
   "function symbol() view returns (string)",
@@ -92,7 +105,7 @@ const erc20Abi = parseAbi([
 const ZERO = "0x0000000000000000000000000000000000000000";
 
 const clients = new Map<ChainKey, PublicClient>();
-function client(k: ChainKey): PublicClient {
+export function client(k: ChainKey): PublicClient {
   let c = clients.get(k);
   if (!c) {
     const cfg = CHAINS[k];
@@ -111,7 +124,7 @@ export class PriceInputError extends Error {}
 const cache = new Map<string, { at: number; value: any }>();
 const TTL = 30_000;
 
-type PoolQuote = { pool: Address; feeTier: number; quote: string; priceUsd: number; depthUsd: number };
+type PoolQuote = { pool: Address; feeTier: number; quote: string; priceUsd: number; depthUsd: number; tokenIs0: boolean; d0: number; d1: number; quoteUsd: number };
 
 /** Raw Uniswap v3 quotes for `token` against USDC/USDT/WETH on one chain. */
 async function poolQuotes(k: ChainKey, token: Address, tokenDec: number, wethUsd: number | null) {
@@ -159,20 +172,72 @@ async function poolQuotes(k: ChainKey, token: Address, tokenDec: number, wethUsd
     const tokenUnits = Number(bt.result as unknown as bigint) / 10 ** tokenDec;
     if (tokenUnits <= 0) return;
     const depthUsd = 2 * quoteUsd;
-    if (Number.isFinite(priceUsd) && priceUsd > 0) out.push({ pool: x.pool, feeTier: x.fee, quote: x.q.sym, priceUsd, depthUsd });
+    if (Number.isFinite(priceUsd) && priceUsd > 0) out.push({ pool: x.pool, feeTier: x.fee, quote: x.q.sym, priceUsd, depthUsd, tokenIs0, d0, d1, quoteUsd: x.q.usd! });
   });
   return out;
 }
 
-const wethCache = new Map<ChainKey, { at: number; usd: number }>();
-async function wethUsd(k: ChainKey): Promise<number | null> {
+const wethCache = new Map<ChainKey, { at: number; usd: number; best: PoolQuote }>();
+export async function wethUsd(k: ChainKey): Promise<number | null> {
   const hit = wethCache.get(k);
   if (hit && Date.now() - hit.at < TTL) return hit.usd;
   const qs = (await poolQuotes(k, CHAINS[k].weth, 18, null)).filter((q) => q.depthUsd >= 1_000_000);
   if (!qs.length) return null;
   const usd = weighted(qs);
-  wethCache.set(k, { at: Date.now(), usd });
+  wethCache.set(k, { at: Date.now(), usd, best: qs.reduce((a, b) => (b.depthUsd > a.depthUsd ? b : a)) });
   return usd;
+}
+
+/** Token price in quote units ~24 h ago for one pool: Uniswap v3 oracle first, archive node second. */
+const agoCache = new Map<string, { at: number; v: { tokenInQuote: number; at: string; method: string } | null }>();
+async function tokenInQuoteAgo(k: ChainKey, q: PoolQuote): Promise<{ tokenInQuote: number; at: string; method: string } | null> {
+  const key = `${k}:${q.pool}:${q.tokenIs0}`;
+  const hit = agoCache.get(key);
+  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.v;
+  const toTokenInQuote = (p1per0: number) => (q.tokenIs0 ? p1per0 : 1 / p1per0);
+  let v: { tokenInQuote: number; at: string; method: string } | null = null;
+  try {
+    const r = (await client(k).readContract({ address: q.pool, abi: poolAbi, functionName: "observe", args: [[86400, 86100]] })) as unknown as [bigint[], bigint[]];
+    const avgTick = Number(r[0][1]! - r[0][0]!) / 300;
+    v = { tokenInQuote: toTokenInQuote(1.0001 ** avgTick * 10 ** (q.d0 - q.d1)), at: new Date(Date.now() - 86_250_000).toISOString(), method: "uniswap-v3-oracle (5-min TWAP ending ~24h ago)" };
+  } catch {
+    for (const url of ARCHIVE[k] ?? []) {
+      try {
+        const c = createPublicClient({ chain: CHAINS[k].chain, transport: http(url, { timeout: 6000, retryCount: 0 }) });
+        const head = await client(k).getBlockNumber();
+        const bn = head - BLOCKS_PER_DAY[k]!;
+        const [s0, blk] = await Promise.all([c.readContract({ address: q.pool, abi: poolAbi, functionName: "slot0", blockNumber: bn }), c.getBlock({ blockNumber: bn })]);
+        const sq = Number((s0 as any)[0] as bigint) / 2 ** 96;
+        if (!sq) continue;
+        v = { tokenInQuote: toTokenInQuote(sq * sq * 10 ** (q.d0 - q.d1)), at: new Date(Number(blk.timestamp) * 1000).toISOString(), method: `archive slot0 at block ${bn}` };
+        break;
+      } catch {
+        /* try next archive node */
+      }
+    }
+  }
+  agoCache.set(key, { at: Date.now(), v });
+  if (agoCache.size > 2000) agoCache.delete(agoCache.keys().next().value!);
+  return v;
+}
+
+/** ~24 h change for the deepest pool, in USD (WETH-quoted pools also use WETH's own 24 h move). */
+async function change24h(k: ChainKey, best: PoolQuote) {
+  try {
+    const ago = await tokenInQuoteAgo(k, best);
+    if (!ago) return { change24hPct: null, change24hNote: "no onchain history reachable for this pool" };
+    let quoteUsdAgo = 1;
+    if (best.quote === "WETH") {
+      const w = wethCache.get(k)?.best;
+      const wAgo = w ? await tokenInQuoteAgo(k, w) : null;
+      if (!wAgo) return { change24hPct: null, change24hNote: "WETH history unavailable" };
+      quoteUsdAgo = wAgo.tokenInQuote;
+    }
+    const usdAgo = ago.tokenInQuote * quoteUsdAgo;
+    return { change24hPct: Math.round((best.priceUsd / usdAgo - 1) * 10000) / 100, priceUsd24hAgo: sig(usdAgo), change24h: { pool: best.pool, at: ago.at, method: ago.method } };
+  } catch {
+    return { change24hPct: null, change24hNote: "history lookup failed" };
+  }
 }
 
 /** Depth-weighted price of pools within 3% of the deepest pool (drops stale/manipulated thin pools). */
@@ -191,6 +256,16 @@ export async function tokenPrice(tokenRaw: string, chainRaw?: string) {
   const started = Date.now();
   const t = tokenRaw.trim();
   const chainIn = chainRaw?.trim().toLowerCase();
+  // Solana: chain=solana, a Solana-only symbol (SOL, JUP, BONK...), or a base58 mint address.
+  const symU = t.toUpperCase().replace(/^\$/, "");
+  if (chainIn === "solana" || (!chainIn && !SYMBOLS[symU] && SOL_SYMBOLS[symU]) || (!chainIn && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t))) {
+    try {
+      return await solanaTokenPrice(t);
+    } catch (e) {
+      if (e instanceof SolanaInputError) throw new PriceInputError(e.message);
+      throw e;
+    }
+  }
   if (chainIn && !(chainIn in CHAINS)) throw new PriceInputError(`unsupported_chain (use ${Object.keys(CHAINS).join(", ")})`);
   let k: ChainKey;
   let address: Address;
@@ -246,14 +321,18 @@ export async function tokenPrice(tokenRaw: string, chainRaw?: string) {
   }
   const priceUsd = weighted(deep);
   const best = deep.reduce((a, b) => (b.depthUsd > a.depthUsd ? b : a));
-  const spread = deep.length > 1 ? Math.max(...deep.map((q) => q.priceUsd)) / Math.min(...deep.map((q) => q.priceUsd)) - 1 : 0;
+  const used = deep.filter((q) => Math.abs(q.priceUsd / best.priceUsd - 1) <= 0.03);
+  const spread = used.length > 1 ? Math.max(...used.map((q) => q.priceUsd)) / Math.min(...used.map((q) => q.priceUsd)) - 1 : 0;
+  const chg = await change24h(k, best);
   const value = {
     token: { symbol, name, address, decimals, chain: k },
     priceUsd: sig(priceUsd),
     confidence: spread <= 0.01 && best.depthUsd >= 1_000_000 ? "high" : spread <= 0.03 && best.depthUsd >= 100_000 ? "medium" : "low",
+    ...chg,
     poolSpreadPct: Math.round(spread * 10000) / 100,
-    totalDepthUsd: Math.round(deep.reduce((a, q) => a + q.depthUsd, 0)),
-    pools: deep
+    outlierPools: deep.length - used.length,
+    totalDepthUsd: Math.round(used.reduce((a, q) => a + q.depthUsd, 0)),
+    pools: used
       .sort((a, b) => b.depthUsd - a.depthUsd)
       .slice(0, 5)
       .map((q) => ({ dex: "uniswap-v3", pool: q.pool, feeTier: q.feeTier, quote: q.quote, priceUsd: sig(q.priceUsd), depthUsd: Math.round(q.depthUsd), explorer: CHAINS[k].explorer + q.pool })),
@@ -269,4 +348,6 @@ export async function tokenPrice(tokenRaw: string, chainRaw?: string) {
 }
 
 export const PRICE_SYMBOLS = Object.keys(SYMBOLS);
-export const PRICE_CHAINS = Object.keys(CHAINS);
+export const PRICE_CHAINS = [...Object.keys(CHAINS), "solana"];
+
+export const EVM_CHAINS = Object.keys(CHAINS) as ChainKey[];
