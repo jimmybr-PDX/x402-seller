@@ -40,6 +40,7 @@ import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
 import { recordRequest, startTraffic, trafficStats, type Outcome } from "./lib/traffic.js";
 import { statsHtml } from "./lib/stats-page.js";
+import { answerHtml, deleteAnswer, getAnswer, newAnswerId, pinAnswer, saveAnswer } from "./lib/answers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -203,7 +204,7 @@ async function main() {
     res.on("finish", () => {
       try {
         const paid = req.path in PAID;
-        const label = paid ? req.path : FREE_LABELS.has(req.path) ? req.path : "other";
+        const label = paid ? req.path : FREE_LABELS.has(req.path) ? req.path : req.path.startsWith("/a/") ? "/a" : "other";
         const hasPayment = !!(req.header("payment-signature") || req.header("x-payment"));
         const sc = res.statusCode;
         let outcome: Outcome = sc < 400 ? "ok" : "error";
@@ -296,24 +297,20 @@ async function main() {
       maxTimeoutSeconds: 300,
     }));
 
+  // Trimmed for the 402 header: legacy fields (summary, bullets, snippet, wikipedia, next, ...) are also returned; see schema.
   const reportExample = {
-    "query": "What is retrieval-augmented generation?",
-    "topic": "What is retrieval-augmented generation?",
-    "summary": "Retrieval-augmented generation (RAG) is a technique that enables large language models (LLMs) to retrieve and incorporate new information from external data sources. [1] With RAG, LLMs first refer to a specified set of documents, then respond to user queries. [1] These documents supplement information from the LLM's pre-existing training data. [1]",
-    "bullets": ["Retrieval-augmented generation is a technique for enhancing the accuracy and reliability of generative AI models with information fetched from specific and relevant data sources. [2]", "Retrieval-Augmented Generation (RAG) has shown significant improvements in various natural language processing tasks by integrating the strengths of large language models (LLMs) and external knowledge databases. [3]", "The term retrieval-augmented generation (RAG) was introduced in a 2020 paper that described combining a parametric language model with a non-parametric external memory accessed through retrieval at inference time. [1]"],
-    "sources": [{"id": 1, "type": "encyclopedia", "provider": "wikipedia", "title": "Retrieval-augmented generation", "url": "https://en.wikipedia.org/wiki/Retrieval-augmented_generation", "snippet": "Retrieval-augmented generation (RAG) is a technique that enables large language models (LLMs) to retrieve and…", "publishedAt": "2026-10-02T11:16:51Z"}, {"id": 2, "type": "web_page", "provider": "blogs.nvidia.com", "title": "What Is Retrieval-Augmented Generation aka RAG | NVIDIA Blogs", "url": "https://blogs.nvidia.com/blog/what-is-retrieval-augmented-generation/", "snippet": "The court clerk of AI is a process called retrieval-augmented generation, or RAG for short.…", "publishedAt": "2025-01-31T23:00:25+00:00"}, {"id": 3, "type": "web_page", "provider": "arxiv.org", "title": "[2404.12457] RAGCache: Efficient Knowledge Caching for Retrieval-Augmented Generation", "url": "https://arxiv.org/abs/2404.12457", "snippet": "Retrieval-Augmented Generation (RAG) has shown significant improvements in various natural language…", "publishedAt": "2024-04-30T12:41:56Z"}, {"id": 4, "type": "web_page", "provider": "myscale.com", "title": "Why SQL for Retrieval-Augmented Generation (RAG) System", "url": "https://www.myscale.com/blog/why-sql-for-rag/", "snippet": "Retrieval augmented generation (RAG) (opens new window) has proved to be a revolutionary technique in the…", "publishedAt": "2024-04-03T09:00:00.000Z"}],
-    "sourceCount": 4,
-    "providers": ["wikipedia", "hackernews"],
+    "answer": "Retrieval-augmented generation (RAG) is a technique that enables large language models (LLMs) to retrieve and incorporate new information from external data sources. With RAG, LLMs first refer to a specified set of documents, then respond to user queries.",
+    "answer_citations": [2],
+    "key_points": [{"text": "Retrieval-Augmented Generation (RAG) has shown significant improvements in various natural language processing tasks by integrating the strengths of…", "citations": [1]}, {"text": "Retrieval-augmented generation is a technique for enhancing the accuracy and reliability of generative AI models with information fetched from…", "citations": [3]}, {"text": "The term retrieval-augmented generation (RAG) was introduced in a 2020 paper that described combining a parametric language model with a…", "citations": [2]}],
     "confidence": "high",
-    "confidenceBasis": "4 cited source(s) from 2 provider(s)",
-    "wikipedia": {"title": "Retrieval-augmented generation", "description": "Type of information retrieval using LLMs", "extract": "Retrieval-augmented generation (RAG) is a technique that enables large language models (LLMs) to retrieve and incorporate new information from external data sources. With RAG, LLMs first refer to a specified set of documents,…", "url": "https://en.wikipedia.org/wiki/Retrieval-augmented_generation", "thumbnail": null, "lastEdited": "2026-09-28T11:20:51Z", "wikidataId": "Q121362277"},
-    "next": [{"endpoint": "/read", "call": "/read?url=https%3A%2F%2Fblogs.nvidia.com%2Fblog%2Fwhat-is-retrieval-augmented-generation%2F", "why": "full text of the top source as markdown"}, {"endpoint": "/news", "call": "/news?q=What%20is%20retrieval-augmented%20generation%3F", "why": "what happened on this topic in the last 72 hours"}],
+    "confidence_why": "3 cited sources from 3 publisher(s), incl. primary/authoritative: arxiv.org.",
+    "checked_at": "2026-10-06T07:13:00.721Z",
+    "permalink": "https://x402-seller-pmlm.onrender.com/a/example-rag",
+    "sources": [{"id": 1, "type": "web_page", "publisher": "arxiv.org", "title": "[2404.12457] RAGCache: Efficient Knowledge Caching for…", "url": "https://arxiv.org/abs/2404.12457", "published": "2024-04-30", "quote": "Retrieval-Augmented Generation (RAG) has shown significant improvements in various natural language…"}, {"id": 2, "type": "encyclopedia", "publisher": "Wikipedia", "title": "Retrieval-augmented generation", "url": "https://en.wikipedia.org/wiki/Retrieval-augmented_generation", "published": "2026-10-02", "quote": "Retrieval-augmented generation (RAG) is a technique that enables large language models (LLMs) to retrieve and…"}, {"id": 3, "type": "web_page", "publisher": "blogs.nvidia.com", "title": "What Is Retrieval-Augmented Generation aka RAG | NVIDIA Blogs", "url": "https://blogs.nvidia.com/blog/what-is-retrieval-augmented-generation/", "published": "2025-01-31", "quote": "Retrieval-augmented generation is a technique for enhancing the accuracy and reliability of generative AI…"}],
+    "query": "What is retrieval-augmented generation?",
+    "sourceCount": 3,
     "method": "extractive (Wikipedia lead + ranked sentences)",
-    "depth": "standard",
-    "lang": "en",
-    "generatedAt": "2026-10-06T07:02:08.816Z",
-    "cached": false,
-    "latencyMs": 3913,
+    "latencyMs": 3805,
   };
 
   const readExample = {
@@ -452,12 +449,14 @@ async function main() {
     "latencyMs": 940,
   };
 
+  pinAnswer("example-rag", reportExample); // the permalink shown in the /report example resolves
+
   const strArr = { type: "array", items: { type: "string" } };
   const routes = {
     "GET /report": {
       accepts: accept(REPORT_PRICE),
       description:
-        `Research brief with citations: web research on any question or topic in one call. Use to summarize a topic, get a Wikipedia summary, or answer with sources before writing or deciding. Pass q. Returns a cited summary, key bullets, sources (Wikipedia, official docs, Stack Overflow, GitHub, papers, news-linked articles) with URLs and dates, a Wikipedia card, confidence and follow-up calls. ${perCall(REPORT_PRICE)}`,
+        `Research brief with citations: web research on any question or topic in one call. Use to summarize a topic, get a Wikipedia summary, or answer with sources before writing or deciding. Pass q. Returns a direct answer, key points with citation ids, 3-5 vetted sources (official docs, .gov/.edu, journals, Wikipedia as backup) with publisher, date and supporting quote, confidence with reason, and a shareable permalink. ${perCall(REPORT_PRICE)}`,
       mimeType: "application/json",
       serviceName: "Research Brief with Citations",
       tags: ["research brief", "web research", "summarize a topic", "wikipedia summary", "answer with sources"],
@@ -477,9 +476,15 @@ async function main() {
             example: reportExample,
             schema: {
               properties: {
+                answer: { type: "string", description: "1-3 sentence direct answer (plain text; ids in answer_citations)" },
+                answer_citations: { type: "array", items: { type: "integer" }, description: "source ids supporting the answer" },
+                key_points: { type: "array", description: "Key points, each tied to the source ids that support it", items: { type: "object", properties: { text: { type: "string" }, citations: { type: "array", items: { type: "integer" } } }, required: ["text", "citations"] } },
+                confidence_why: { type: "string", description: "One line: why this confidence level" },
+                checked_at: { type: "string", description: "ISO time the sources were checked" },
+                permalink: { type: "string", description: "Free shareable page for this answer (/a/<id>; add ?format=json). Kept in memory, may reset on redeploy" },
                 query: { type: "string" },
                 topic: { type: "string", description: "Topic extracted from q (request words like 'summarize' removed)" },
-                summary: { type: "string", description: "2-4 sentence answer with [n] citations" },
+                summary: { type: "string", description: "Same answer with inline [n] citations" },
                 bullets: { ...strArr, description: "Key points, each with [n] citations" },
                 sources: {
                   type: "array",
@@ -493,13 +498,16 @@ async function main() {
                       url: { type: "string" },
                       snippet: { type: "string" },
                       publishedAt: { type: ["string", "null"] },
+                      publisher: { type: "string" },
+                      published: { type: ["string", "null"], description: "YYYY-MM-DD when known" },
+                      quote: { type: "string", description: "Sentence from this source that supports the cited claim" },
                     },
                     required: ["id", "title", "url"],
                   },
                 },
                 sourceCount: { type: "integer" },
                 providers: strArr,
-                confidence: { type: "string", enum: ["high", "medium", "low"], description: "high = 3+ cited sources from 2+ providers" },
+                confidence: { type: "string", enum: ["high", "medium", "low"], description: "high = 3+ cited sources from 2+ providers or 2+ primary/authoritative publishers" },
                 confidenceBasis: { type: "string" },
                 wikipedia: {
                   type: ["object", "null"],
@@ -514,7 +522,7 @@ async function main() {
                 latencyMs: { type: "integer" },
                 generatedAt: { type: "string" },
               },
-              required: ["query", "topic", "summary", "bullets", "sources", "confidence"],
+              required: ["answer", "key_points", "sources", "confidence", "checked_at", "query"],
             },
           },
         }),
@@ -925,6 +933,21 @@ async function main() {
     });
   });
 
+  app.get("/a/:id", (req, res) => {
+    const a = getAnswer(String(req.params.id));
+    const json = req.query.format === "json" || req.accepts(["html", "json"]) === "json";
+    res.set("Cache-Control", "public, max-age=300").vary("Accept");
+    if (!a) {
+      const msg = "Answer not found. Permalinks are kept in memory and reset when the server restarts or redeploys.";
+      res.status(404);
+      if (json) res.json({ error: "not_found", message: msg });
+      else res.type("html").send(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><p style="font:17px system-ui;max-width:640px;margin:40px auto;padding:0 16px">${msg} <a href="${PUBLIC_URL}/">${SERVICE_NAME}</a></p>`);
+      return;
+    }
+    if (json) res.json(a);
+    else res.type("html").send(answerHtml(a, `${PUBLIC_URL}/llms.txt`, "Research Brief with Citations"));
+  });
+
   app.get("/stats", (req, res) => {
     const data = { service: SERVICE_NAME, generatedAt: new Date().toISOString(), ...trafficStats(Object.keys(PAID), true) };
     res.set("Cache-Control", "no-store").vary("Accept");
@@ -1002,7 +1025,7 @@ async function main() {
     payToSolana,
     openapi: `${PUBLIC_URL}/openapi.json`,
     llms: `${PUBLIC_URL}/llms.txt`,
-    free: ["/health", "/stats", "/examples", "/llms.txt", "/openapi.json", "/.well-known/x402", "/robots.txt"],
+    free: ["/health", "/stats", "/examples", "/a/<id>", "/llms.txt", "/openapi.json", "/.well-known/x402", "/robots.txt"],
   });
   // 402 Index domain verification (public SHA-256 hash of the claim token, not the token itself)
   app.get("/.well-known/402index-verify.txt", (_req, res) =>
@@ -1173,7 +1196,12 @@ async function main() {
       res.status(422).json({ error: "no_sources", message: "No sources found for this query; try rephrasing. You were not charged." });
       return;
     }
-    res.json(body);
+    // Shareable permalink (free page). Removed again if the payment does not settle.
+    const id = newAnswerId();
+    const out = { ...body, permalink: `${PUBLIC_URL}/a/${id}` };
+    saveAnswer(id, out);
+    res.on("finish", () => { if (!decodeB64Json(res.getHeader("payment-response"))?.success) deleteAnswer(id); });
+    res.json(out);
   });
 
   app.get("/read", async (req, res) => {

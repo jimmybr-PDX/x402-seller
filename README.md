@@ -66,6 +66,10 @@ npm ci && npm run dev  # http://localhost:8402
 
 Free routes: `/health`, `/stats`, `/examples`, `/llms.txt`, `/openapi.json`, `/.well-known/x402`, `/robots.txt`, `/icon.svg`.
 
+## Answer permalinks (`/a/<id>`)
+
+Every paid `/report` answer gets a free shareable page at `/a/<id>` (clean HTML; `?format=json` for the stored JSON) with a footer link back to the service. Stored in memory only (max 500, 30 days), so links reset on each Render deploy/restart. Only the answer is stored (question, answer, sources), never IP, user agent or payer. `/a/example-rag` is a pinned demo. The paid response leads with bot-friendly fields: `answer`, `answer_citations`, `key_points[{text,citations}]`, sources with `publisher`, `published`, `quote`, `confidence` + `confidence_why`, `checked_at`, `permalink`; the original fields (`summary`, `bullets`, ...) are unchanged.
+
 ## Interest tracker (`/stats`)
 
 Open `/stats` in a browser (or `/stats?view=simple`) for a plain-English page: one headline sentence, a per-tool table (looked at price / paid / bots-crawlers), Pacific times. Programs get JSON (default, or `?format=json`). Payments signed by our own test wallet (`SELF_PAYERS`, default `0x4862…4940`) and the unpaid probe just before them from the same visitor are tagged `self` and excluded from buyer counts (`selfPaid` shows them).

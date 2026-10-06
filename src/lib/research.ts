@@ -1,5 +1,6 @@
 /**
- * Cited research brief built only from free, keyless public sources:
+ * Cited research brief built only from free, keyless public sources (quality over quantity: 3-5 vetted
+ * sources; official docs, .gov/.edu/journals and pages the Wikipedia article itself cites outrank Wikipedia):
  *   Wikipedia (search + full plain-text article), Stack Overflow (Stack Exchange API, no key),
  *   GitHub (repo search + README), Hacker News (Algolia; used to discover linked articles),
  *   DuckDuckGo Instant Answer, and Crossref (scholarly works).
@@ -20,7 +21,21 @@ export type Source = {
   snippet: string;
   publishedAt?: string | null;
   score?: number | null;
+  publisher?: string;
+  published?: string | null;
+  quote?: string;
 };
+const PUBLISHERS: Record<string, string> = { wikipedia: "Wikipedia", crossref: "Crossref (DOI)", github: "GitHub", stackoverflow: "Stack Overflow", duckduckgo: "DuckDuckGo" };
+const publisherOf = (d: { provider: string; url: string }) => PUBLISHERS[d.provider] ?? hostOf(d.url);
+const dateOnly = (v: string | null | undefined) => {
+  if (!v) return null;
+  const m = String(v).match(/^\d{4}(-\d{2}(-\d{2})?)?/);
+  if (m) return m[0];
+  const t = Date.parse(String(v).replace(/\./g, "")); // "Oct. 03, 2026"
+  return Number.isFinite(t) ? new Date(t).toISOString().slice(0, 10) : null;
+};
+const stripCites = (t: string) => t.replace(/\s*\[\d+\]/g, "").replace(/\s+/g, " ").trim();
+const citeIds = (t: string) => [...new Set([...t.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1])))];
 
 type Doc = Source & { text: string; quality: number; relevance: number; links: string[]; origin: string };
 
@@ -125,7 +140,7 @@ function splitSentences(text: string): { s: string; section: string; pos: number
     const h = line.match(/^(?:#{1,6}\s+(.+)|={2,}\s*(.+?)\s*={2,})$/);
     if (h) { section = (h[1] ?? h[2] ?? "").trim(); continue; }
     const prot = line.replace(/\b(e\.g|i\.e|etc|vs|Mr|Mrs|Dr|St|Inc|Ltd|Jr|Sr|U\.S|U\.K|No|approx|ca)\./g, (m) => m.replace(/\./g, "\u0000"));
-    const parts = prot.split(/(?<=[.!?])\s+(?=[A-Z0-9"“(\[])/);
+    const parts = prot.split(/(?<=[.!?]["”’)]?)\s+(?=[A-Z0-9"“(\[])/);
     for (const p of parts) {
       const s = p.replace(/\u0000/g, ".").replace(/^[-*•]\s+/, "").replace(/\s+/g, " ").trim();
       const s2 = s.replace(/^(abstract|summary|tl;?dr)\s*[:.]\s*/i, "");
@@ -202,17 +217,26 @@ function relevance(q: Query, title: string, text: string): number {
   return Number((0.45 * (inTitle / n) + 0.35 * bodyCov + 0.2 * (freq / n)).toFixed(3));
 }
 
+// Primary / authoritative publishers (government, universities, standards bodies, journals, major wires).
+const AUTHORITY = /(^|\.)((gov|edu|mil)(\.[a-z]{2})?|ac\.uk|gc\.ca|europa\.eu|who\.int|un\.org|oecd\.org|imf\.org|worldbank\.org|bis\.org|federalreserve\.gov|britannica\.com|developer\.mozilla\.org|w3\.org|ietf\.org|rfc-editor\.org|iso\.org|nature\.com|science\.org|nejm\.org|thelancet\.com|bmj\.com|jamanetwork\.com|cochrane(library)?\.org|mayoclinic\.org|clevelandclinic\.org|hopkinsmedicine\.org|heart\.org|nhs\.uk|arxiv\.org|acm\.org|ieee\.org|bbc\.co\.uk|bbc\.com|reuters\.com|apnews\.com|economist\.com|smithsonianmag\.com|nationalgeographic\.com)$/;
+// Content farms, SEO/aggregator and social sites: only used when nothing better exists.
+const WEAK = /(^|\.)(medium\.com|dev\.to|hashnode\.\w+|substack\.com|blogspot\.com|wordpress\.com|geeksforgeeks\.org|tutorialspoint\.com|javatpoint\.com|simplilearn\.com|analyticsvidhya\.com|towardsdatascience\.com|educba\.com|guru99\.com|hubspot\.com|today\.com|buzzfeed\.com|msn\.com|yahoo\.com|ezinearticles\.com|hubpages\.com|scribd\.com|slideshare\.net|coursehero\.com|studocu\.com|brainly\.\w+|chegg\.com|youtube\.com|youtu\.be|twitter\.com|x\.com|facebook\.com|instagram\.com|tiktok\.com|pinterest\.com|quora\.com|reddit\.com|linkedin\.com)$/;
 function sourceQuality(url: string, q: Query, kind: Source["type"]): number {
   const h = hostOf(url);
-  const label = h.split(".").slice(-2, -1)[0] ?? "";
-  if (kind === "encyclopedia") return 1.15;
-  if (isOfficialHost(h, q)) return /docs?\.|\/docs?\/|\/manual\/|\/guides?\//.test(url) ? 1.5 : /\/(blog|articles?|news)\//.test(url) ? 1.15 : 1.3; // official site; its docs rank highest
-  if (/(^|\.)((gov|edu|mil)(\.[a-z]{2})?|europa\.eu|who\.int|imf\.org|worldbank\.org|federalreserve\.gov|britannica\.com|developer\.mozilla\.org|w3\.org|ietf\.org|rfc-editor\.org|nature\.com|nih\.gov|bbc\.co\.uk|reuters\.com|apnews\.com|smithsonianmag\.com|nationalgeographic\.com)$/.test(h)) return 1.2;
-  if (/^docs\.|\.readthedocs\.io$|\/docs?\//.test(h + new URL(url).pathname)) return 1.15;
+  let path = "";
+  try { path = new URL(url).pathname.toLowerCase(); } catch {}
+  if (kind === "encyclopedia") return 1.0; // good backup, but primary sources outrank it
+  if (isOfficialHost(h, q)) {
+    if (/\/(press|news|blog|events?)\/|announc|launch|partner|funding/.test(path)) return 1.1; // official, but PR rather than reference
+    return /docs?\.|\/docs?\/|\/manual\/|\/guides?\//.test(url) ? 1.5 : 1.3; // official site; its docs rank highest
+  }
+  if (AUTHORITY.test(h)) return 1.35;
+  if (WEAK.test(h)) return 0.5;
+  if (/^docs\.|\.readthedocs\.io$/.test(h) || /\/docs?\//.test(path)) return 1.15;
   if (h === "stackoverflow.com" || h.endsWith("stackexchange.com")) return 1.0;
   if (h === "github.com") return 1.0;
-  if (/(youtube|youtu\.be|twitter|x\.com|facebook|instagram|tiktok|pinterest|quora|reddit|linkedin)\./.test(h + ".")) return 0.5;
-  if (kind === "paper") return 0.85;
+  if (kind === "paper") return 1.1; // peer-reviewed abstract: primary research
+  if (/\/(blog|sponsored|partners?)\//.test(path)) return 0.8; // third-party vendor blog
   return 0.9;
 }
 
@@ -355,6 +379,37 @@ async function fetchPage(url: string, title: string | null, origin: string, at: 
   } catch { return null; }
 }
 
+// ---- primary sources cited by the Wikipedia article (keyless way to reach .gov/.edu/journals/standards) ----
+async function wikiRefUrls(q: Query, lang: string, title: string): Promise<string[]> {
+  const j = await getJson<any>(`https://${lang}.wikipedia.org/w/api.php?action=query&prop=extlinks&ellimit=500&format=json&redirects=1&titles=${encodeURIComponent(title)}`, 4000);
+  const page: any = Object.values(j?.query?.pages ?? {})[0];
+  const scored: { u: string; s: number; h: string }[] = [];
+  for (const e of page?.extlinks ?? []) {
+    const raw = String(e?.["*"] ?? e?.url ?? "");
+    let u: URL; try { u = new URL(raw.startsWith("//") ? `https:${raw}` : raw); } catch { continue; }
+    if (u.protocol === "http:") u.protocol = "https:";
+    if (u.protocol !== "https:") continue;
+    const h = u.hostname.replace(/^www\./, "");
+    if (!AUTHORITY.test(h) && !isOfficialHost(h, q)) continue;
+    if (/archive\.org|doi\.org|books\.google|jstor\.org|wiki(pedia|data|media)\.org/.test(h) || /\.(pdf|zip|xlsx?|csv|docx?|pptx?)$/i.test(u.pathname)) continue;
+    let pathText = u.pathname + " " + u.search;
+    try { pathText = decodeURIComponent(pathText); } catch {}
+    const pt = tokens(pathText.replace(/[\/_.=&?+-]+/g, " "));
+    const hits = q.core.filter((c) => pt.some((t) => termMatch(t, c))).length;
+    if (!hits) continue; // the URL itself must be about the topic
+    const slug = tokens((u.pathname.split("/").filter(Boolean).pop() ?? "").replace(/\.\w+$/, "").replace(/[_.=&?+-]+/g, " ")).filter((w) => !/^\d+$/.test(w) && !STOP.has(w));
+    const extra = slug.filter((w) => !q.core.some((c) => termMatch(w, c)) && !q.intent.some((c) => termMatch(w, c))).length;
+    let sc = (hits / (q.core.length || 1)) * 3 + q.intent.filter((w) => pt.some((t) => termMatch(t, w))).length - 0.4 * Math.min(extra, 5);
+    if (/\/(news|press|blog|events?)\//.test(u.pathname)) sc -= 1;
+    scored.push({ u: u.toString(), s: sc, h });
+  }
+  scored.sort((a, b) => b.s - a.s || a.u.length - b.u.length);
+  const perHost = new Set<string>();
+  const out: string[] = [];
+  for (const x of scored) { if (perHost.has(x.h)) continue; perHost.add(x.h); out.push(x.u); if (out.length >= 7) break; }
+  return out;
+}
+
 // ---- official docs: find the topic's own site, then pick pages from its sitemap / links by path relevance ----
 function officialHosts(q: Query, docs: Doc[], extra: string[]): string[] {
   if (!q.siteKeys.length) return [];
@@ -449,6 +504,8 @@ async function officialDocUrls(q: Query, docs: Doc[], extra: string[]): Promise<
 // ---------- extractive synthesis ----------
 type Cand = { s: string; doc: Doc; score: number; def: boolean; pos: number };
 
+/** capitalised names in the sentence (not sentence-initial) that are not part of the query: "Google Cloud's Agent2Agent (A2A)" */
+const otherNames = (q: Query, s: string) => (s.slice(1).match(/\b[A-Z][A-Za-z0-9]*[A-Z0-9a-z]\b/g) ?? []).filter((w) => !q.core.some((c) => termMatch(w.toLowerCase(), c)) && !/^(HTTP|HTTPS|API|URL|JSON|The|A|An|In|On|For|With)$/.test(w)).length;
 function rankSentences(q: Query, docs: Doc[]): Cand[] {
   const all: { s: string; section: string; pos: number; doc: Doc }[] = [];
   for (const doc of docs) for (const x of splitSentences(doc.text).slice(0, 900)) if (goodSentence(x.s)) all.push({ ...x, doc });
@@ -491,7 +548,11 @@ function rankSentences(q: Query, docs: Doc[]): Cand[] {
     if (/^(this|these|it|they|he|she|however|but|also|so|and|thus|therefore)\b/i.test(x.s)) score -= 0.25; // dangling references read badly out of context
     if (/\?$/.test(x.s)) score -= 0.4;
     if (/\b(check out|webinar|stay tuned|interested in|sign up|our (product|team|platform|customers)|in this (post|article|guide|tutorial|video))\b|\bIf you ask\b/i.test(x.s)) return; // promo chatter
-    if (/\b(we|our|us|I|my)\b/.test(x.s)) score -= 0.5; // first-person narrative rarely answers the question
+    if (/\b([Ww]e|[Oo]urs?|us|I|[Mm]y)\b/.test(x.s)) { if (x.doc.origin !== "official-docs") return; score -= 0.5; } // first-person narrative / press quotes rarely answer the question
+    if (/[“”]|"[^"]{25,}"?\.?$/.test(x.s) && !/\b(says?|said|states?|according to|concluded|found)\b/i.test(x.s)) return; // pull quotes without attribution
+    if (/\b(lasting trust|industry[- ]leading|revolutionary|game[- ]chang\w*|cutting[- ]edge|seamless(ly)?|unlock\w*|empower\w*|world[- ]class|best[- ]in[- ]class|excited to|proud to|thrilled|embodies)\b/i.test(x.s)) return; // marketing
+    // third-party pages titled after the subject: sentences that don't name it must still answer (cue + a query term)
+    if (q.entities.length && titled && x.doc.origin !== "official-docs" && x.doc.origin !== "github" && x.doc.type !== "encyclopedia" && !q.entities.some((e) => t.some((w) => termMatch(w, e))) && !(q.core.some((c) => !q.entities.includes(c) && t.some((w) => termMatch(w, c))) && otherNames(q, x.s) < 2)) return;
     if (/\balso\b/i.test(x.s.slice(0, 60))) score -= 0.1;
     const exactTitle = tokens(x.doc.title.replace(/\(.*?\)|[–—|:-].*$/g, "")).filter((w) => !STOP.has(w)).every((w) => q.core.some((c) => termMatch(w, c)));
     out.push({ s: x.s, doc: x.doc, score: score * x.doc.quality * (0.6 + 0.4 * x.doc.relevance) * (exactTitle ? 1.15 : 1), def, pos: x.pos });
@@ -505,17 +566,24 @@ const jacc = (a: string, b: string) => {
   return inter / (A.size + B.size - inter || 1);
 };
 
+const MAX_CITED = 5;
 function compose(q: Query, cands: Cand[]) {
   if (!cands.length) return null;
   const top = cands[0]!.score;
   const pool = cands.filter((c) => c.score >= top * 0.4);
   const chosen: Cand[] = [];
-  const take = (c: Cand) => { if (!chosen.some((x) => jacc(x.s, c.s) > 0.45 || x.s === c.s)) { chosen.push(c); return true; } return false; };
+  const take = (c: Cand) => {
+    if (chosen.some((x) => jacc(x.s, c.s) > 0.45 || x.s === c.s)) return false;
+    if (!chosen.some((x) => x.doc === c.doc) && new Set(chosen.map((x) => x.doc)).size >= MAX_CITED) return false; // 3-5 good sources, not many
+    chosen.push(c);
+    return true;
+  };
   // opener: a definitional sentence for define/general/how questions; otherwise the best-scoring sentence
-  const wantsDef = q.kind === "define" || q.kind === "general" || q.kind === "cause" || q.kind === "history" || q.kind === "compare" || (q.kind === "how" && q.aspect.length <= 1 && !q.entities.length);
+  const wantsDef = q.kind === "define" || (q.kind === "general" && q.core.length <= 2) || q.kind === "cause" || q.kind === "history" || q.kind === "compare" || (q.kind === "how" && q.aspect.length <= 1 && !q.entities.length);
   // opener for "what is / why / history" questions: the definitional lead of the most on-topic, highest-quality source
   const defs = cands.filter((c) => c.def && c.score >= top * 0.25).sort((a, b) => b.doc.relevance * b.doc.quality - a.doc.relevance * a.doc.quality || a.pos - b.pos);
-  const opener = wantsDef ? (defs[0] ?? pool[0]!) : pool[0]!;
+  const causal = q.kind === "cause" ? pool.find((c) => !/^because\b/i.test(c.s) && /\b(causes?|caused by|driven by|due to|results? from|stems? from|demand[- ]pull|cost[- ]push)\b/i.test(c.s)) : undefined;
+  const opener = causal ?? (wantsDef ? (defs[0] ?? pool[0]!) : pool[0]!);
   if (q.kind === "compare" && q.entities.length >= 2) {
     for (const e of q.entities.slice(0, 3)) { const d = cands.find((c) => c.def && tokens(c.s.slice(0, 60)).some((w) => termMatch(w, e)) && c.score >= top * 0.2); if (d) take(d); }
   }
@@ -523,8 +591,8 @@ function compose(q: Query, cands: Cand[]) {
   const perDoc = (d: Doc) => chosen.filter((c) => c.doc === d).length;
   const nDocs = new Set(pool.map((c) => c.doc)).size;
   const capS = nDocs === 1 ? 3 : 2, capB = nDocs === 1 ? 8 : nDocs === 2 ? 4 : 3;
-  for (const c of pool) { if (chosen.length >= 3) break; if (perDoc(c.doc) < capS && (chosen.length < 2 || c.doc !== chosen[chosen.length - 1]!.doc || pool.every((p) => p.doc === c.doc))) take(c); }
-  const summaryParts = chosen.slice(0, Math.min(3, chosen.length));
+  for (const c of pool) { if (chosen.length >= 2) break; if (perDoc(c.doc) < capS && (chosen.length < 2 || c.doc !== chosen[chosen.length - 1]!.doc || pool.every((p) => p.doc === c.doc))) take(c); }
+  const summaryParts = chosen.slice(0, Math.min(2, chosen.length)); // short direct answer first
   for (const c of pool) { if (chosen.length >= summaryParts.length + 5) break; if (perDoc(c.doc) < capB) take(c); }
   const bulletParts = chosen.slice(summaryParts.length);
   if (q.kind === "history") {
@@ -549,7 +617,7 @@ async function llmSynthesis(q: string, sources: Source[]): Promise<{ summary: st
       body: JSON.stringify({
         model, temperature: 0.2, response_format: { type: "json_object" },
         messages: [
-          { role: "system", content: "You write factual research briefs. Use ONLY the numbered sources. Return JSON {\"summary\": string (2-4 sentences), \"bullets\": string[] (3-6 items, each ending with citations like [1] or [2][3])}. No markdown." },
+          { role: "system", content: "You write factual research briefs. Use ONLY the numbered sources; every claim must be supported by the source you cite. Return JSON {\"summary\": string (1-2 sentence direct answer, with citations like [1]), \"bullets\": string[] (3-5 key points, each ending with citations like [1] or [2][3])}. No markdown." },
           { role: "user", content: `Question: ${q}\n\nSources:\n${ctx}` },
         ],
       }),
@@ -564,6 +632,28 @@ async function llmSynthesis(q: string, sources: Source[]): Promise<{ summary: st
 
 
 export type Depth = "quick" | "standard";
+
+/** Quality over quantity: drop duplicate pages, cap 2 per site, keep Wikipedia as backup, drop weak sites when better exist. */
+function curate(docs: Doc[], exactWiki: Doc | undefined): Doc[] {
+  const val = (d: Doc) => d.relevance * d.quality;
+  const sorted = [...docs].sort((a, b) => val(b) - val(a));
+  const seenUrl = new Set<string>(), perHost = new Map<string, number>(), titles: string[] = [];
+  let out: Doc[] = [];
+  for (const d of sorted) {
+    const key = d.url.toLowerCase().replace(/^https?:\/\/(www\.)?/, "").replace(/[?#].*$/, "").replace(/\/+$/, "");
+    const host = hostOf(d.url);
+    if (seenUrl.has(key) || (perHost.get(host) ?? 0) >= 2 || titles.some((t) => jacc(t, d.title) > 0.7)) continue;
+    seenUrl.add(key); perHost.set(host, (perHost.get(host) ?? 0) + 1); titles.push(d.title);
+    out.push(d);
+  }
+  const strong = out.filter((d) => d.type !== "encyclopedia" && d.quality >= 1.1 && d.relevance >= 0.5).length;
+  if (strong >= 2) { // enough primary sources: keep only the single best encyclopedia article as backup
+    const keep = exactWiki && out.includes(exactWiki) ? exactWiki : out.find((d) => d.type === "encyclopedia");
+    out = out.filter((d) => d.type !== "encyclopedia" || d === keep);
+  }
+  if (out.filter((d) => d.quality >= 0.9).length >= 3) out = out.filter((d) => d.quality >= 0.7);
+  return out;
+}
 
 /** Wikipedia page summary card (REST API): short description, lead extract, thumbnail. */
 async function wikiCard(lang: string, title: string) {
@@ -609,6 +699,8 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
   docs = docs.map(score).filter((d) => d.relevance > 0);
   if (depth === "standard") {
     const seen = new Set(docs.map((d) => d.url));
+    const leadWiki = docs.filter((d) => d.provider === "wikipedia").sort((a, b) => b.relevance - a.relevance)[0];
+    const refUrls = leadWiki && leadWiki.relevance >= 0.5 ? wikiRefUrls(q, lang, leadWiki.title).catch(() => [] as string[]) : Promise.resolve([] as string[]);
     const official = (await officialDocUrls(q, [...docs, ...evidence.filter((d) => !docs.includes(d))], ddg.urls).catch(() => [] as string[])).filter((u) => !seen.has(u));
     const officialRaw: Doc[] = [];
     const pages = await Promise.all([
@@ -619,6 +711,7 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
         return d;
       })),
       ...hn.filter((h) => !seen.has(h.url)).slice(0, 3).map((h) => fetchPage(h.url, h.title, "hackernews", h.at)),
+      ...(await refUrls).filter((u) => !seen.has(u) && !official.includes(u)).slice(0, 6).map((u) => fetchPage(u, null, "primary-sources")), // parallel; many cited pages moved or block bots
     ]);
     for (const p of pages) if (p && !docs.some((d) => d.url === p.url)) { score(p); if (p.relevance > 0) docs.push(p); }
     // one hop from official hub pages (e.g. a docs chapter index) to its most on-topic subpages
@@ -639,6 +732,7 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
   const baseT = (t: string) => t.replace(/\s*\(.*?\)\s*$/, "").toLowerCase();
   const exactWiki = docs.find((d) => d.provider === "wikipedia" && !/\(.*\)$/.test(d.title) && flatPunct(d.title).toLowerCase() === flatPunct(topicOf(q.raw)).toLowerCase());
   if (exactWiki) docs = docs.filter((d) => d === exactWiki || d.provider !== "wikipedia" || baseT(d.title) !== baseT(exactWiki.title));
+  docs = curate(docs, exactWiki);
   if (!docs.length) return null;
 
   // 3) rank sentences across sources and compose
@@ -649,12 +743,15 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
   // 4) sources: cited first (ids in citation order), then other relevant ones
   const order: Doc[] = [];
   for (const c of [...comp.summaryParts, ...comp.bulletParts]) if (!order.includes(c.doc)) order.push(c.doc);
-  for (const d of docs.sort((a, b) => b.relevance * b.quality - a.relevance * a.quality)) if (!order.includes(d) && order.length < 8 && d.relevance >= 0.6 && d.quality >= 1.15 && termCount(q, d.title) / (q.core.length || 1) >= 0.5) order.push(d);
+  for (const d of docs.sort((a, b) => b.relevance * b.quality - a.relevance * a.quality)) if (!order.includes(d) && order.length < 3 && d.relevance >= 0.6 && d.quality >= 1.15 && termCount(q, d.title) / (q.core.length || 1) >= 0.5) order.push(d);
   order.forEach((d, i) => (d.id = i + 1));
+  const firstCited = new Map<Doc, string>();
+  for (const c of [...comp.summaryParts, ...comp.bulletParts]) if (!firstCited.has(c.doc)) firstCited.set(c.doc, c.s);
   const sources: Source[] = order.map((d) => {
     const best = cands.filter((c) => c.doc === d).slice(0, 2).sort((a, b) => a.pos - b.pos).map((c) => c.s);
     const snippet = clip(best.join(" ") || splitSentences(d.text).map((x) => x.s).find(goodSentence) || d.text, 600);
-    const src: Source = { id: d.id, type: d.type, provider: d.provider, title: clip(d.title, 160), url: d.url, snippet, publishedAt: d.publishedAt ?? null };
+    const src: Source = { id: d.id, type: d.type, provider: d.provider, title: clip(d.title, 160), url: d.url, snippet, publishedAt: d.publishedAt ?? null,
+      publisher: publisherOf(d), published: dateOnly(d.publishedAt), quote: clip(firstCited.get(d) ?? best[0] ?? snippet, 220) };
     if (d.score != null) src.score = d.score;
     return src;
   });
@@ -668,20 +765,32 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
   else if (wikiSummary && wikiDoc && (q.kind === "general" || q.kind === "define") && wikiDoc.id > 0 && termCount(q, wikiSummary.title) / (q.core.length || 1) >= 0.99) {
     // Overview questions ("Oregon City", "summarize photosynthesis"): the encyclopedia lead is the best summary;
     // keep the ranked sentences as bullets, minus any that repeat the lead.
-    const lead = splitSentences(wikiSummary.extract).map((x) => x.s).filter(goodSentence).slice(0, 3);
+    const lead = splitSentences(wikiSummary.extract).map((x) => x.s).filter(goodSentence).slice(0, 2);
     if (lead.length >= 2) {
       summary = lead.map((x) => `${x} [${wikiDoc.id}]`).join(" ");
       const extra = comp.summaryParts.filter((c) => c.doc !== wikiDoc && !lead.some((l) => jacc(l, c.s) > 0.45)).map(cite);
-      bullets = [...extra, ...bullets.filter((b) => !lead.some((l) => jacc(l, b) > 0.45))].slice(0, 6);
+      bullets = [...extra, ...bullets.filter((b) => !lead.some((l) => jacc(l, b) > 0.45))].slice(0, 5);
       method = "extractive (Wikipedia lead + ranked sentences)";
     }
   }
   const providers = [...new Set(order.map((d) => d.origin))];
   const cited = new Set([...comp.summaryParts, ...comp.bulletParts].map((c) => c.doc));
-  const confidence = cited.size >= 3 && providers.length >= 2 ? "high" : cited.size >= 2 || method.includes("Wikipedia lead") ? "medium" : "low";
+  const primary = [...cited].filter((d) => d.quality >= 1.15 && d.type !== "encyclopedia").length;
+  const confidence = cited.size >= 3 && (providers.length >= 2 || primary >= 2) ? "high" : cited.size >= 2 || primary >= 1 || method.includes("Wikipedia lead") ? "medium" : "low";
   const topic = topicOf(q.raw);
   const top = sources.find((x) => x.type !== "encyclopedia") ?? sources[0];
+  const authHosts = [...cited].filter((d) => d.quality >= 1.15 && d.type !== "encyclopedia").map((d) => publisherOf(d));
+  const why = `${cited.size} cited source${cited.size === 1 ? "" : "s"} from ${new Set([...cited].map((d) => publisherOf(d))).size} publisher(s)` +
+    (authHosts.length ? `, incl. primary/authoritative: ${[...new Set(authHosts)].slice(0, 3).join(", ")}` : ", no primary/authoritative source found") + ".";
+  const checkedAt = new Date().toISOString();
   const value = {
+    // bot-friendly fields
+    answer: stripCites(summary),
+    answer_citations: citeIds(summary),
+    key_points: bullets.map((b) => ({ text: stripCites(b), citations: citeIds(b) })),
+    confidence_why: why,
+    checked_at: checkedAt,
+    // original fields (kept for compatibility)
     query: q.raw,
     topic,
     summary,
@@ -690,7 +799,7 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
     sourceCount: sources.length,
     providers,
     confidence,
-    confidenceBasis: `${cited.size} cited source(s) from ${providers.length} provider(s)`,
+    confidenceBasis: `${cited.size} cited source(s) from ${providers.length} provider(s); ${primary} primary/authoritative`,
     wikipedia: wikiSummary,
     next: [
       ...(top ? [{ endpoint: "/read", call: `/read?url=${encodeURIComponent(top.url)}`, why: "full text of the top source as markdown" }] : []),
@@ -699,7 +808,7 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
     method,
     depth,
     lang,
-    generatedAt: new Date().toISOString(),
+    generatedAt: checkedAt,
   };
   briefCache.set(ck, { at: Date.now(), value });
   if (briefCache.size > 300) briefCache.delete(briefCache.keys().next().value!);
