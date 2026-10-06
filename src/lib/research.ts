@@ -41,9 +41,15 @@ type Doc = Source & { alias?: string; text: string; quality: number; relevance: 
 
 // ---------- text utils ----------
 const ENT: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", "#39": "'", "#039": "'", "#x27": "'", hellip: "…", mdash: "—", ndash: "–", rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“" };
+const MARK: Record<string, string> = { acute: "\u0301", grave: "\u0300", circ: "\u0302", uml: "\u0308", tilde: "\u0303", cedil: "\u0327", ring: "\u030A" };
+const ENT2: Record<string, string> = { szlig: "ß", oslash: "ø", Oslash: "Ø", aelig: "æ", AElig: "Æ", copy: "©", reg: "®", trade: "™", euro: "€", pound: "£", yen: "¥", cent: "¢", deg: "°", middot: "·", bull: "•", times: "×", divide: "÷", plusmn: "±", frac12: "½", frac14: "¼", frac34: "¾", sup2: "²", sup3: "³", micro: "µ", para: "¶", sect: "§", laquo: "«", raquo: "»", sbquo: "‚", bdquo: "„", prime: "′", Prime: "″", shy: "", zwj: "", zwnj: "", thinsp: " ", ensp: " ", emsp: " ", iexcl: "¡", iquest: "¿" };
 const decode = (s: string) => s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
-  if (e[0] === "#") { const n = e[1]?.toLowerCase() === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10); return Number.isFinite(n) ? String.fromCodePoint(n) : m; }
-  return ENT[e.toLowerCase()] ?? m;
+  if (e[0] === "#") { const n = e[1]?.toLowerCase() === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10); return Number.isFinite(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : m; }
+  const k = e.toLowerCase();
+  if (ENT[k] !== undefined) return ENT[k]!;
+  if (ENT2[e] !== undefined) return ENT2[e]!;
+  const acc = e.match(/^([a-zA-Z])(acute|grave|circ|uml|tilde|cedil|ring)$/); // &aacute; &Eacute; &ntilde; &ccedil; ...
+  return acc ? (acc[1]! + MARK[acc[2]!]).normalize("NFC") : m;
 });
 const strip = (s: string) => decode(s.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1).replace(/\s+\S*$/, "") + "…" : s);
@@ -578,6 +584,8 @@ function rankSentences(q: Query, docs: Doc[]): Cand[] {
     if (q.kind !== "history" && MARKET.test(x.s)) score -= 0.45; // forecasts and market sizes don't explain what/why/how
     if (/\b(check out|webinar|stay tuned|interested in|sign up|our (product|team|platform|customers)|in this (post|article|guide|tutorial|video))\b|\bIf you ask\b/i.test(x.s)) return; // promo chatter
     if (/\b([Ww]e|[Oo]urs?|us|I|[Mm]y)\b/.test(x.s)) { if (x.doc.origin !== "official-docs") return; score -= 0.5; } // first-person narrative / press quotes rarely answer the question
+    if (/\b(led (this|the) (study|research|team)|(pre|post)doctoral|co-?authors?\b|lead author|(researchers?|professor|fellow|director|spokes(person|man|woman)) (at|of) the\b|told (reporters|the \w+)|in an interview)/i.test(x.s)) return; // bylines and credentials, not facts
+    if (/^[A-Z][\w’'-]+( [A-Z][\w’'-]+)? (said|says|claims|told|explains|explained|added|notes|noted)\b|,\s*(?:[A-Z][\w’'-]+ ){1,2}(said|says|explains|added|notes)\.?$|\b(he|she) (said|says|claims|told|added)\b/.test(x.s)) score -= 0.5; // reported speech of one person: weaker than the finding itself
     if (/[“”]|"[^"]{25,}"?\.?$/.test(x.s) && !/\b(says?|said|states?|according to|concluded|found)\b/i.test(x.s)) return; // pull quotes without attribution
     if (/\b(lasting trust|industry[- ]leading|revolutionary|game[- ]chang\w*|cutting[- ]edge|seamless(ly)?|unlock\w*|empower\w*|world[- ]class|best[- ]in[- ]class|excited to|proud to|thrilled|embodies)\b/i.test(x.s)) return; // marketing
     // third-party pages titled after the subject: sentences that don't name it must still answer (cue + a query term)
