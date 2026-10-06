@@ -63,7 +63,8 @@ const BALANCE_PRICE = process.env.BALANCE_PRICE ?? "$0.003";
 const TX_PRICE = process.env.TX_PRICE ?? "$0.003";
 const GAS_PRICE = process.env.GAS_PRICE ?? "$0.002";
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
-const ICON_URL = `${PUBLIC_URL}/icon.svg`;
+// PNG: the Bazaar re-hosts PNG/JPEG icons; our SVG icon never showed up in listings
+const ICON_URL = `${PUBLIC_URL}/icon.png`;
 
 // Accepted networks. Base stays first: most x402 clients pick the first matching accepts entry.
 // "cdp" networks settle via the Coinbase CDP facilitator (and feed the CDP Bazaar);
@@ -106,7 +107,7 @@ const NETWORK_LABEL = NETWORK_NAMES.length > 1 ? `${NETWORK_NAMES.slice(0, -1).j
 const ON_NETWORKS = `USDC on ${NETWORK_LABEL}`;
 const ON_NETWORKS_SHORT = `USDC (${NETWORK_NAMES.join("/")})`;
 /** Short price + no-charge note for Bazaar descriptions (keeps the text about the task, not boilerplate). */
-const perCall = (p: string) => `${usd(p)} USDC/call on ${NETWORK_NAMES.length} networks; failed calls (400/422/503) are free.`;
+const perCall = (p: string) => `${usd(p)} USDC/call; failed calls are free.`;
 
 const PAID = {
   "/report": REPORT_PRICE,
@@ -195,7 +196,7 @@ async function main() {
   app.use(express.json());
 
   // Interest tracker (counts only; visitor = salted hash of IP+UA, raw IPs never stored).
-  const FREE_LABELS = new Set(["/", "/health", "/stats", "/examples", "/llms.txt", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg"]);
+  const FREE_LABELS = new Set(["/", "/health", "/stats", "/examples", "/llms.txt", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png"]);
   app.use((req: Request, res: Response, next: NextFunction) => {
     const method = req.method;
     // HEAD on a paid route: answer like GET without payment (402 + PAYMENT-REQUIRED, no body) instead of
@@ -459,7 +460,7 @@ async function main() {
         `Research brief with citations: web research on any question or topic in one call. Use to summarize a topic, get a Wikipedia summary, or answer with sources before writing or deciding. Pass q. Returns a direct answer, key points with citation ids, 3-5 vetted sources (official docs, .gov/.edu, journals, Wikipedia as backup) with publisher, date and supporting quote, confidence with reason, and a shareable permalink. ${perCall(REPORT_PRICE)}`,
       mimeType: "application/json",
       serviceName: "Research Brief with Citations",
-      tags: ["research brief", "web research", "summarize a topic", "wikipedia summary", "answer with sources"],
+      tags: ["research brief", "web research", "summarize a topic", "wikipedia summary", "answer a question with sources"],
       iconUrl: ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
@@ -575,7 +576,7 @@ async function main() {
         `x402 endpoint check: validate an x402 endpoint and audit its Bazaar listing before you pay for it or list it. One unpaid probe (never pays the target) grades the 402 challenge, schemas, examples, name, tags and latency, and adds Coinbase's validator verdict, the live Bazaar listing (30-day calls, payers, stale metadata) and search rank for its own name and tags. Returns score, grade and prioritized fixes. ${perCall(CHECK_PRICE)}`,
       mimeType: "application/json",
       serviceName: "x402 Endpoint Checker",
-      tags: ["x402 endpoint check", "validate x402 endpoint", "bazaar ranking check", "x402 listing audit", "api testing"],
+      tags: ["x402 endpoint check", "validate x402 endpoint", "x402 bazaar ranking", "x402 listing audit", "api testing"],
       iconUrl: ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
@@ -755,7 +756,7 @@ async function main() {
       description:
         `Wallet balance: token balances and USD portfolio value for any wallet, read live onchain. EVM (Ethereum, Base, Arbitrum, Polygon in one call; ENS names work) or Solana (SOL + SPL tokens). Use to check a wallet before paying, trading or airdrops. Pass address, optional chain and tokens. Returns per-chain native + ERC-20/SPL balances, prices and total USD. ${perCall(BALANCE_PRICE)}`,
       mimeType: "application/json",
-      serviceName: "Wallet Token Balance",
+      serviceName: "Wallet Balance",
       tags: ["wallet balance", "erc20 balance", "token balances", "portfolio value", "solana wallet"],
       iconUrl: ICON_URL,
       extensions: {
@@ -829,7 +830,7 @@ async function main() {
       description:
         `Gas price: live gas fees for Ethereum, Base, Arbitrum, Polygon and Solana in one call. Use before sending a transaction to pick a fee or the cheapest chain. Returns base fee, slow/standard/fast priority fees, max fee, congestion, and the USD cost of a transfer, an ERC-20 transfer and a swap per chain, plus Solana priority fees. Optional chain. ${perCall(GAS_PRICE)}`,
       mimeType: "application/json",
-      serviceName: "Gas Price & Fees",
+      serviceName: "Gas Price",
       tags: ["gas price", "gas fees", "ethereum gas", "estimate gas", "solana priority fee"],
       iconUrl: ICON_URL,
       extensions: {
@@ -1004,6 +1005,12 @@ async function main() {
 
   app.get("/robots.txt", (_req, res) => {
     res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", "Disallow: /solana-price", "Disallow: /balance", "Disallow: /tx", "Disallow: /gas", `Sitemap: ${PUBLIC_URL}/openapi.json`, ""].join("\n"));
+  });
+
+  const ICON_PNG = (() => { try { return fs.readFileSync(path.join(__dirname, "assets", "icon.png")); } catch { return null; } })();
+  app.get("/icon.png", (_req, res) => {
+    if (!ICON_PNG) return res.redirect(302, "/icon.svg");
+    res.type("image/png").set("Cache-Control", "public, max-age=86400").send(ICON_PNG);
   });
 
   app.get("/icon.svg", (_req, res) => {

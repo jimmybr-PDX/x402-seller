@@ -64,7 +64,7 @@ npm ci && npm run dev  # http://localhost:8402
 | `DAILY_SPEND_CAP_USD` | `50` | Runaway guard on confirmed settlements per UTC day |
 | `GROK_API_KEY` or `OPENAI_API_KEY` | — | Optional: LLM synthesis over the cited sources; without it `/report` is extractive |
 
-Free routes: `/health`, `/stats`, `/examples`, `/llms.txt`, `/openapi.json`, `/.well-known/x402`, `/robots.txt`, `/icon.svg`.
+Free routes: `/health`, `/stats`, `/examples`, `/llms.txt`, `/openapi.json`, `/.well-known/x402`, `/robots.txt`, `/icon.png` (`/icon.svg`).
 
 ## Answer permalinks (`/a/<id>`)
 
