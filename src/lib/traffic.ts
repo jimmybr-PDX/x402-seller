@@ -193,6 +193,21 @@ export function recordRequest(route: string, method: string, ua: string, ip: str
   }
 }
 
+// ---------- rejected payments (why a payment attempt was refused) ----------
+// A payment header that fails verification gets a 402 back. Keep the last few reasons (no IPs, no
+// signatures) so we can tell a real buyer stuck on a fixable problem (wrong network, expired
+// signature, low balance) from a prober sending junk. Saved with the counts.
+export type Rejection = { at: string; route: string; reason: string; network: string | null; scheme: string | null; x402Version: number | null; agent: string; self: boolean };
+const REJECTIONS_KEPT = 30;
+let rejections: Rejection[] = [];
+let rejectionReasons: Record<string, number> = {};
+export function recordRejection(r: Omit<Rejection, "at">): void {
+  const reason = (r.reason || "unknown").replace(/\s+/g, " ").slice(0, 120);
+  rejections.push({ ...r, reason, at: new Date().toISOString() });
+  while (rejections.length > REJECTIONS_KEPT) rejections.shift();
+  if (!r.self && (rejectionReasons[reason] !== undefined || Object.keys(rejectionReasons).length < 40)) rejectionReasons[reason] = (rejectionReasons[reason] ?? 0) + 1;
+}
+
 // ---------- reporting ----------
 const sumBC = (a: ByClass, b: ByClass) => KLASSES.forEach((k) => (a[k] += b[k]));
 function merge(buckets: Bucket[]): Record<string, RouteCounts> {
@@ -289,6 +304,11 @@ export function trafficStats(paidRoutes: string[], full = true) {
       const c = compact(b.routes, paidRoutes);
       return { hour: b.start, unpaid402Client: c.totals.unpaid402Client, unpaid402Automated: c.totals.unpaid402Automated, paid200: c.totals.paid200, clientVisitors: c.totals.clientVisitors };
     }),
+    rejectedPayments: {
+      byReason: Object.entries(rejectionReasons).sort((a, b) => b[1] - a[1]).map(([reason, count]) => ({ reason, count })),
+      recent: rejections.slice().reverse(),
+      note: `payment attempts we refused (buyer not charged), since trackingSince; last ${REJECTIONS_KEPT} kept; our own test wallet is marked self and left out of byReason`,
+    },
     visitorSetCapped: daySets.capped,
     definitions: {
       client: "likely real caller (any request carrying a payment, or a non-bot user agent such as node, python, curl, browser)",
@@ -311,7 +331,7 @@ function save(): void {
   if (persistence.mode !== "file" || !persistence.file) return;
   try {
     const tmp = persistence.file + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify({ v: 1, savedAt: new Date().toISOString(), trackingSince, hourly, daily }));
+    fs.writeFileSync(tmp, JSON.stringify({ v: 1, savedAt: new Date().toISOString(), trackingSince, hourly, daily, rejections, rejectionReasons }));
     fs.renameSync(tmp, persistence.file);
     persistence.lastSavedAt = new Date().toISOString();
   } catch (e) {
@@ -342,6 +362,8 @@ export function startTraffic(): void {
           while (hourly.length > HOURS_KEPT) hourly.shift();
           while (daily.length > DAYS_KEPT) daily.shift();
           persistence.restoredFrom = j.savedAt ?? null;
+          if (Array.isArray(j.rejections)) rejections = j.rejections.slice(-REJECTIONS_KEPT);
+          if (j.rejectionReasons && typeof j.rejectionReasons === "object") rejectionReasons = j.rejectionReasons;
           if (daily.length) trackingSince = j.trackingSince ?? `${daily[0]!.start}T00:00:00.000Z`;
         }
       }

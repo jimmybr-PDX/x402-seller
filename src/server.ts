@@ -38,7 +38,7 @@ import { SOLANA_PRICE_SYMBOLS, SolanaInputError, solanaTokenPrice } from "./lib/
 import { WalletInputError, walletBalances } from "./lib/wallet.js";
 import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
-import { recordRequest, startTraffic, trafficStats, type Outcome } from "./lib/traffic.js";
+import { classify, recordRejection, recordRequest, startTraffic, trafficStats, type Outcome } from "./lib/traffic.js";
 import { statsHtml } from "./lib/stats-page.js";
 import { answerHtml, deleteAnswer, getAnswer, newAnswerId, pinAnswer, saveAnswer } from "./lib/answers.js";
 
@@ -215,6 +215,19 @@ async function main() {
           else if (hasPayment && sc >= 400) outcome = "uncharged";
         }
         const selfPayer = paid && hasPayment && isSelfPayer(req, res);
+        if (outcome === "paymentInvalid") {
+          const sent = decodeB64Json(req.header("payment-signature") ?? req.header("x-payment")) as Record<string, any> | null;
+          const pr = decodeB64Json(res.getHeader("payment-required")) as Record<string, any> | null;
+          recordRejection({
+            route: label,
+            reason: sent ? String(pr?.error ?? "rejected at verify") : "payment header is not base64 JSON",
+            network: String(sent?.accepted?.network ?? sent?.network ?? "") || null,
+            scheme: String(sent?.accepted?.scheme ?? sent?.scheme ?? "") || null,
+            x402Version: typeof sent?.x402Version === "number" ? sent.x402Version : null,
+            agent: classify(method, String(req.header("user-agent") ?? "")).agent,
+            self: selfPayer,
+          });
+        }
         recordRequest(label, method, String(req.header("user-agent") ?? "").slice(0, 300), req.ip ?? "", outcome, paid && hasPayment, selfPayer);
       } catch {
         /* never let stats break a response */

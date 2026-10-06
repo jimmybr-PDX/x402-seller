@@ -24,7 +24,19 @@ export function pt(iso: string): string {
 type Row = { unpaid402: { client: number }; paid200: number; selfPaid?: number; automatedRequests?: number; settleFailed?: number };
 type Block = { totals: { unpaid402Client: number; paid200: number; selfPaid?: number; automatedRequests?: number; settleFailed: number }; routes: Record<string, unknown> };
 
-export function statsHtml(s: { trackingSince: string; generatedAt: string; allTime: Block; last24h: Block; persistence: { mode: string } }, paidRoutes: string[]): string {
+type Rejected = { byReason: Array<{ reason: string; count: number }> };
+/** Plain words for the payment-library error strings a buyer is most likely to hit. */
+function friendlyReason(r: string): string {
+  const x = r.toLowerCase();
+  if (x.includes("no matching payment requirements")) return "paid in a way we don't accept (wrong network, coin or amount)";
+  if (x.includes("insufficient")) return "their wallet didn't have enough USDC";
+  if (x.includes("expired") || x.includes("valid_before") || x.includes("validbefore")) return "their payment signature had expired";
+  if (x.includes("signature")) return "their payment signature didn't check out";
+  if (x.includes("not base64")) return "sent an unreadable payment";
+  return r;
+}
+
+export function statsHtml(s: { trackingSince: string; generatedAt: string; allTime: Block; last24h: Block; persistence: { mode: string }; rejectedPayments?: Rejected }, paidRoutes: string[]): string {
   const t = s.allTime.totals;
   const self = t.selfPaid ?? 0;
   const head =
@@ -48,8 +60,17 @@ th{font-size:.85rem;color:#555;font-weight:600}tr.total td{font-weight:700;borde
 <table><thead><tr><th>Tool</th><th>Looked at price</th><th>Paid</th><th>Bots/crawlers</th></tr></thead><tbody>${rows}
 <tr class="total"><td>Total</td><td>${n(t.unpaid402Client)}</td><td>${n(t.paid200)}</td><td>${n(t.automatedRequests ?? 0)}</td></tr></tbody></table>
 <p>Last 24 hours: ${plural(d.unpaid402Client, "look", "looks")} at a price, ${n(d.paid200)} paid${d.settleFailed ? `, ${n(d.settleFailed)} payment(s) failed to settle` : ""}.</p>
+${rejectedLine(s.rejectedPayments)}
 <p>"Looked at price" = a likely real program or person asked for a tool and got the price, but didn't pay. "Bots/crawlers" = directory crawlers, uptime pings and other bots. Your own test calls and checks are left out.</p>
 <p>Updated ${esc(pt(s.generatedAt))}. Counts reset when the server restarts or redeploys.</p>
 <p><a href="?format=json">Raw data (JSON)</a></p>
 </body></html>`;
+}
+
+function rejectedLine(r?: Rejected): string {
+  const list = r?.byReason ?? [];
+  if (!list.length) return "";
+  const total = list.reduce((a, b) => a + b.count, 0);
+  const parts = list.slice(0, 3).map((x) => `${n(x.count)} ${esc(friendlyReason(x.reason))}`);
+  return `<p>${plural(total, "payment attempt was", "payment attempts were")} turned down (nobody was charged): ${parts.join("; ")}.</p>`;
 }
