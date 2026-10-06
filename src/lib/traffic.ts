@@ -24,6 +24,7 @@ type RouteCounts = {
   settleFailed: number; // payment verified, settlement failed (buyer not charged)
   paymentInvalid: number; // payment header present but rejected at verify
   uncharged: number; // paid attempt that ended in 4xx/5xx from the handler (never charged)
+  selfPaid?: number; // paid 200s from our own test wallet (SELF_PAYERS); not counted in paid200
   visitors: ByClass; // unique visitors (first seen in this bucket), by class
 };
 type Bucket = { start: string; routes: Record<string, RouteCounts>; agents: Record<string, number> };
@@ -43,6 +44,12 @@ let salt = { day: "", value: Buffer.alloc(0) };
 let hourSets = { key: "", sets: new Map<string, Set<string>>() };
 let daySets = { key: "", sets: new Map<string, Set<string>>(), size: 0, capped: false };
 const startedAt = new Date().toISOString();
+let trackingSince = startedAt; // first moment covered by the counts (restored from file if any)
+// Last unpaid client 402 per visitor+route, so a following payment from our own test wallet can
+// re-tag that probe as "self". Small, short-lived (5 min), capped.
+type Probe = { t: number; hk: string; dk: string; agent: string; vHour: boolean; vDay: boolean };
+const probes = new Map<string, Probe>();
+const PROBE_TTL_MS = 5 * 60_000;
 
 // ---------- classification ----------
 const CRAWLER: Array<[RegExp, string]> = [
@@ -114,19 +121,22 @@ function visitorHash(day: string, ip: string, ua: string): string {
 export type Outcome = "unpaid402" | "paid200" | "settleFailed" | "paymentInvalid" | "uncharged" | "ok" | "error";
 
 /** Record one finished request. `route` is the paid route path, or a free path label. */
-export function recordRequest(route: string, method: string, ua: string, ip: string, outcome: Outcome, paidAttempt: boolean): void {
+export function recordRequest(route: string, method: string, ua: string, ip: string, outcome: Outcome, paidAttempt: boolean, selfPayer = false): void {
   const now = new Date();
   const hk = hourKey(now);
   const dk = dayKey(now);
   let { klass, agent } = classify(method, ua);
   if (paidAttempt && klass !== "self") klass = "client"; // anyone who sends a payment is a real client
+  if (selfPayer) [klass, agent] = ["self", "test-wallet"]; // payment signed by our own test wallet
   const hb = bucket(hourly, hk, HOURS_KEPT);
   const db = bucket(daily, dk, DAYS_KEPT);
   for (const b of [hb, db]) {
     const c = rc(b, route);
     c.requests[klass]++;
     if (outcome === "unpaid402") c.unpaid402[klass]++;
-    else if (outcome === "paid200") c.paid200++;
+    else if (selfPayer) {
+      if (outcome === "paid200") c.selfPaid = (c.selfPaid ?? 0) + 1; // other self outcomes are not counted
+    } else if (outcome === "paid200") c.paid200++;
     else if (outcome === "settleFailed") c.settleFailed++;
     else if (outcome === "paymentInvalid") c.paymentInvalid++;
     else if (outcome === "uncharged") c.uncharged++;
@@ -139,10 +149,13 @@ export function recordRequest(route: string, method: string, ua: string, ip: str
   if (hourSets.key !== hk) hourSets = { key: hk, sets: new Map() };
   if (daySets.key !== dk) daySets = { key: dk, sets: new Map(), size: 0, capped: false };
   const h = visitorHash(dk, ip, ua);
+  let vHour = false;
+  let vDay = false;
   const hs = hourSets.sets.get(route) ?? hourSets.sets.set(route, new Set()).get(route)!;
   if (!hs.has(h) && hs.size < 5000) {
     hs.add(h);
     rc(hb, route).visitors[klass]++;
+    vHour = true;
   }
   const ds = daySets.sets.get(route) ?? daySets.sets.set(route, new Set()).get(route)!;
   if (!ds.has(h)) {
@@ -150,7 +163,33 @@ export function recordRequest(route: string, method: string, ua: string, ip: str
       ds.add(h);
       daySets.size++;
       rc(db, route).visitors[klass]++;
+      vDay = true;
     } else daySets.capped = true;
+  }
+
+  // Self-test probe handling: remember client 402s; when our test wallet pays from the same
+  // visitor on the same route shortly after, move that probe from "client" to "self".
+  const pk = `${h}|${route}`;
+  if (outcome === "unpaid402" && klass === "client") {
+    if (probes.size >= 2000) for (const [k, p] of probes) if (now.getTime() - p.t > PROBE_TTL_MS || probes.size >= 2000) probes.delete(k);
+    probes.set(pk, { t: now.getTime(), hk, dk, agent: `client:${agent}`, vHour, vDay });
+  } else if (selfPayer) {
+    const p = probes.get(pk);
+    probes.delete(pk);
+    if (p && now.getTime() - p.t <= PROBE_TTL_MS) {
+      for (const [b, v] of [[hourly.find((x) => x.start === p.hk), p.vHour], [daily.find((x) => x.start === p.dk), p.vDay]] as const) {
+        const c = b?.routes[route];
+        if (!c || c.unpaid402.client < 1) continue;
+        c.unpaid402.client--, c.unpaid402.self++, c.requests.client--, c.requests.self++;
+        if (v && c.visitors.client > 0) c.visitors.client--, c.visitors.self++;
+      }
+      const d = daily.find((x) => x.start === p.dk);
+      if (d && (d.agents[p.agent] ?? 0) > 0) {
+        d.agents[p.agent]--;
+        if (!d.agents[p.agent]) delete d.agents[p.agent];
+        d.agents["self:test-wallet"] = (d.agents["self:test-wallet"] ?? 0) + 1;
+      }
+    }
   }
 }
 
@@ -168,6 +207,7 @@ function merge(buckets: Bucket[]): Record<string, RouteCounts> {
       o.settleFailed += c.settleFailed;
       o.paymentInvalid += c.paymentInvalid;
       o.uncharged += c.uncharged;
+      o.selfPaid = (o.selfPaid ?? 0) + (c.selfPaid ?? 0);
     }
   return out;
 }
@@ -175,7 +215,7 @@ const total = (x: ByClass) => KLASSES.reduce((s, k) => s + x[k], 0);
 /** Compact view: client vs automated, which is what matters for "real interest". */
 function compact(routes: Record<string, RouteCounts>, paidRoutes: string[]) {
   const rows: Record<string, unknown> = {};
-  const tot = { unpaid402Client: 0, unpaid402Automated: 0, paid200: 0, settleFailed: 0, paymentInvalid: 0, uncharged: 0, clientVisitors: 0 };
+  const tot = { unpaid402Client: 0, unpaid402Automated: 0, paid200: 0, settleFailed: 0, paymentInvalid: 0, uncharged: 0, clientVisitors: 0, selfPaid: 0, automatedRequests: 0 };
   for (const r of [...paidRoutes, ...Object.keys(routes).filter((k) => !paidRoutes.includes(k)).sort()]) {
     const c = routes[r];
     if (!c) continue;
@@ -184,6 +224,8 @@ function compact(routes: Record<string, RouteCounts>, paidRoutes: string[]) {
       ? {
           unpaid402: { client: c.unpaid402.client, automated: total(c.unpaid402) - c.unpaid402.client - c.unpaid402.self, self: c.unpaid402.self, byClass: c.unpaid402 },
           paid200: c.paid200,
+          selfPaid: c.selfPaid ?? 0,
+          automatedRequests: total(c.requests) - c.requests.client - c.requests.self,
           settleFailed: c.settleFailed,
           paymentInvalid: c.paymentInvalid,
           uncharged: c.uncharged,
@@ -200,6 +242,8 @@ function compact(routes: Record<string, RouteCounts>, paidRoutes: string[]) {
       tot.paymentInvalid += c.paymentInvalid;
       tot.uncharged += c.uncharged;
       tot.clientVisitors += c.visitors.client;
+      tot.selfPaid += c.selfPaid ?? 0;
+      tot.automatedRequests += total(c.requests) - c.requests.client - c.requests.self;
     }
   }
   return { totals: tot, routes: rows };
@@ -221,6 +265,7 @@ export function trafficStats(paidRoutes: string[], full = true) {
   const last7 = daily.filter((b) => b.start >= dayKey(new Date(now.getTime() - 6 * 864e5)));
   const base = {
     since: daily[0]?.start ?? startedAt.slice(0, 10),
+    trackingSince,
     processStartedAt: startedAt,
     persistence,
     last24h: compact(merge(last24), paidRoutes),
@@ -231,6 +276,7 @@ export function trafficStats(paidRoutes: string[], full = true) {
     ...base,
     yesterday: { date: dayKey(new Date(now.getTime() - 864e5)), ...compact(merge(yday), paidRoutes) },
     last7d: { ...compact(merge(last7), paidRoutes), note: "visitors are summed per UTC day (a returning visitor counts once per day)" },
+    allTime: { ...compact(merge(daily), paidRoutes), note: `everything kept (up to ${DAYS_KEPT} days) since trackingSince` },
     topAgentsToday: Object.entries(today[0]?.agents ?? {})
       .sort((a, b) => b[1] - a[1])
       .slice(0, 25)
@@ -250,7 +296,8 @@ export function trafficStats(paidRoutes: string[], full = true) {
       pinger: "uptime monitors (cron-job.org, UptimeRobot, Better Stack, ...)",
       bot: "generic bots, scanners, search/AI crawlers, empty user agent",
       head: "HEAD/OPTIONS requests",
-      self: "this service's own rank-check script",
+      self: "our own traffic: the rank-check script, payments signed by our test wallet (SELF_PAYERS), and the unpaid probe just before such a payment",
+      selfPaid: "paid 200s from our own test wallet; excluded from paid200",
       automated: "crawler + pinger + bot + head",
       visitors: "unique sha256(daily random salt + IP + user agent), per hour or per UTC day; raw IPs are never stored",
       conversion: "paid200 / (client unpaid402 + paid200), in %",
@@ -264,7 +311,7 @@ function save(): void {
   if (persistence.mode !== "file" || !persistence.file) return;
   try {
     const tmp = persistence.file + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify({ v: 1, savedAt: new Date().toISOString(), hourly, daily }));
+    fs.writeFileSync(tmp, JSON.stringify({ v: 1, savedAt: new Date().toISOString(), trackingSince, hourly, daily }));
     fs.renameSync(tmp, persistence.file);
     persistence.lastSavedAt = new Date().toISOString();
   } catch (e) {
@@ -295,6 +342,7 @@ export function startTraffic(): void {
           while (hourly.length > HOURS_KEPT) hourly.shift();
           while (daily.length > DAYS_KEPT) daily.shift();
           persistence.restoredFrom = j.savedAt ?? null;
+          if (daily.length) trackingSince = j.trackingSince ?? `${daily[0]!.start}T00:00:00.000Z`;
         }
       }
     } catch (e) {

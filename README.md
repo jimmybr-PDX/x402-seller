@@ -68,6 +68,8 @@ Free routes: `/health`, `/stats`, `/examples`, `/llms.txt`, `/openapi.json`, `/.
 
 ## Interest tracker (`/stats`)
 
+Open `/stats` in a browser (or `/stats?view=simple`) for a plain-English page: one headline sentence, a per-tool table (looked at price / paid / bots-crawlers), Pacific times. Programs get JSON (default, or `?format=json`). Payments signed by our own test wallet (`SELF_PAYERS`, default `0x4862…4940`) and the unpaid probe just before them from the same visitor are tagged `self` and excluded from buyer counts (`selfPaid` shows them).
+
 Per paid route and per hour / UTC day: unpaid 402s, paid 200s, settle failures, rejected payments, uncharged
 errors and unique visitors, split by visitor class: `client` (anyone who sends a payment, or a non-bot user agent such
 as node, python, curl, a browser), `crawler` (CDP Bazaar, x402scan, 402index, other x402 directories), `pinger`
