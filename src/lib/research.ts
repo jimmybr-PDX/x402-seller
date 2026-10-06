@@ -37,7 +37,7 @@ const dateOnly = (v: string | null | undefined) => {
 const stripCites = (t: string) => t.replace(/\s*\[\d+\]/g, "").replace(/\s+/g, " ").trim();
 const citeIds = (t: string) => [...new Set([...t.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1])))];
 
-type Doc = Source & { text: string; quality: number; relevance: number; links: string[]; origin: string };
+type Doc = Source & { alias?: string; text: string; quality: number; relevance: number; links: string[]; origin: string };
 
 // ---------- text utils ----------
 const ENT: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", "#39": "'", "#039": "'", "#x27": "'", hellip: "…", mdash: "—", ndash: "–", rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“" };
@@ -51,7 +51,7 @@ const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\.
 
 const STOP = new Set("a an the of in on at to for from by with about into over and or but if then than so as is are was were be been being do does did doing have has had having it its this that these those there here what which who whom whose when where why how can could should would will shall may might must i me my we our you your he she they them their his her not no yes vs versus via per any some all each more most much many very just also using use used get gets explain explained tell me please".split(" "));
 // words that describe the kind of answer wanted; they boost but are not required for relevance
-const INTENT_WORDS = new Set("best practice practices tip tips guide guides overview history historical cause causes caused causing reason reasons why work works working definition define meaning example examples pros cons advantages disadvantages difference differences compare comparison summary introduction intro basics tutorial".split(" "));
+const INTENT_WORDS = new Set("best practice practices tip tips guide guides overview history historical cause causes caused causing reason reasons why work works working definition define meaning example examples pros cons advantages disadvantages difference differences compare comparison summary introduction intro basics tutorial happen happens happened happening occur occurs occurred exist exists".split(" "));
 
 // a few common equivalents so wording differences don't hide the answer (sleep vs "spins down after inactivity")
 const SYN: Record<string, RegExp> = {
@@ -70,7 +70,7 @@ function termMatch(tok: string, term: string): boolean {
   return Math.min(a.length, b.length) >= 4 && (a.startsWith(b) || b.startsWith(a)) && Math.abs(a.length - b.length) <= 4;
 }
 
-type Query = { raw: string; core: string[]; aspect: string[]; intent: string[]; entities: string[]; cased: Record<string, string>; phrases: string[]; phrasesCased: string[]; siteKeys: string[]; kind: "define" | "cause" | "how" | "practice" | "history" | "compare" | "general"; keyword: string };
+type Query = { works?: boolean; raw: string; core: string[]; aspect: string[]; intent: string[]; entities: string[]; cased: Record<string, string>; phrases: string[]; phrasesCased: string[]; siteKeys: string[]; kind: "define" | "cause" | "how" | "practice" | "history" | "compare" | "general"; keyword: string };
 
 // Words that describe the request ("summarize", "wikipedia summary of", "research ...") rather than the topic.
 const META = /\b(wikipedia|wiki|summar(?:y|ies|i[sz]e[sd]?|i[sz]ing)|overview(?: of)?|tl;?dr|(?:web |online |deep )?research(?:ing)?(?: (?:on|about|into))?|background(?: on)?|explain(?:er)?|tell me about|give me|introduction to|intro to|info(?:rmation)? (?:on|about)|quick facts?(?: about| on)?|in (?:a )?(?:few|short) (?:words|sentences))\b/gi;
@@ -117,19 +117,22 @@ export function parseQuery(q: string): Query {
   const inPhrase = new Set(phrases.flatMap((p) => p.split(" ")));
   // keys used to recognise the topic's own website (render -> render.com, postgres -> postgresql.org)
   const siteKeys = [...phrases.map((p) => p.replace(/[^a-z0-9]/g, "")), ...ents.filter((e) => !inPhrase.has(e)).map((e) => e.replace(/[^a-z0-9]/g, ""))].filter((k) => k.length >= 3);
-  return { raw, core: coreF, aspect: coreF.filter((c) => !ents.includes(c)), intent, entities: ents, cased, phrases, phrasesCased, siteKeys, kind, keyword: [...coreF, ...intent].join(" ") || raw };
+  const works = kind === "how" && /\bhow (?:do|does|did|can|is|are)\b.*\b(work|works|function|functions|operate|operates|happen|happens|form|forms|made|produced|generated)\b/i.test(l);
+  return { works, raw, core: coreF, aspect: coreF.filter((c) => !ents.includes(c)), intent, entities: ents, cased, phrases, phrasesCased, siteKeys, kind, keyword: [...coreF, ...intent].join(" ") || raw };
 }
 
 const CUES: Record<Query["kind"], RegExp> = {
   define: /\b(is|are) (a|an|the)\b|\brefers? to\b|\bknown as\b|\bdefined as\b/i,
   cause: /\b(caus\w*|because|due to|result(s|ed)? (of|from)|driven by|leads? to|triggers?|stems? from|demand|supply|increase\w*|rise|rising)\b/i,
-  how: /\b(when|after|until|automatically|once|then|by default|each|every|minutes?|seconds?|hours?|requests?|will)\b/i,
+  how: /\b(when|after|until|automatically|once|then|by default|each|every|minutes?|seconds?|hours?|requests?|will|by (?:using|means of|compress\w*|absorb\w*|transfer\w*|convert\w*)|uses?|using|transfers?|converts?|moves?|absorbs?|releases?|compress\w*|circulat\w*|cycle|through|process)\b/i,
   practice: /\b(should|shouldn'?t|avoid|prefer|consider|recommend\w*|best practice|make sure|ensure|don'?t|do not|(is|are) (usually |often |generally )?(better|wise|important|useful)|good idea|rule of thumb|sensibl\w*|overhead|trade-?offs?|only (if|when)|unless|speed up|slow down|performance)\b/i,
   history: /\b(1[0-9]{3}|20[0-2][0-9]|founded|established|settled|incorporated|became|century|first|originally|named)\b/i,
   compare: /\b(whereas|while|unlike|compared|than|both|differ\w*)\b/i,
   general: /\b(is|are)\b/i,
 };
 
+// Section-label prefixes that leak into extracted sentences ("Background: ...", "Key takeaways: ...").
+const LABEL_PREFIX = /^(?:(?:abstract|summary|tl;?dr|background|overview|introduction|context|definition|key (?:takeaways?|points?|facts?)|takeaways?|in (?:short|brief|summary)|the (?:short|quick) answer|short answer|answer|bottom line|note|update|editor'?s note|why it matters|what (?:it|this) means|thesis|antithesis|claim|myth|fact|tip|example)\s*(?::|\s[\u2014\u2013]\s)\s*)+/i;
 function splitSentences(text: string): { s: string; section: string; pos: number }[] {
   const out: { s: string; section: string; pos: number }[] = [];
   let section = "";
@@ -139,25 +142,35 @@ function splitSentences(text: string): { s: string; section: string; pos: number
     if (!line) continue;
     const h = line.match(/^(?:#{1,6}\s+(.+)|={2,}\s*(.+?)\s*={2,})$/);
     if (h) { section = (h[1] ?? h[2] ?? "").trim(); continue; }
-    const prot = line.replace(/\b(e\.g|i\.e|etc|vs|Mr|Mrs|Dr|St|Inc|Ltd|Jr|Sr|U\.S|U\.K|No|approx|ca)\./g, (m) => m.replace(/\./g, "\u0000"));
+    const prot = line
+      .replace(/\b(e\.g|i\.e|etc|vs|Mr|Mrs|Ms|Prof|Dr|St|Inc|Ltd|Jr|Sr|U\.S|U\.K|No|approx|ca|Fig|Vol)\./g, (m) => m.replace(/\./g, "\u0000"))
+      .replace(/(^|[\s(])([A-Z])\.(?=\s+[A-Z][a-z])/g, "$1$2\u0000"); // middle initials: "Walter H. Brattain"
     const parts = prot.split(/(?<=[.!?]["”’)]?)\s+(?=[A-Z0-9"“(\[])/);
     for (const p of parts) {
       const s = p.replace(/\u0000/g, ".").replace(/^[-*•]\s+/, "").replace(/\s+/g, " ").trim();
-      const s2 = s.replace(/^(abstract|summary|tl;?dr)\s*[:.]\s*/i, "");
+      let s2 = s.replace(LABEL_PREFIX, "");
+      // long enumerations: drop asides in parentheses so the sentence fits as an answer ("(also known as demand shocks, ...)")
+      if (s2.length > 300) s2 = s2.replace(/\s*\((?![^()]*\d{4})[^()]{3,160}\)/g, "").replace(/\s+([,.;])/g, "$1");
       if (s2) out.push({ s: /[.!?:)]$/.test(s2) ? s2 : s2 + ".", section, pos: pos++ });
     }
   }
   return out;
 }
 
+// Figurative or rhetorical sentences read badly as a factual answer ("The court clerk of AI is a process called RAG").
+const FIGURATIVE = /\b(think of (?:it|this|them|that) as|imagine (?:a|an|that|you|if)|picture (?:a|an|this)|is (?:kind of |sort of )?like (?:a|an|having)|are like (?:a|an)|akin to (?:a|an|having)|in other words|simply put|put simply|let'?s (?:say|look|dive|explore)|you can think|it'?s no secret|have you ever)\b|^(?:the|a|an)\s+[\w' -]{2,40}?\s+of\s+[\w' -]{1,25}?\s+(?:is|are)\s+(?:a|an|the)?\s*(?:process|technique|method|practice|thing|way)\s+(?:called|known as)\b/i;
+// Forecasts / market-size / survey chatter: not an explanation of how or why something happens.
+const MARKET = /\b(predicts?|forecasts?|projected to|is expected to (?:reach|grow|surpass)|market (?:size|share|is|will|to)|will (?:surpass|reach) (?:USD|\$)|CAGR|billion (?:cubic|dollars)|(?:USD|US\$|\$)\s?\d[\d,.]*\s?(?:million|billion|bn|m)\b|according to a (?:recent )?(?:report|survey|study) (?:published|by|from))\b/i;
 const JUNK = /\b(cookies?|subscribe|sign (up|in)|log in|click here|all rights reserved|javascript|newsletter|privacy policy|terms of (use|service)|advertis\w*|share this|follow us|copyright|this article|this section|citation needed|you may also like|read more|skip to|view a pdf|download pdf|submitted on|interactive exercises?)\b/i;
 function goodSentence(s: string): boolean {
-  if (s.length < 50 || s.length > 420) return false;
+  if (s.length < 50 || s.length > 480) return false;
   if (JUNK.test(s)) return false;
   if (/https?:\/\/|```|\|.*\||\{|\}|<|>|^\W|\$\s*\w+\s*=|;\s*$/.test(s)) return false;
   const letters = (s.match(/[a-z]/gi) ?? []).length;
   if (letters / s.length < 0.65) return false;
-  if ((s.match(/\b\w+\b/g) ?? []).length < 8) return false;
+  const words = s.match(/\b[A-Za-z][\w'-]*\b/g) ?? [];
+  if (words.length < 8) return false;
+  if (words.filter((w) => /^[A-Z]/.test(w)).length / words.length > 0.6) return false; // Title Case caption or heading, not a sentence
   return true;
 }
 
@@ -249,21 +262,29 @@ function isOfficialHost(host: string, q: Query): boolean {
 // ---------- discovery ----------
 async function wikipedia(q: Query, lang: string, max: number): Promise<Doc[]> {
   const base = `https://${lang}.wikipedia.org`;
-  const search = (term: string) => getJson<any>(`${base}/w/api.php?action=query&list=search&format=json&srlimit=6&srprop=snippet|timestamp&srsearch=${encodeURIComponent(term)}`).then((s) => (s?.query?.search ?? []) as any[]);
+  const search = (term: string) => getJson<any>(`${base}/w/api.php?action=query&list=search&format=json&srlimit=6&srprop=snippet|timestamp|redirecttitle&srsearch=${encodeURIComponent(term)}`).then((s) => (s?.query?.search ?? []) as any[]);
   const terms = [q.keyword];
+  const natural = q.raw.replace(/[?!.]+$/g, "").trim();
+  if ((q.kind === "cause" || q.kind === "how") && natural.split(/\s+/).length >= 3 && natural.toLowerCase() !== q.keyword.toLowerCase()) terms.push(natural);
   if (q.kind === "compare" && q.entities.length >= 2) terms.push(...q.entities.map((e) => `${q.cased[e] ?? e} ${q.entities.filter((x) => x !== e).map((x) => q.cased[x] ?? x).join(" ")}`));
   const lists = await Promise.all(terms.map(search));
   const seenT = new Set<string>();
   const hits: any[] = [];
   lists.forEach((list, li) => list.forEach((h: any, rank: number) => {
     if (seenT.has(h.title)) return; seenT.add(h.title);
-    const tt = tokens(String(h.title).replace(/\(.*?\)/g, ""));
-    const cov = termCount(q, String(h.title)) / (q.core.length || 1);
+    const named = h.redirecttitle && termCount(q, String(h.redirecttitle)) > termCount(q, String(h.title)) ? String(h.redirecttitle) : String(h.title);
+    h.named = named;
+    const tt = tokens(named.replace(/\(.*?\)/g, ""));
+    const cov = termCount(q, named) / (q.core.length || 1);
     const extra = tt.filter((w) => !q.core.some((c) => termMatch(w, c)) && !STOP.has(w)).length;
-    hits.push({ ...h, li, pre: cov - 0.12 * extra - 0.04 * rank + (li > 0 ? 0.3 : 0) });
+    hits.push({ ...h, li, pre: cov - 0.12 * extra - 0.04 * rank + (li > 0 ? (q.kind === "compare" ? 0.3 : rank === 0 ? 0.35 : rank === 1 ? 0.15 : 0) : 0) });
   }));
   hits.sort((a, b) => b.pre - a.pre);
-  let pick = hits.filter((h) => termCount(q, String(h.title)) > 0).slice(0, max + (terms.length > 1 ? 2 : 0));
+  let pick = hits.filter((h) => termCount(q, String(h.named ?? h.title)) > 0).slice(0, max + (terms.length > 1 ? (q.kind === "compare" ? 2 : 1) : 0));
+  if (natural && q.kind !== "compare" && terms.length > 1) { // the natural question's top hit is often the real answer ("why is the sky blue" -> Diffuse sky radiation)
+    const best = hits.find((h) => h.li === 1 && termCount(q, String(h.named ?? h.title)) > 0);
+    if (best && !pick.some((h) => h.title === best.title)) pick = [...pick.slice(0, max), { ...best, li: 1 }];
+  }
   if (q.kind === "compare" && q.entities.length >= 2) {
     // same sense for every compared thing: "Rust (programming language)" -> try "Go (programming language)"
     // pick the sense (qualifier) that exists for every compared name, preferring the joint search's ranking
@@ -280,11 +301,13 @@ async function wikipedia(q: Query, lang: string, max: number): Promise<Doc[]> {
       pick = [...pick.filter((h) => String(h.title).endsWith(`(${qual[2]})`)).slice(0, 2), ...extra];
     }
   }
+  if (process.env.RESEARCH_DEBUG) console.error("wiki pick:", pick.map((h) => `${h.title} (${h.pre?.toFixed?.(2)})`));
   const docs = await Promise.all(pick.map(async (h): Promise<Doc | null> => {
     const title = String(h.title);
     const d = await getJson<any>(`${base}/w/api.php?action=query&prop=extracts|info|pageprops&ppprop=wikibase_item|disambiguation&inprop=url&explaintext=1&exsectionformat=wiki&redirects=1&format=json&titles=${encodeURIComponent(title)}`, 7000);
     const page: any = Object.values(d?.query?.pages ?? {})[0];
     const text: string = page?.extract ?? "";
+    if (process.env.RESEARCH_DEBUG) console.error("wiki page:", title, d ? `${text.length} chars` : "FETCH FAILED");
     if (!text || /may refer to:/.test(text.slice(0, 300)) || /\(disambiguation\)/i.test(String(page?.title ?? title)) || page?.pageprops?.disambiguation !== undefined) return null;
     const cut = text.split(/\n==\s*(See also|References|Notes|External links|Further reading|Bibliography|Sources)\s*==/)[0]!;
     const links: string[] = [];
@@ -293,7 +316,10 @@ async function wikipedia(q: Query, lang: string, max: number): Promise<Doc[]> {
       const w = await getJson<any>(`https://www.wikidata.org/w/api.php?action=wbgetclaims&format=json&property=P856&entity=${qid}`, 4000);
       for (const c of w?.claims?.P856 ?? []) { const v = c?.mainsnak?.datavalue?.value; if (typeof v === "string") links.push(v); }
     }
-    return { id: 0, type: "encyclopedia", provider: "wikipedia", title, url: page.fullurl ?? `${base}/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`, snippet: "", publishedAt: page.touched ?? h.timestamp ?? null, text: cut, quality: 1.15, relevance: 0, links, origin: "wikipedia" };
+    // other senses (films, albums, TV series...) are rarely what a research question is about
+    const leadMedia = /^[^.]{0,120}?\b(?:is|are|was|were) (?:an?|the) (?:\d{4} )?(?:[\w'-]+ ){0,4}(?:film|movie|band|album|song|single|novel|television series|tv series|sitcom|video game|musical group|duo|rapper|ep|soundtrack|magazine|footballer|racing driver)\b/i.test(cut.slice(0, 300));
+    const media = (leadMedia || /\((?:\d{4} )?(?:film|tv series|miniseries|album|song|single|band|novel|book|video game|game|play|musical|magazine|newspaper|company|ep|soundtrack|episode)\)$/i.test(title)) && !/\b(film|movie|album|song|band|novel|book|game|series|show|episode|company)\b/i.test(q.raw);
+    return { id: 0, type: "encyclopedia", provider: "wikipedia", title, alias: h.named && h.named !== title ? String(h.named) : undefined, url: page.fullurl ?? `${base}/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`, snippet: "", publishedAt: page.touched ?? h.timestamp ?? null, text: cut, quality: media ? 0.6 : 1.15, relevance: 0, links, origin: "wikipedia" };
   }));
   return docs.filter((x): x is Doc => !!x);
 }
@@ -502,10 +528,10 @@ async function officialDocUrls(q: Query, docs: Doc[], extra: string[]): Promise<
 }
 
 // ---------- extractive synthesis ----------
-type Cand = { s: string; doc: Doc; score: number; def: boolean; pos: number };
+type Cand = { s: string; doc: Doc; score: number; def: boolean; pos: number; lead?: boolean };
 
 /** capitalised names in the sentence (not sentence-initial) that are not part of the query: "Google Cloud's Agent2Agent (A2A)" */
-const otherNames = (q: Query, s: string) => (s.slice(1).match(/\b[A-Z][A-Za-z0-9]*[A-Z0-9a-z]\b/g) ?? []).filter((w) => !q.core.some((c) => termMatch(w.toLowerCase(), c)) && !/^(HTTP|HTTPS|API|URL|JSON|The|A|An|In|On|For|With)$/.test(w)).length;
+const otherNames = (q: Query, s: string) => (s.slice(1).match(/\b[A-Z][a-z][A-Za-z0-9]+\b/g) ?? []).filter((w) => !q.core.some((c) => termMatch(w.toLowerCase(), c)) && !/^(HTTP|HTTPS|API|URL|JSON|The|A|An|In|On|For|With)$/.test(w)).length;
 function rankSentences(q: Query, docs: Doc[]): Cand[] {
   const all: { s: string; section: string; pos: number; doc: Doc }[] = [];
   for (const doc of docs) for (const x of splitSentences(doc.text).slice(0, 900)) if (goodSentence(x.s)) all.push({ ...x, doc });
@@ -515,7 +541,7 @@ function rankSentences(q: Query, docs: Doc[]): Cand[] {
   for (const c of q.core) df.set(c, toks.filter((t) => t.some((w) => termMatch(w, c))).length);
   const idf = (c: string) => Math.log(1 + N / (1 + (df.get(c) ?? 0)));
   const maxIdf = Math.max(...q.core.map(idf), 1);
-  const names = [...q.phrases, ...q.entities, ...(q.entities.length ? [] : q.core)].map((e) => e.replace(/[^a-z0-9 ]/g, "").replace(/ /g, "\\W+")).filter(Boolean);
+  const names = [...q.phrases, ...q.entities, ...(q.entities.length ? [] : q.core)].map((e) => e.replace(/[^a-z0-9 ]/g, "").replace(/(ies|es|s)$/, "").replace(/ /g, "\\W+")).filter(Boolean).map((e) => `${e}\\w{0,3}`); // singular/plural: "vaccines" matches "A vaccine is"
   const entRe = names.length ? new RegExp(`^(the |an? |in \\w+, )?(${names.join("|")})\\b[^.,;]{0,60}?\\b(is|are|was|were|refers to|means)\\b`, "i") : null;
   const out: Cand[] = [];
   all.forEach((x, i) => {
@@ -526,7 +552,8 @@ function rankSentences(q: Query, docs: Doc[]): Cand[] {
     if (!matched.length) return;
     // must touch the asked-about aspect (e.g. "indexing", not just "Postgres"), or for pure-name queries the name itself
     const aspectHit = q.aspect.some((c) => t.some((w) => termMatch(w, c)) || !!SYN[c]?.test(x.s));
-    if (q.aspect.length && !aspectHit && !(x.doc.type === "web_page" && x.doc.origin === "official-docs" && CUES[q.kind].test(x.s))) return;
+    const pageIsTopic = (q.kind === "cause" || q.kind === "how") && Math.max(topicCoverage(q, x.doc.title), x.doc.alias ? topicCoverage(q, x.doc.alias) : 0) >= 0.99; // "Fall of the Western Roman Empire" for "Why did the Roman Empire fall?"
+    if (q.aspect.length && !aspectHit && !(x.doc.type === "web_page" && x.doc.origin === "official-docs" && CUES[q.kind].test(x.s)) && !(pageIsTopic && (CUES[q.kind].test(x.s) || EFFECT_FIRST.test(x.s)))) return;
     if (!q.aspect.length && q.phrasesCased.length && !q.phrasesCased.some((p) => flatPunct(x.s).includes(p)) && !(q.phrasesCased.some((p) => flatPunct(x.doc.title).includes(p)) && CUES[q.kind].test(x.s))) return;
     if (/:$|\bthe following\b|\bbelow\b|\babove\b/i.test(x.s)) return;
     if (q.kind === "compare" && !Object.values(q.cased).some((c) => properNounRe(c).test(x.s))) return;
@@ -547,6 +574,8 @@ function rankSentences(q: Query, docs: Doc[]): Cand[] {
     score -= Math.min(0.2, x.pos / 2000);
     if (/^(this|these|it|they|he|she|however|but|also|so|and|thus|therefore)\b/i.test(x.s)) score -= 0.25; // dangling references read badly out of context
     if (/\?$/.test(x.s)) score -= 0.4;
+    if (FIGURATIVE.test(x.s)) return; // metaphors / rhetorical openers are not answers
+    if (q.kind !== "history" && MARKET.test(x.s)) score -= 0.45; // forecasts and market sizes don't explain what/why/how
     if (/\b(check out|webinar|stay tuned|interested in|sign up|our (product|team|platform|customers)|in this (post|article|guide|tutorial|video))\b|\bIf you ask\b/i.test(x.s)) return; // promo chatter
     if (/\b([Ww]e|[Oo]urs?|us|I|[Mm]y)\b/.test(x.s)) { if (x.doc.origin !== "official-docs") return; score -= 0.5; } // first-person narrative / press quotes rarely answer the question
     if (/[“”]|"[^"]{25,}"?\.?$/.test(x.s) && !/\b(says?|said|states?|according to|concluded|found)\b/i.test(x.s)) return; // pull quotes without attribution
@@ -555,7 +584,7 @@ function rankSentences(q: Query, docs: Doc[]): Cand[] {
     if (q.entities.length && titled && x.doc.origin !== "official-docs" && x.doc.origin !== "github" && x.doc.type !== "encyclopedia" && !q.entities.some((e) => t.some((w) => termMatch(w, e))) && !(q.core.some((c) => !q.entities.includes(c) && t.some((w) => termMatch(w, c))) && otherNames(q, x.s) < 2)) return;
     if (/\balso\b/i.test(x.s.slice(0, 60))) score -= 0.1;
     const exactTitle = tokens(x.doc.title.replace(/\(.*?\)|[–—|:-].*$/g, "")).filter((w) => !STOP.has(w)).every((w) => q.core.some((c) => termMatch(w, c)));
-    out.push({ s: x.s, doc: x.doc, score: score * x.doc.quality * (0.6 + 0.4 * x.doc.relevance) * (exactTitle ? 1.15 : 1), def, pos: x.pos });
+    out.push({ s: x.s, doc: x.doc, score: score * x.doc.quality * (0.6 + 0.4 * x.doc.relevance) * (exactTitle ? 1.15 : 1), def, pos: x.pos, lead: x.section === "" });
   });
   return out.sort((a, b) => b.score - a.score);
 }
@@ -567,6 +596,81 @@ const jacc = (a: string, b: string) => {
 };
 
 const MAX_CITED = 5;
+
+// ---- direct answers for "why / what causes X" and "how does X work" ----
+const esc = (w: string) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Character index of the first query core term in s (stem-tolerant), or -1. */
+function topicIndex(q: Query, s: string, from = 0): number {
+  let best = -1;
+  for (const c of q.core) {
+    const st = stem(c);
+    const m = new RegExp(`\\b${esc(st.length >= 4 ? st : c)}\\w*`, "i").exec(s.slice(from));
+    if (m && (best < 0 || m.index + from < best)) best = m.index + from;
+  }
+  return best;
+}
+const topicCoverage = (q: Query, s: string) => { const t = tokens(s); return q.core.filter((c) => t.some((w) => termMatch(w, c))).length / (q.core.length || 1); };
+// topic BEFORE the phrase: "Earthquakes are primarily caused by faults", "inflation is attributed to ..."
+const EFFECT_FIRST = /\b(?:(?:is|are|was|were|be|being|been|primarily|mainly|mostly|largely|usually|generally|often|typically|chiefly|ultimately)\s+)*(?:caused|driven|triggered|produced|created|explained|controlled|determined|fuell?ed)\s+(?:primarily |mainly |mostly |largely |chiefly )?by\b|\b(?:results?|resulting|resulted|stems?|stemming|arises?|arising|comes?|originates?)\s+(?:primarily |mainly |mostly |largely |chiefly )?from\b|\battribut(?:ed|able)\s+to\b|\b(?:due|owing)\s+to\b|\bbecause\b|\b(?:occurs?|happens?|forms?|develops?|takes place)\s+(?:when|because|as a result)\b|\b(?:is|are)\s+(?:the |a )?(?:result|product|consequence)s?\s+of\b|\bfactors?\s+(?:including|such as|like|include|are)\b/i;
+// topic AFTER the phrase: "the main causes of inflation", "Rayleigh scattering makes the sky blue"
+const CAUSE_FIRST = /\b(?:(?:main|primary|leading|chief|principal|common|major|key|root|underlying|immediate|proximate)\s+)?(?:causes?|drivers?|reasons?|sources?|origins?|risk factors?)\s+(?:of|for|behind)\b|\b(?:increases?|raises?|heightens?)\s+(?:the |your |one's |a person's )?(?:risk|chance|likelihood)\s+(?:of|for)\s+(?:developing\s+)?|\battribut(?:e|es|ing)\b|\b(?:makes?|made|gives?|turns?|leads?\s+to|led\s+to|gives?\s+rise\s+to|is\s+responsible\s+for|are\s+responsible\s+for|responsible\s+for|produces?|triggers?|drives?)\b|(?<!\b(?:the|its|their|main|primary|root|these|those|other)\s)\bcaus(?:es|ed|ing)\b(?!\s+(?:by|are|were|is|was|of|include|includes|remain|vary|can|may))/i;
+const HEDGE = /\b(believed|thought to|probably|possibly|perhaps|\w+ says|says \w+|some (?:economists|scientists|researchers)|it is (?:possible|unclear)|remains? (?:unclear|debated)|may have|might have|speculat\w*)\b/i;
+const INSTANCE = /\b(1[5-9]\d\d|20\d\d)s?\b|\b(?:in|during|of) (?:the )?(?:19|20)\d\d\b/;
+/** > 0 when the sentence states what causes / explains the topic (direction-aware), higher = more direct. */
+function causalScore(q: Query, c: Cand): number {
+  const s = c.s;
+  const titled = Math.max(topicCoverage(q, c.doc.title), c.doc.alias ? topicCoverage(q, c.doc.alias) : 0) >= 0.99; // on a page named after the topic, naming part of it is enough
+  if (topicCoverage(q, s) < (titled ? 0.5 : q.core.length <= 3 ? 1 : 0.75)) return 0;
+  const ti = topicIndex(q, s);
+  if (ti < 0) return 0;
+  let dir = 0;
+  const present = q.core.filter((c) => topicIndex({ ...q, core: [c] }, s) >= 0);
+  const before = (idx: number) => present.filter((c) => { const k = topicIndex({ ...q, core: [c] }, s); return k >= 0 && k < idx; }).length;
+  const ef0 = EFFECT_FIRST.exec(s);
+  const ef = ef0 && ef0.index > ti && before(ef0.index) >= Math.min(2, present.length) ? ef0 : null; // the whole topic precedes "caused by" (not just "empire" in "a Gothic empire, because")
+  if (ef) dir = 1;
+  const cf = new RegExp(CAUSE_FIRST.source, "gi");
+  for (let m; !dir && (m = cf.exec(s)); ) { const after = topicIndex(q, s, m.index + m[0].length); if (after >= 0 && after - (m.index + m[0].length) <= 60) dir = 1; }
+  if (!dir) return 0;
+  let v = 1 + c.score;
+  if (ef && /^\S+(?:\s+\S+){0,5}\s+(?:that|which|who)\b/i.test(s.slice(ti, ef.index))) v -= 0.9; // "Inflation that stems from X may not ..." is a side remark
+  if (/\b(argues?|posits?|suggests?|theor(?:y|ies|i[sz]es?)|hypothes[ie]s|proposes?|claims?)\b/i.test(s)) v -= 0.3; // one school of thought, not the consensus answer
+  const rest = ef ? s.slice(ef.index) : s.slice(ti);
+  if ((rest.match(/,/g) ?? []).length >= 2 || /,? (?:but also|as well as|and also)\b/i.test(rest)) v += 0.2; // names several causes
+  if (ti <= 40) v += 0.3; // the topic is the subject: a direct statement, not a side remark
+  else if (ti > 80) v -= 0.5;
+  if (ef) { // "the sky is blue due to", "Earthquakes are primarily caused by": topic right next to the cause
+    let last = ti; for (let k = topicIndex(q, s, last + 1); k >= 0 && k < ef.index; k = topicIndex(q, s, k + 1)) last = k;
+    if (ef.index - last <= 30 && !/[;:]/.test(s.slice(last, ef.index))) v += 0.4;
+  }
+  if (s.length > 380) v -= 0.4; // rambling sentences make poor direct answers
+  if (c.lead && c.pos < 25 && (c.doc.type === "encyclopedia" || c.doc.type === "instant_answer")) v += 0.4; // encyclopedia lead: stable, general
+  else if (c.pos < 12) v += 0.2;
+  if (/\b(primarily|mainly|mostly|largely|chiefly|generally|widely|most often|usually|main|primary|principal|common|major)\b/i.test(s)) v += 0.25; // general claim
+  if (HEDGE.test(s)) v -= 0.5;
+  // teasers that announce causes without naming them: "There are several causes of X.", "Gibbon attempted an explanation of the causes"
+  if (/^there (?:are|is) (?:several|many|various|multiple|numerous|different|a (?:number|variety|range|few) of)\b/i.test(s) || /\b(?:explanations?|explain\w*|attempt\w*|debate\w*|discuss\w*|stud(?:y|ied|ies)|investigat\w*|understand\w*|learn)\b.{0,30}\bcauses?\b/i.test(s)) return 0;
+  if (/\b(?:causes?|reasons?|drivers?|sources?|risk factors?)\s+(?:of|for)\b[^,;:]{0,60}$/i.test(s.replace(/[.!?"”]+$/, ""))) return 0; // "...the causes of X." names no cause
+  if (otherNames(q, s) >= 4) v -= 0.7; // full of unrelated names (teams, people): an anecdote, not the explanation
+  if (INSTANCE.test(s)) v -= 0.6; // a specific event ("the 2001 Kunlun earthquake"), not the general cause
+  if (/^(this|these|it|they|such|however|but|also|thus|therefore|in addition|additionally|moreover|furthermore|for (?:example|instance))\b/i.test(s)) v -= 0.5;
+  return v;
+}
+const MECHANISM = /\b(by (?:using|means of|compress\w*|absorb\w*|transfer\w*|convert\w*|mov\w*|send\w*|return\w*)|uses? [\w\s-]{1,40}? to|transfers?|converts?|absorbs?|releases?|compress\w*|expands?|evaporat\w*|condens\w*|circulat\w*|cycle|flows?|generates?|sends?|returns?|responds? with|retries?|signs?|verif\w*|settles?|works? by|operates? by|consists? of|step|stimulat\w*|recogni[sz]\w*|activat\w*|trains?|teach\w*|mimic\w*|binds?)\b/i;
+/** > 0 when the sentence explains how the topic works (mechanism), higher = better. */
+function mechanismScore(q: Query, c: Cand): number {
+  if (!MECHANISM.test(c.s) || MARKET.test(c.s)) return 0;
+  const cov = topicCoverage(q, c.s);
+  const titled = topicCoverage(q, c.doc.title) >= 0.99;
+  if (cov < 0.99 && !(titled && cov >= 0.5)) return 0;
+  let v = 1 + c.score;
+  if (c.pos < 25 && c.doc.type === "encyclopedia") v += 0.4;
+  if (/\b(policy|policies|financing|funding|subsid\w*|market|dependence|commission|government|programme|program|initiative)\b/i.test(c.s)) v -= 0.6; // policy talk, not how it works
+  if (/\b(said|says|claims?|plans? to|announced)\b/i.test(c.s)) v -= 0.6; // quotes and project news
+  if (INSTANCE.test(c.s)) v -= 0.5;
+  if (/^(this|these|they|such|however|but|also|thus|therefore)\b/i.test(c.s)) v -= 0.4;
+  return v;
+}
 function compose(q: Query, cands: Cand[]) {
   if (!cands.length) return null;
   const top = cands[0]!.score;
@@ -582,18 +686,36 @@ function compose(q: Query, cands: Cand[]) {
   const wantsDef = q.kind === "define" || (q.kind === "general" && q.core.length <= 2) || q.kind === "cause" || q.kind === "history" || q.kind === "compare" || (q.kind === "how" && q.aspect.length <= 1 && !q.entities.length);
   // opener for "what is / why / history" questions: the definitional lead of the most on-topic, highest-quality source
   const defs = cands.filter((c) => c.def && c.score >= top * 0.25).sort((a, b) => b.doc.relevance * b.doc.quality - a.doc.relevance * a.doc.quality || a.pos - b.pos);
-  const causal = q.kind === "cause" ? pool.find((c) => !/^because\b/i.test(c.s) && /\b(causes?|caused by|driven by|due to|results? from|stems? from|demand[- ]pull|cost[- ]push)\b/i.test(c.s)) : undefined;
-  const opener = causal ?? (wantsDef ? (defs[0] ?? pool[0]!) : pool[0]!);
+  // why / what causes X: lead with a sentence that states the cause, topic as subject (not a definition or a side remark)
+  const causalRanked = q.kind === "cause" ? cands.map((c) => ({ c, v: causalScore(q, c) })).filter((x) => x.v > 0 && x.c.score >= top * 0.15 && !/^(this|these|it|they|such|he|she|his|her)\b/i.test(x.c.s)).sort((a, b) => b.v - a.v) : [];
+  // how does X work: definition of X, then the best mechanism sentence
+  const mechRanked = q.works ? cands.map((c) => ({ c, v: mechanismScore(q, c) })).filter((x) => x.v > 0 && x.c.score >= top * 0.15).sort((a, b) => b.v - a.v) : [];
+  const worksDef = q.works ? defs.find((c) => c.doc.type === "encyclopedia" && c.pos < 10) ?? defs.find((c) => /\b(is|are) (a|an) (\w+ )?(device|machine|system|process|method|technique|protocol|mechanism|tool|program|software|organ|structure|reaction|phenomenon)\b/i.test(c.s)) ?? defs[0] : undefined;
+  const opener = causalRanked[0]?.c ?? worksDef ?? mechRanked[0]?.c ?? (wantsDef ? (defs[0] ?? pool[0]!) : pool[0]!);
   if (q.kind === "compare" && q.entities.length >= 2) {
     for (const e of q.entities.slice(0, 3)) { const d = cands.find((c) => c.def && tokens(c.s.slice(0, 60)).some((w) => termMatch(w, e)) && c.score >= top * 0.2); if (d) take(d); }
   }
   if (!chosen.length) take(opener);
+  // second answer sentence: another direct cause / the mechanism, when there is one
+  if (q.kind === "cause") for (const x of causalRanked.slice(1)) { if (chosen.length >= 2 || x.v < causalRanked[0]!.v * 0.7) break; if (topicIndex(q, x.c.s) <= 60 && x.c.s.length <= 300 && topicCoverage(q, x.c.s) >= (q.core.length <= 3 ? 0.99 : 0.75)) take(x.c); }
+  if (q.works) {
+    const sameDoc = mechRanked.filter((x) => x.c.doc === opener.doc && x.c !== opener); // keep the explanation coherent: same source as the definition
+    for (const x of [...sameDoc, ...mechRanked]) { if (chosen.length >= 2) break; if (x.c !== opener) take(x.c); }
+  }
+  const directOnly = (q.kind === "cause" && causalRanked.length > 0) || (q.works && mechRanked.length > 0);
   const perDoc = (d: Doc) => chosen.filter((c) => c.doc === d).length;
   const nDocs = new Set(pool.map((c) => c.doc)).size;
   const capS = nDocs === 1 ? 3 : 2, capB = nDocs === 1 ? 8 : nDocs === 2 ? 4 : 3;
-  for (const c of pool) { if (chosen.length >= 2) break; if (perDoc(c.doc) < capS && (chosen.length < 2 || c.doc !== chosen[chosen.length - 1]!.doc || pool.every((p) => p.doc === c.doc))) take(c); }
+  for (const c of pool) { if (chosen.length >= 2 || directOnly) break; if (perDoc(c.doc) < capS && (chosen.length < 2 || c.doc !== chosen[chosen.length - 1]!.doc || pool.every((p) => p.doc === c.doc))) take(c); }
   const summaryParts = chosen.slice(0, Math.min(2, chosen.length)); // short direct answer first
-  for (const c of pool) { if (chosen.length >= summaryParts.length + 5) break; if (perDoc(c.doc) < capB) take(c); }
+  // key points for why/how questions: more causes / mechanism steps first, then other on-topic sentences that carry the cue
+  const ranked = q.kind === "cause" ? causalRanked.map((x) => x.c) : q.works ? mechRanked.map((x) => x.c) : [];
+  const floor = q.kind === "cause" ? (causalRanked[0]?.v ?? 0) * 0.5 : 0;
+  for (const c of ranked) { if (chosen.length >= summaryParts.length + 3) break; if (perDoc(c.doc) < capB && (q.kind !== "cause" || causalScore(q, c) >= floor)) take(c); }
+  const onCue = (c: Cand) => q.kind === "cause" && causalRanked.length ? causalScore(q, c) >= floor : q.works && mechRanked.length ? mechanismScore(q, c) > 0 : true;
+  for (const c of pool) { if (chosen.length >= summaryParts.length + 5) break; if (perDoc(c.doc) < capB && onCue(c)) take(c); }
+  if (directOnly && chosen.length < summaryParts.length + 2) // too few strict matches: add on-topic sentences from the sources already cited
+    for (const c of pool) { if (chosen.length >= summaryParts.length + 3) break; if (chosen.some((x) => x.doc === c.doc) && CUES[q.kind].test(c.s) && otherNames(q, c.s) < 3 && !INSTANCE.test(c.s) && topicCoverage(q, c.s) >= (q.core.length <= 3 ? 0.99 : 0.75)) take(c); }
   const bulletParts = chosen.slice(summaryParts.length);
   if (q.kind === "history") {
     const yr = (s: string) => Number(s.match(/\b(1[0-9]{3}|20[0-2][0-9])\b/)?.[1] ?? 9999);
@@ -635,7 +757,7 @@ export type Depth = "quick" | "standard";
 
 /** Quality over quantity: drop duplicate pages, cap 2 per site, keep Wikipedia as backup, drop weak sites when better exist. */
 function curate(docs: Doc[], exactWiki: Doc | undefined): Doc[] {
-  const val = (d: Doc) => d.relevance * d.quality;
+  const val = (d: Doc) => d.relevance * d.quality + (d === exactWiki ? 0.5 : 0); // the article named after the topic is the stable backbone
   const sorted = [...docs].sort((a, b) => val(b) - val(a));
   const seenUrl = new Set<string>(), perHost = new Map<string, number>(), titles: string[] = [];
   let out: Doc[] = [];
@@ -695,8 +817,14 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
   const evidence = docs.filter((d) => q.entities.some((e) => termCount({ ...q, core: [e] }, d.title) > 0));
 
   // 2) fetch real page text for linked articles + official docs found in relevant sources
-  const score = (d: Doc) => { d.relevance = relevance(q, d.title, d.text); d.quality = sourceQuality(d.url, q, d.type); return d; };
-  docs = docs.map(score).filter((d) => d.relevance > 0);
+  const score = (d: Doc) => {
+    d.relevance = Math.max(relevance(q, d.title, d.text), d.alias ? relevance(q, d.alias, d.text) : 0); // redirect name counts ("Causes of high blood pressure" -> Hypertension)
+    d.quality = d.type === "encyclopedia" && d.quality < 1 ? d.quality : sourceQuality(d.url, q, d.type);
+    return d;
+  };
+  docs = docs.map(score);
+  if (process.env.RESEARCH_DEBUG) console.error("relevance:", docs.map((d) => `${d.title}=${d.relevance}`));
+  docs = docs.filter((d) => d.relevance > 0);
   if (depth === "standard") {
     const seen = new Set(docs.map((d) => d.url));
     const leadWiki = docs.filter((d) => d.provider === "wikipedia").sort((a, b) => b.relevance - a.relevance)[0];
@@ -730,13 +858,20 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
   }
   // Other senses of an exactly-matched encyclopedia title ("Mount Hood" vs "Mount Hood (California)") are off-topic.
   const baseT = (t: string) => t.replace(/\s*\(.*?\)\s*$/, "").toLowerCase();
-  const exactWiki = docs.find((d) => d.provider === "wikipedia" && !/\(.*\)$/.test(d.title) && flatPunct(d.title).toLowerCase() === flatPunct(topicOf(q.raw)).toLowerCase());
+  // exact = the article named after the topic: "Inflation" for "What causes inflation?" (title words == query core words)
+  const sameWords = (t: string) => { const tt = tokens(t).filter((w) => !STOP.has(w)); return tt.length > 0 && tt.length === q.core.length && tt.every((w) => q.core.some((c) => termMatch(w, c))); };
+  const exactWiki = docs.filter((d) => d.quality >= 1).find((d) => d.provider === "wikipedia" && !/\(.*\)$/.test(d.title) && (flatPunct(d.title).toLowerCase() === flatPunct(topicOf(q.raw)).toLowerCase() || sameWords(d.title)));
   if (exactWiki) docs = docs.filter((d) => d === exactWiki || d.provider !== "wikipedia" || baseT(d.title) !== baseT(exactWiki.title));
   docs = curate(docs, exactWiki);
   if (!docs.length) return null;
 
   // 3) rank sentences across sources and compose
   const cands = rankSentences(q, docs);
+  if (process.env.RESEARCH_DEBUG) {
+    console.error("docs:", docs.map((d) => `${d.title} [${d.origin}] rel=${d.relevance} q=${d.quality}`));
+    console.error("top:", cands.slice(0, 8).map((c) => `${c.score.toFixed(2)} ${c.doc.title}: ${c.s.slice(0, 120)}`));
+    if (q.kind === "cause") console.error("causal:", cands.map((c) => ({ v: causalScore(q, c), c })).filter((x) => x.v > 0).sort((a, b) => b.v - a.v).slice(0, 6).map((x) => `${x.v.toFixed(2)} ${x.c.doc.title}#${x.c.pos}: ${x.c.s.slice(0, 140)}`));
+  }
   const comp = compose(q, cands);
   if (!comp) return null;
 
@@ -755,7 +890,7 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
     if (d.score != null) src.score = d.score;
     return src;
   });
-  const cite = (c: Cand) => `${clip(c.s, 320)} [${c.doc.id}]`;
+  const cite = (c: Cand) => `${clip(c.s, 480)} [${c.doc.id}]`;
   let summary = comp.summaryParts.map(cite).join(" ");
   let bullets = comp.bulletParts.map(cite);
   let method = "extractive";
