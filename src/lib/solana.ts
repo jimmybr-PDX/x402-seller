@@ -4,6 +4,7 @@
  * derivation (mint pair + fee tier), priced from sqrt_price, and weighted by quote-side vault
  * depth. Every number is verifiable from the returned pool addresses and slot. Cached 30 s.
  */
+import { supplyFields } from "./price.js";
 import { address as toAddress, getAddressEncoder, getProgramDerivedAddress, type Address } from "@solana/kit";
 
 const RPCS = (process.env.SOLANA_RPC_URLS?.split(",").map((s) => s.trim()).filter(Boolean)) ?? [
@@ -192,15 +193,17 @@ async function poolQuotes(mint: string, solUsdP: Promise<number | null> | null, 
     const m = await accounts([mint]); // still report decimals so "no pool" and "not a mint" differ
     const md = m.list[0];
     if (!meta.symbol) Object.assign(meta, parseToken2022Meta(md?.data));
-    return { slot, quotes: [] as Quote[], decimals: md && md.data.length >= 45 && md.data.length < 400 ? md.data[44]! : (md && md.data.length >= 45 ? md.data[44]! : null), meta };
+    return { slot, quotes: [] as Quote[], decimals: md && md.data.length >= 45 ? md.data[44]! : null, supplyRaw: null as bigint | null, meta };
   }
   const extra = [...new Set([mint, ...quotes.map((q) => q.mint)])];
   const [r2, solUsd] = await Promise.all([accounts([...live.flatMap((l) => [l.vaultA, l.vaultB]), ...extra]), solUsdP ?? Promise.resolve(null)]);
   for (const q of quotes) if (q.sym === "SOL") q.usd = solUsd;
   const mintDec = new Map<string, number>();
+  let supplyRaw: bigint | null = null;
   extra.forEach((m, i) => {
     const a = r2.list[live.length * 2 + i];
     if (a && a.data.length >= 45) mintDec.set(m, a.data[44]!);
+    if (m === mint && a && a.data.length >= 45) supplyRaw = a.data.readBigUInt64LE(36);
     if (m === mint && !meta.symbol) Object.assign(meta, parseToken2022Meta(a?.data));
   });
   const out: Quote[] = [];
@@ -232,7 +235,7 @@ async function poolQuotes(mint: string, solUsdP: Promise<number | null> | null, 
     const priceUsd = (c.vSol / 1e9 / (c.vTok / 10 ** dec)) * sq.usd;
     if (Number.isFinite(priceUsd) && priceUsd > 0) out.push({ dex: "pumpfun-curve", pool: c.pool, quote: "SOL", priceUsd, depthUsd: 2 * (c.realSol / 1e9) * sq.usd });
   }
-  return { slot, quotes: out, decimals: dec ?? null, meta };
+  return { slot, quotes: out, decimals: dec ?? null, supplyRaw, meta };
 }
 
 function weighted(qs: Quote[]): number {
@@ -346,6 +349,7 @@ export async function solanaTokenPrice(tokenRaw: string) {
     ...(best.depthUsd < THIN_DEPTH_USD ? { thinLiquidity: true } : {}),
     confidence: best.dex === "pumpfun-curve" || best.depthUsd < THIN_DEPTH_USD ? "low" : spread <= 0.01 && best.depthUsd >= 1_000_000 ? "high" : spread <= 0.03 && best.depthUsd >= 100_000 ? "medium" : "low",
     ...(best.dex === "pumpfun-curve" ? { note: "pump.fun bonding curve (token has not graduated to an AMM yet); price follows the curve formula" } : {}),
+    ...supplyFields(r.supplyRaw !== null ? Number(r.supplyRaw) / 10 ** r.decimals : null, priceUsd, isSol || /^(USDC|USDT|CBBTC)$/i.test(meta.symbol ?? "")),
     poolSpreadPct: Math.round(spread * 10000) / 100,
     outlierPools,
     totalDepthUsd: Math.round(used.reduce((a, q) => a + q.depthUsd, 0)),

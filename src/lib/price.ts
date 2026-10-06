@@ -96,10 +96,21 @@ const ARCHIVE: Record<string, string[]> = {
   polygon: ["https://polygon.drpc.org"],
 };
 const BLOCKS_PER_DAY: Record<string, bigint> = { ethereum: 7200n, base: 43200n, arbitrum: 345600n, polygon: 43200n };
+/** Total supply + fully diluted valuation (price x total supply). Wrapped/bridged assets: supply is chain-local only. */
+export function supplyFields(totalSupply: number | null, priceUsd: number, chainLocal = false) {
+  if (totalSupply === null || !Number.isFinite(totalSupply) || totalSupply <= 0) return {};
+  return {
+    totalSupply: sig(totalSupply),
+    fdvUsd: Math.round(totalSupply * priceUsd),
+    ...(chainLocal ? { supplyNote: "wrapped/bridged token: totalSupply is the amount on this chain only, so fdvUsd is not the asset's market cap" } : {}),
+  };
+}
+
 const erc20Abi = parseAbi([
   "function decimals() view returns (uint8)",
   "function symbol() view returns (string)",
   "function name() view returns (string)",
+  "function totalSupply() view returns (uint256)",
   "function balanceOf(address) view returns (uint256)",
 ]);
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -297,6 +308,7 @@ export async function tokenPrice(tokenRaw: string, chainRaw?: string) {
         { address, abi: erc20Abi, functionName: "decimals" },
         { address, abi: erc20Abi, functionName: "symbol" },
         { address, abi: erc20Abi, functionName: "name" },
+        { address, abi: erc20Abi, functionName: "totalSupply" },
       ],
       allowFailure: true,
     }),
@@ -307,6 +319,7 @@ export async function tokenPrice(tokenRaw: string, chainRaw?: string) {
   const curated = isAddress(t) ? null : t.toUpperCase().replace(/^\$/, "");
   const symbol = meta[1]?.status === "success" ? String(meta[1].result) : curated;
   const name = meta[2]?.status === "success" ? String(meta[2].result) : null;
+  const totalSupply = meta[3]?.status === "success" ? Number(meta[3].result as bigint) / 10 ** decimals : null;
 
   const isWeth = address.toLowerCase() === CHAINS[k].weth.toLowerCase();
   const weth = isWeth ? null : await wethUsd(k);
@@ -329,6 +342,7 @@ export async function tokenPrice(tokenRaw: string, chainRaw?: string) {
     priceUsd: sig(priceUsd),
     confidence: spread <= 0.01 && best.depthUsd >= 1_000_000 ? "high" : spread <= 0.03 && best.depthUsd >= 100_000 ? "medium" : "low",
     ...chg,
+    ...supplyFields(totalSupply, priceUsd, isWeth || /^(USDC|USDT|DAI|WETH|WBTC|CBBTC)$/i.test(symbol ?? "")),
     poolSpreadPct: Math.round(spread * 10000) / 100,
     outlierPools: deep.length - used.length,
     totalDepthUsd: Math.round(used.reduce((a, q) => a + q.depthUsd, 0)),

@@ -38,6 +38,7 @@ import { SOLANA_PRICE_SYMBOLS, SolanaInputError, solanaTokenPrice } from "./lib/
 import { WalletInputError, walletBalances } from "./lib/wallet.js";
 import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
+import { recordRequest, startTraffic, trafficStats, type Outcome } from "./lib/traffic.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -102,6 +103,8 @@ const NETWORK_NAMES = NETWORKS.map((n) => NETWORK_INFO[n]!.name);
 const NETWORK_LABEL = NETWORK_NAMES.length > 1 ? `${NETWORK_NAMES.slice(0, -1).join(", ")} or ${NETWORK_NAMES.at(-1)}` : NETWORK_NAMES[0]!;
 const ON_NETWORKS = `USDC on ${NETWORK_LABEL}`;
 const ON_NETWORKS_SHORT = `USDC (${NETWORK_NAMES.join("/")})`;
+/** Short price + no-charge note for Bazaar descriptions (keeps the text about the task, not boilerplate). */
+const perCall = (p: string) => `${usd(p)} USDC/call on ${NETWORK_NAMES.length} networks; failed calls (400/422/503) are free.`;
 
 const PAID = {
   "/report": REPORT_PRICE,
@@ -177,6 +180,33 @@ async function main() {
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
   app.use(express.json());
+
+  // Interest tracker (counts only; visitor = salted hash of IP+UA, raw IPs never stored).
+  const FREE_LABELS = new Set(["/", "/health", "/stats", "/examples", "/llms.txt", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg"]);
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const method = req.method;
+    // HEAD on a paid route: answer like GET without payment (402 + PAYMENT-REQUIRED, no body) instead of
+    // running the paid handler for free. Node drops the body for HEAD requests automatically.
+    if (method === "HEAD" && req.path in PAID) req.method = "GET";
+    res.on("finish", () => {
+      try {
+        const paid = req.path in PAID;
+        const label = paid ? req.path : FREE_LABELS.has(req.path) ? req.path : "other";
+        const hasPayment = !!(req.header("payment-signature") || req.header("x-payment"));
+        const sc = res.statusCode;
+        let outcome: Outcome = sc < 400 ? "ok" : "error";
+        if (paid) {
+          if (sc === 402) outcome = !hasPayment ? "unpaid402" : res.locals.paidHandlerRan ? "settleFailed" : "paymentInvalid";
+          else if (hasPayment && sc < 300 && decodeB64Json(res.getHeader("payment-response"))?.success) outcome = "paid200";
+          else if (hasPayment && sc >= 400) outcome = "uncharged";
+        }
+        recordRequest(label, method, String(req.header("user-agent") ?? "").slice(0, 300), req.ip ?? "", outcome, paid && hasPayment);
+      } catch {
+        /* never let stats break a response */
+      }
+    });
+    next();
+  });
 
   // CORS for browser-based agents / directory probes (payment headers must be readable).
   app.use((req, res, next) => {
@@ -254,31 +284,49 @@ async function main() {
     }));
 
   const reportExample = {
-    query: "What is retrieval-augmented generation?",
+    query: "wikipedia summary of Mount Hood",
+    topic: "Mount Hood",
     summary:
-      "Retrieval-augmented generation (RAG) is a technique that lets large language models retrieve and incorporate new information from external sources before answering. [1]",
+      "Mount Hood is an active stratovolcano in the Cascade Range and is a member of the Cascade Volcanic Arc. [1] It was formed by a subduction zone on the Pacific Coast and rests in the Pacific Northwest region of the United States. [1]",
     bullets: [
-      "The term retrieval-augmented generation (RAG) was introduced in a 2020 paper that described combining a parametric language model with a non-parametric external memory accessed through retrieval at inference time. [1]",
-      "Retrieval-augmented generation is a technique for enhancing the accuracy and reliability of generative AI models with information fetched from specific and relevant data sources. [2]",
+      "Much of the mountain outside the ski areas is part of the Mount Hood Wilderness. [1]",
+      "The peak is home to 12 named glaciers and snowfields. [1]",
+      "The odds of an eruption in the next 30 years are estimated at between 3 and 7%, so the U.S. Geological Survey (USGS) characterizes it as \"potentially active\". [1]",
     ],
     sources: [
       {
         id: 1,
         type: "encyclopedia",
         provider: "wikipedia",
-        title: "Retrieval-augmented generation",
-        url: "https://en.wikipedia.org/wiki/Retrieval-augmented_generation",
-        snippet: "Retrieval-augmented generation (RAG) is a technique that enables large language models to retrieve and incorporate new information...",
-        publishedAt: "2026-09-20T10:00:00Z",
+        title: "Mount Hood",
+        url: "https://en.wikipedia.org/wiki/Mount_Hood",
+        snippet: "Mount Hood is an active stratovolcano in the Cascade Range and is a member of the Cascade Volcanic Arc.",
+        publishedAt: "2026-09-28T17:02:11Z",
       },
     ],
-    sourceCount: 3,
-    providers: ["wikipedia", "hackernews"],
-    method: "extractive",
+    sourceCount: 1,
+    providers: ["wikipedia"],
+    confidence: "medium",
+    confidenceBasis: "1 cited source(s) from 1 provider(s)",
+    wikipedia: {
+      title: "Mount Hood",
+      description: "Stratovolcano in Oregon, United States",
+      extract: "Mount Hood is an active stratovolcano in the Cascade Range and is a member of the Cascade Volcanic Arc. It was formed by a subduction zone on the Pacific Coast and rests in the Pacific Northwest region of the United States.",
+      url: "https://en.wikipedia.org/wiki/Mount_Hood",
+      thumbnail: "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2c/Mount_Hood_reflected_in_Mirror_Lake%2C_Oregon.jpg/330px-Mount_Hood_reflected_in_Mirror_Lake%2C_Oregon.jpg",
+      lastEdited: "2026-09-28T17:02:11Z",
+      wikidataId: "Q217008",
+    },
+    next: [
+      { endpoint: "/read", call: "/read?url=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FMount_Hood", why: "full text of the top source as markdown" },
+      { endpoint: "/news", call: "/news?q=Mount%20Hood", why: "what happened on this topic in the last 72 hours" },
+    ],
+    method: "extractive (Wikipedia lead + ranked sentences)",
     depth: "standard",
     lang: "en",
-    latencyMs: 1450,
-    generatedAt: "2026-10-03T18:00:00.000Z",
+    cached: false,
+    latencyMs: 4130,
+    generatedAt: "2026-10-06T05:30:00.000Z",
   };
 
   const readExample = {
@@ -300,19 +348,31 @@ async function main() {
   };
 
   const checkExample = {
-    target: "https://api.example.com/paid",
+    target: "https://x402-seller-pmlm.onrender.com/gas",
     method: "GET",
-    score: 82,
-    passed: 14,
-    total: 17,
+    score: 100,
+    grade: "A",
+    passed: 22,
+    total: 22,
     indexable: true,
-    priceUsdIfUsdc: 0.01,
-    network: "eip155:8453",
-    latencyMs: 180,
-    checks: [{ id: "status_402", pass: true, severity: "required", detail: "HTTP 402 (unpaid probe must return 402)" }],
-    fixes: ["tags_set: missing (resource.tags, up to 5)"],
-    checkedAt: "2026-10-03T18:00:00.000Z",
-    note: "One unpaid probe; this service never pays the target.",
+    serviceName: "Gas Price & Fees",
+    priceUsdIfUsdc: 0.002,
+    networks: ["eip155:8453", "eip155:137", "eip155:42161", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "eip155:43114", "eip155:1329"],
+    latencyMs: 79,
+    checks: [
+      { id: "status_402", pass: true, severity: "required", detail: "HTTP 402 (unpaid probe must return 402)" },
+      { id: "service_name_set", pass: true, severity: "ranking", detail: "Gas Price & Fees" },
+    ],
+    fixes: [],
+    bazaarListing: { listed: true, calls30d: 1, uniquePayers30d: 1, lastCalledAt: "2026-10-05T03:11:46.638Z", lastUpdated: "2026-10-05T03:11:46.851Z", indexedServiceName: "Gas Price Tracker", indexedTags: ["gas price", "gas fees", "estimate gas", "network fees", "solana priority fee"], metadataStale: ["serviceName", "tags", "description"], staleNote: "Bazaar shows older metadata than the endpoint serves now; it refreshes after the next CDP-settled payment." },
+    searchRanks: [
+      { query: "gas price", rank: 8, of: 13, leader: { resource: "https://base-facts.yankii.fr/v1/gas", calls30d: 1, payers30d: 1 } },
+      { query: "gas fees", rank: 2, of: 13, leader: { resource: "https://quartermaster.surewhynot.app/v1/gas", calls30d: 22, payers30d: 21 } },
+    ],
+    cdpValidator: { valid: true, simulation: "accepted", indexed: true, lastCrawledAt: "2026-10-05T03:11:47.558Z", failedRequired: [], failedAdvisory: [] },
+    checkedAt: "2026-10-06T05:30:00.000Z",
+    totalMs: 1704,
+    note: "One unpaid probe from this service plus Coinbase's own free validator probe; nothing is ever paid to the target.",
   };
 
   const newsExample = {
@@ -339,6 +399,9 @@ async function main() {
     priceUsd24hAgo: 2652.18,
     change24h: { pool: "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640", at: "2026-10-02T18:00:11.000Z", method: "archive slot0 at block 26116021" },
     confidence: "high",
+    totalSupply: 2116625.8,
+    fdvUsd: 5718512692,
+    supplyNote: "wrapped/bridged token: totalSupply is the amount on this chain only, so fdvUsd is not the asset's market cap",
     poolSpreadPct: 0.54,
     totalDepthUsd: 330722389,
     pools: [{ dex: "uniswap-v3", pool: "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640", feeTier: 500, quote: "USDC", priceUsd: 2690.12, depthUsd: 120000000, explorer: "https://etherscan.io/address/0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640" }],
@@ -408,17 +471,17 @@ async function main() {
     "GET /report": {
       accepts: accept(REPORT_PRICE),
       description:
-        `Research brief with citations: a quick, sourced answer to any question or topic. Use before writing, deciding, or searching deeper. Pass q (question). Returns a summary, 3-6 cited bullets and sources (official docs, Wikipedia, Stack Overflow, GitHub, papers) with URLs and dates; off-topic sources dropped. ${usd(REPORT_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+        `Research brief with citations: web research on any question or topic in one call. Use to summarize a topic, get a Wikipedia summary, or answer with sources before writing or deciding. Pass q. Returns a cited summary, key bullets, sources (Wikipedia, official docs, Stack Overflow, GitHub, papers, news-linked articles) with URLs and dates, a Wikipedia card, confidence and follow-up calls. ${perCall(REPORT_PRICE)}`,
       mimeType: "application/json",
       serviceName: "Research Brief with Citations",
-      tags: ["research brief", "web research", "answer with sources", "citations", "summarize topic"],
+      tags: ["research brief", "web research", "summarize a topic", "wikipedia summary", "answer with sources"],
       iconUrl: ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
           input: { q: "What is retrieval-augmented generation?" },
           inputSchema: {
             properties: {
-              q: { type: "string", minLength: 2, maxLength: 300, description: "Natural-language research question or topic, e.g. 'history of the transistor' or 'pros and cons of RAG'" },
+              q: { type: "string", minLength: 2, maxLength: 300, description: "Question or topic in plain words, e.g. 'history of the transistor', 'summarize photosynthesis', 'wikipedia summary of Mount Hood'" },
               depth: { type: "string", enum: ["quick", "standard"], description: "quick = encyclopedia + instant answer only (faster); standard (default) adds official docs, Stack Overflow, GitHub, articles linked from Hacker News, and scholarly papers" },
               lang: { type: "string", pattern: "^[a-z]{2,3}$", description: "Wikipedia language code, default en" },
             },
@@ -429,6 +492,7 @@ async function main() {
             schema: {
               properties: {
                 query: { type: "string" },
+                topic: { type: "string", description: "Topic extracted from q (request words like 'summarize' removed)" },
                 summary: { type: "string", description: "2-4 sentence answer with [n] citations" },
                 bullets: { ...strArr, description: "Key points, each with [n] citations" },
                 sources: {
@@ -449,13 +513,22 @@ async function main() {
                 },
                 sourceCount: { type: "integer" },
                 providers: strArr,
-                method: { type: "string", description: "extractive or llm-synthesis:<model>" },
+                confidence: { type: "string", enum: ["high", "medium", "low"], description: "high = 3+ cited sources from 2+ providers" },
+                confidenceBasis: { type: "string" },
+                wikipedia: {
+                  type: ["object", "null"],
+                  description: "Wikipedia summary card for the topic, when one matches",
+                  properties: { title: { type: "string" }, description: { type: ["string", "null"] }, extract: { type: "string" }, url: { type: "string" }, thumbnail: { type: ["string", "null"] }, lastEdited: { type: ["string", "null"] }, wikidataId: { type: ["string", "null"] } },
+                },
+                next: { type: "array", description: "Suggested follow-up calls", items: { type: "object", properties: { endpoint: { type: "string" }, call: { type: "string" }, why: { type: "string" } } } },
+                method: { type: "string", description: "extractive, extractive (Wikipedia lead + ranked sentences), or llm-synthesis:<model>" },
                 depth: { type: "string" },
                 lang: { type: "string" },
+                cached: { type: "boolean" },
                 latencyMs: { type: "integer" },
                 generatedAt: { type: "string" },
               },
-              required: ["query", "summary", "bullets", "sources"],
+              required: ["query", "topic", "summary", "bullets", "sources", "confidence"],
             },
           },
         }),
@@ -464,7 +537,7 @@ async function main() {
     "GET /read": {
       accepts: accept(READ_PRICE),
       description:
-        `URL to markdown: read any public web page as clean, LLM-ready markdown. Use when an agent has a URL (article, docs, blog, product page) and needs its text without HTML, scripts or nav clutter. Pass url (https). Returns title, description, publish date, markdown, word count, headings and links. ${usd(READ_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+        `URL to markdown: read any web page as clean, LLM-ready markdown. Use when an agent has a URL (article, docs, blog, product page) and needs the text without HTML, scripts or menus, e.g. to scrape article text or feed a page to an LLM. Pass url (https). Returns title, description, publish date, markdown, word count, headings and links. ${perCall(READ_PRICE)}`,
       mimeType: "application/json",
       serviceName: "URL to Markdown",
       tags: ["url to markdown", "web page to markdown", "read url", "scrape article text", "html to markdown"],
@@ -505,17 +578,17 @@ async function main() {
     "GET /check": {
       accepts: accept(CHECK_PRICE),
       description:
-        `x402 endpoint readiness and Bazaar ranking check. Use before paying for or listing an x402 API. Makes one unpaid probe (never pays the target) and grades the 402 challenge: PAYMENT-REQUIRED header, accepts, amount, payTo, network, description, mimeType, serviceName, tags, bazaar schemas and examples, latency. Returns a score and fixes. ${usd(CHECK_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+        `x402 endpoint check: validate an x402 endpoint and audit its Bazaar listing before you pay for it or list it. One unpaid probe (never pays the target) grades the 402 challenge, schemas, examples, name, tags and latency, and adds Coinbase's validator verdict, the live Bazaar listing (30-day calls, payers, stale metadata) and search rank for its own name and tags. Returns score, grade and prioritized fixes. ${perCall(CHECK_PRICE)}`,
       mimeType: "application/json",
       serviceName: "x402 Endpoint Checker",
-      tags: ["x402 endpoint check", "validate x402 endpoint", "x402", "bazaar listing", "api testing"],
+      tags: ["x402 endpoint check", "validate x402 endpoint", "bazaar ranking check", "x402 listing audit", "api testing"],
       iconUrl: ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
           input: { url: "https://x402-seller-pmlm.onrender.com/report" },
           inputSchema: {
             properties: {
-              url: { type: "string", description: "Public https URL of an x402-protected endpoint" },
+              url: { type: "string", description: "Public https URL of an x402-protected endpoint (yours or one you are about to pay)" },
               method: { type: "string", enum: ["GET", "POST"], description: "HTTP method to probe (default GET)" },
             },
             required: ["url"],
@@ -526,17 +599,23 @@ async function main() {
               properties: {
                 target: { type: "string" },
                 score: { type: "integer", minimum: 0, maximum: 100 },
+                grade: { type: "string", enum: ["A", "B", "C", "D", "F"] },
                 passed: { type: "integer" },
                 total: { type: "integer" },
                 indexable: { type: "boolean" },
+                serviceName: { type: ["string", "null"] },
                 priceUsdIfUsdc: { type: ["number", "null"] },
-                network: { type: ["string", "null"] },
+                networks: strArr,
                 latencyMs: { type: "integer" },
-                checks: { type: "array", items: { type: "object" } },
-                fixes: strArr,
+                checks: { type: "array", items: { type: "object", properties: { id: { type: "string" }, pass: { type: "boolean" }, severity: { type: "string", enum: ["required", "ranking", "advisory"] }, detail: { type: "string" }, fix: { type: "string" } } } },
+                fixes: { ...strArr, description: "Failed checks, required first, each with a concrete fix" },
+                bazaarListing: { type: "object", description: "Live CDP Bazaar entry: listed, calls30d, uniquePayers30d, lastCalledAt, indexed name/tags, metadataStale" },
+                searchRanks: { type: "array", description: "Bazaar search position for the endpoint's own serviceName and first tags", items: { type: "object", properties: { query: { type: "string" }, rank: { type: ["integer", "null"] }, of: { type: "integer" }, leader: { type: ["object", "null"] } } } },
+                cdpValidator: { type: ["object", "null"], description: "Coinbase /x402/validate verdict: valid, simulation, indexed, failed checks" },
                 checkedAt: { type: "string" },
+                totalMs: { type: "integer" },
               },
-              required: ["target", "score", "checks", "fixes"],
+              required: ["target", "score", "grade", "checks", "fixes"],
             },
           },
         }),
@@ -545,10 +624,10 @@ async function main() {
     "GET /news": {
       accepts: accept(NEWS_PRICE),
       description:
-        `News search: recent headlines on any topic from 1,000s of outlets. Use when an agent needs what happened in the last 1-7 days. Pass q (keywords). Returns deduplicated headlines with outlet, link, publish time and match score, from the GDELT global news index, major-outlet feeds and Hacker News. ${usd(NEWS_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+        `News search: latest news headlines on any topic from thousands of outlets, updated every 15 minutes. Use when an agent needs what happened in the last 1-7 days (companies, crypto, politics, sports, tech). Pass q (keywords). Returns deduplicated headlines with outlet, link, publish time and match score from the GDELT global news index, major outlets and Hacker News. ${perCall(NEWS_PRICE)}`,
       mimeType: "application/json",
-      serviceName: "News Search",
-      tags: ["news search", "news headlines", "crypto news", "current events", "breaking news"],
+      serviceName: "News Search & Headlines",
+      tags: ["news search", "news headlines", "latest news", "crypto news", "breaking news"],
       iconUrl: ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
@@ -600,10 +679,10 @@ async function main() {
     "GET /price": {
       accepts: accept(TOKEN_PRICE),
       description:
-        `Token price: live USD price + 24h change for a crypto token, read onchain (Uniswap v3 on Ethereum/Base/Arbitrum/Polygon; Orca, Raydium, PumpSwap on Solana). Pass token (ETH, BTC, SOL, PEPE... or contract/mint address), optional chain. Returns price, 24h change, pools, depth, spread, confidence, block. ${usd(TOKEN_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+        `Crypto token price: live USD price, 24h change, total supply and FDV for any token, read onchain from DEX pools (Uniswap v3 on Ethereum, Base, Arbitrum, Polygon; Orca, Raydium, PumpSwap on Solana), so every number is verifiable. Pass token (ETH, BTC, SOL, PEPE... or contract/mint address), optional chain. Returns price, change, pools, depth, spread, confidence, block. ${perCall(TOKEN_PRICE)}`,
       mimeType: "application/json",
-      serviceName: "Token Price (Onchain)",
-      tags: ["token price", "crypto price", "onchain price", "dex price", "price change 24h"],
+      serviceName: "Crypto Token Price",
+      tags: ["token price", "crypto price", "price change 24h", "onchain price", "fully diluted valuation"],
       iconUrl: ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
@@ -623,6 +702,8 @@ async function main() {
                 priceUsd: { type: "number" },
                 change24hPct: { type: ["number", "null"], description: "% change vs ~24 h ago (EVM: pool oracle or archive node; null on Solana)" },
                 priceUsd24hAgo: { type: "number" },
+                totalSupply: { type: "number", description: "Token total supply read from the contract / mint" },
+                fdvUsd: { type: "number", description: "Fully diluted valuation = price x total supply (not circulating market cap)" },
                 confidence: { type: "string", enum: ["high", "medium", "low"] },
                 poolSpreadPct: { type: "number" },
                 totalDepthUsd: { type: "number" },
@@ -640,7 +721,7 @@ async function main() {
     "GET /solana-price": {
       accepts: accept(SOL_PRICE),
       description:
-        `Solana token price: live USD price of any SPL token by symbol or mint, read onchain from Orca Whirlpool, Raydium CLMM, PumpSwap and pump.fun bonding curves (no third-party API). Pass token (SOL, JUP, BONK, WIF... or mint). Returns price, pools with depth, spread, confidence, slot. ${usd(SOL_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+        `Solana token price: live USD price of any SPL token or memecoin by symbol or mint, incl. pump.fun tokens, read onchain from Orca, Raydium CLMM, PumpSwap and pump.fun bonding curves (no third-party API). Pass token (SOL, JUP, BONK, WIF... or mint). Returns price, supply, FDV, pools with depth, spread, confidence, slot. ${perCall(SOL_PRICE)}`,
       mimeType: "application/json",
       serviceName: "Solana Token Price",
       tags: ["solana token price", "sol price", "spl token price", "pump.fun price", "memecoin price"],
@@ -660,6 +741,8 @@ async function main() {
                 priceUsd: { type: "number" },
                 confidence: { type: "string", enum: ["high", "medium", "low"] },
                 thinLiquidity: { type: "boolean" },
+                totalSupply: { type: "number" },
+                fdvUsd: { type: "number", description: "price x mint supply" },
                 poolSpreadPct: { type: "number" },
                 totalDepthUsd: { type: "number" },
                 pools: { type: "array", items: { type: "object" } },
@@ -676,9 +759,9 @@ async function main() {
     "GET /balance": {
       accepts: accept(BALANCE_PRICE),
       description:
-        `Wallet balance: native coin + token balances with USD values for any wallet, read live onchain. EVM (Ethereum, Base, Arbitrum, Polygon in one call; ENS names work) or Solana (SOL + SPL tokens). Pass address, optional chain and tokens. Returns per-chain balances, prices and total USD. ${usd(BALANCE_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+        `Wallet balance: token balances and USD portfolio value for any wallet, read live onchain. EVM (Ethereum, Base, Arbitrum, Polygon in one call; ENS names work) or Solana (SOL + SPL tokens). Use to check a wallet before paying, trading or airdrops. Pass address, optional chain and tokens. Returns per-chain native + ERC-20/SPL balances, prices and total USD. ${perCall(BALANCE_PRICE)}`,
       mimeType: "application/json",
-      serviceName: "Wallet Balance (EVM + Solana)",
+      serviceName: "Wallet Token Balance",
       tags: ["wallet balance", "erc20 balance", "token balances", "portfolio value", "solana wallet"],
       iconUrl: ICON_URL,
       extensions: {
@@ -711,10 +794,10 @@ async function main() {
     "GET /tx": {
       accepts: accept(TX_PRICE),
       description:
-        `Transaction lookup: status and decoded details for any tx hash or Solana signature, read onchain. EVM (auto-detects Ethereum, Base, Arbitrum, Polygon): success/reverted, block time, from/to, method, fee in USD, every token transfer decoded; flags x402/EIP-3009 USDC payments. Solana: status, fee, SOL + token balance changes. ${usd(TX_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+        `Decode transaction: status, receipt and decoded token transfers for any tx hash or Solana signature, read onchain. EVM (auto-detects Ethereum, Base, Arbitrum, Polygon): success/reverted, block time, confirmations, from/to, method, fee in USD, every ERC-20/NFT transfer; flags x402 USDC payments. Solana: status, fee, SOL + token balance changes. Use to verify a payment landed. ${perCall(TX_PRICE)}`,
       mimeType: "application/json",
-      serviceName: "Transaction Lookup & Decode",
-      tags: ["transaction receipt", "tx status", "decode transaction", "token transfers", "verify payment"],
+      serviceName: "Decode Transaction Receipt",
+      tags: ["transaction receipt", "decode transaction", "tx status", "verify payment", "token transfers"],
       iconUrl: ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
@@ -750,10 +833,10 @@ async function main() {
     "GET /gas": {
       accepts: accept(GAS_PRICE),
       description:
-        `Gas price tracker: live gas and priority fees for Ethereum, Base, Arbitrum, Polygon and Solana in one call, from public nodes. Returns base fee, slow/standard/fast tips, max fee, block congestion, and the USD cost of a transfer, an ERC-20 transfer and a swap, plus the cheapest chain. Optional chain. ${usd(GAS_PRICE)} ${ON_NETWORKS_SHORT}. ${ERRORS_DOC}`,
+        `Gas price: live gas fees for Ethereum, Base, Arbitrum, Polygon and Solana in one call. Use before sending a transaction to pick a fee or the cheapest chain. Returns base fee, slow/standard/fast priority fees, max fee, congestion, and the USD cost of a transfer, an ERC-20 transfer and a swap per chain, plus Solana priority fees. Optional chain. ${perCall(GAS_PRICE)}`,
       mimeType: "application/json",
-      serviceName: "Gas Price Tracker",
-      tags: ["gas price", "gas fees", "estimate gas", "network fees", "solana priority fee"],
+      serviceName: "Gas Price & Fees",
+      tags: ["gas price", "gas fees", "ethereum gas", "estimate gas", "solana priority fee"],
       iconUrl: ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
@@ -833,8 +916,31 @@ async function main() {
       payToSolanaAddress: payToSolana,
       facilitators: Object.fromEntries(NETWORKS.map((n) => [n, NETWORK_INFO[n]!.facilitator])),
       news: newsStatus(),
+      traffic: { ...trafficStats(Object.keys(PAID), false), full: `${PUBLIC_URL}/stats` },
       memoryMb: Math.round(process.memoryUsage().rss / 1048576),
     });
+  });
+
+  // Free: one real example response per paid route (same data as the Bazaar output examples), so agents
+  // and people can see exactly what they get before paying.
+  app.get("/examples", (_req, res) => {
+    const r = routes as any;
+    res.set("Cache-Control", "public, max-age=3600").json({
+      service: SERVICE_NAME,
+      note: "Sample responses captured from real calls (values change). Call any route without payment to get its 402 challenge.",
+      examples: Object.keys(r).map((k) => ({
+        route: k,
+        url: `${PUBLIC_URL}${k.split(" ")[1]}`,
+        priceUsd: Number(usd(PAID[k.split(" ")[1] as PaidPath])),
+        serviceName: r[k].serviceName,
+        input: r[k].extensions.bazaar.info.input.queryParams ?? null,
+        output: r[k].extensions.bazaar.info.output.example,
+      })),
+    });
+  });
+
+  app.get("/stats", (_req, res) => {
+    res.set("Cache-Control", "no-store").json({ service: SERVICE_NAME, generatedAt: new Date().toISOString(), ...trafficStats(Object.keys(PAID), true) });
   });
 
   app.get("/", (req, res) => {
@@ -854,11 +960,11 @@ async function main() {
       `> Pay to: ${payToAddr} (EVM chains)${payToSolana ? `, ${payToSolana} (Solana)` : ""}. ${ERRORS_DOC}`,
       "",
       "## Paid endpoints",
-      `- GET ${PUBLIC_URL}/report?q=<question>  (${REPORT_PRICE}) — research brief with citations: summary, 3-6 cited bullets, sources from official docs, Wikipedia, Stack Overflow, GitHub, HN-linked articles, Crossref (off-topic sources dropped). Optional depth=quick|standard, lang=en.`,
+      `- GET ${PUBLIC_URL}/report?q=<question or topic>  (${REPORT_PRICE}) — research brief with citations / web research / topic summary: summary, cited bullets, sources from official docs, Wikipedia, Stack Overflow, GitHub, HN-linked articles, Crossref (off-topic sources dropped), Wikipedia summary card, confidence, suggested follow-up calls. Optional depth=quick|standard, lang=en.`,
       `- GET ${PUBLIC_URL}/read?url=<https url>  (${READ_PRICE}) — web page to clean LLM-ready markdown with title, description, publish date, headings, links. Optional maxChars (default 20000).`,
-      `- GET ${PUBLIC_URL}/check?url=<https x402 endpoint>  (${CHECK_PRICE}) — x402 readiness + Bazaar ranking check; one unpaid probe, score + fixes. Optional method=GET|POST.`,
+      `- GET ${PUBLIC_URL}/check?url=<https x402 endpoint>  (${CHECK_PRICE}) — x402 endpoint check + Bazaar listing audit: one unpaid probe, score, grade, prioritized fixes, Coinbase validator verdict, live Bazaar listing (30-day calls/payers, stale metadata) and search rank for its own name and tags. Optional method=GET|POST.`,
       `- GET ${PUBLIC_URL}/news?q=<keywords>  (${NEWS_PRICE}) — news search: recent headlines (outlet, link, publish time, match score) from the GDELT global news index (15-min updates), major publisher feeds and Hacker News. Optional hours=1-168 (default 72), limit=1-25 (default 10). Headlines + links only; use /read for full text.`,
-      `- GET ${PUBLIC_URL}/price?token=<symbol|address>  (${TOKEN_PRICE}) — token price read onchain: USD price + 24h change from Uniswap v3 pools (ethereum, base, arbitrum, polygon) or Orca/Raydium/PumpSwap (solana): pools, depth, cross-pool spread, confidence, block. Optional chain=. Pools under $25k depth -> 422 (not charged).`,
+      `- GET ${PUBLIC_URL}/price?token=<symbol|address>  (${TOKEN_PRICE}) — crypto token price read onchain: USD price + 24h change + total supply + FDV from Uniswap v3 pools (ethereum, base, arbitrum, polygon) or Orca/Raydium/PumpSwap (solana): pools, depth, cross-pool spread, confidence, block. Optional chain=. Pools under $25k depth -> 422 (not charged).`,
       `- GET ${PUBLIC_URL}/solana-price?token=<symbol|mint>  (${SOL_PRICE}) — Solana token price by symbol or SPL mint from Orca Whirlpool, Raydium CLMM, PumpSwap and pump.fun bonding curves (public RPC): price, pools, depth, spread, confidence, slot. Pools under $5k depth -> 422; under $25k flagged thinLiquidity.`,
       `- GET ${PUBLIC_URL}/balance?address=<0x|name.eth|solana address>  (${BALANCE_PRICE}) — wallet balance: native + major tokens with USD values on ethereum, base, arbitrum, polygon (all in one call) or Solana. Optional chain=, tokens=<comma-separated contracts or mints>.`,
       `- GET ${PUBLIC_URL}/tx?hash=<0x hash|solana signature>  (${TX_PRICE}) — transaction lookup: status, block time, from/to, method, fee in USD, decoded token transfers (EVM chains auto-detected) or SOL/token balance changes (Solana). Optional chain=.`,
@@ -870,6 +976,8 @@ async function main() {
       "3. Response 200 + JSON body + PAYMENT-RESPONSE header (settlement tx). Any x402 client works: @x402/fetch, @x402/axios, x402 Python, Coinbase Agentic Wallet / CDP MCP.",
       "",
       "## Free",
+      `- ${PUBLIC_URL}/examples — one real sample response per paid route`,
+      `- ${PUBLIC_URL}/stats — traffic: unpaid 402s, paid calls and unique visitors per route (bots and crawlers split out)`,
       `- ${PUBLIC_URL}/openapi.json — OpenAPI 3.1 with x-payment-info`,
       `- ${PUBLIC_URL}/.well-known/x402 — x402 discovery document`,
       `- ${PUBLIC_URL}/health — status`,
@@ -904,7 +1012,7 @@ async function main() {
     payToSolana,
     openapi: `${PUBLIC_URL}/openapi.json`,
     llms: `${PUBLIC_URL}/llms.txt`,
-    free: ["/health", "/llms.txt", "/openapi.json", "/.well-known/x402", "/robots.txt"],
+    free: ["/health", "/stats", "/examples", "/llms.txt", "/openapi.json", "/.well-known/x402", "/robots.txt"],
   });
   // 402 Index domain verification (public SHA-256 hash of the claim token, not the token itself)
   app.get("/.well-known/402index-verify.txt", (_req, res) =>
@@ -1231,6 +1339,7 @@ async function main() {
   });
 
   app.listen(PORT, "0.0.0.0", () => {
+    startTraffic();
     warmNews();
     console.log(`x402 seller listening on http://localhost:${PORT}  env=${X402_ENV} networks=${NETWORKS.join(",")} (${NETWORK_LABEL})`);
     console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}, /news ${NEWS_PRICE}, /price ${TOKEN_PRICE}, /solana-price ${SOL_PRICE}, /balance ${BALANCE_PRICE}, /tx ${TX_PRICE}, /gas ${GAS_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}`);

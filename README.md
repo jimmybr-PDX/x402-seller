@@ -58,12 +58,23 @@ npm ci && npm run dev  # http://localhost:8402
 | `SOL_PRICE` / `BALANCE_PRICE` / `TX_PRICE` / `GAS_PRICE` | `$0.002` / `$0.003` / `$0.003` / `$0.002` | Per-call prices for `/solana-price`, `/balance`, `/tx`, `/gas` |
 | `NEWS_GKG_HOURS` | `24` | Hours of the GDELT GKG 15-minute news index kept in memory (0 = off). ~2.5 MB download per 15 min, ~50k headlines/day, ~60 MB RAM |
 | `NEWS_GDELT_API` | off | `1` = also query the GDELT DOC API (rate-limited; adds latency) |
+| `TRAFFIC_FILE` | `./data/traffic.json` | Where `/stats` counts are saved (every 10 min + on shutdown). `off` = memory only. Render free has no persistent disk, so counts reset on each deploy unless you mount a disk here |
 | `SOLANA_RPC_URLS` | Solana Foundation + PublicNode | Comma-separated Solana RPC URLs (first healthy one wins) |
 | `PUBLIC_URL` | Render URL | Used in discovery docs |
 | `DAILY_SPEND_CAP_USD` | `50` | Runaway guard on confirmed settlements per UTC day |
 | `GROK_API_KEY` or `OPENAI_API_KEY` | — | Optional: LLM synthesis over the cited sources; without it `/report` is extractive |
 
-Free routes: `/health`, `/llms.txt`, `/openapi.json`, `/.well-known/x402`, `/robots.txt`, `/icon.svg`.
+Free routes: `/health`, `/stats`, `/examples`, `/llms.txt`, `/openapi.json`, `/.well-known/x402`, `/robots.txt`, `/icon.svg`.
+
+## Interest tracker (`/stats`)
+
+Per paid route and per hour / UTC day: unpaid 402s, paid 200s, settle failures, rejected payments, uncharged
+errors and unique visitors, split by visitor class: `client` (anyone who sends a payment, or a non-bot user agent such
+as node, python, curl, a browser), `crawler` (CDP Bazaar, x402scan, 402index, other x402 directories), `pinger`
+(cron-job.org, UptimeRobot, ...), `bot` (search/AI crawlers, scanners, empty UA), `head` (HEAD/OPTIONS) and `self`
+(`scripts/rank-check.mjs`). Visitors are `sha256(random daily salt + IP + UA)`; raw IPs are never stored and the salt
+never leaves memory. `/health` carries a compact `traffic` block; `/stats` has today, yesterday, last 7 days, 48 hourly
+and 35 daily buckets, top user agents and definitions. Memory use is a few hundred KB.
 
 ## Discovery and ranking
 
@@ -71,8 +82,12 @@ Free routes: `/health`, `/llms.txt`, `/openapi.json`, `/.well-known/x402`, `/rob
   `resource.serviceName` / `tags` / `iconUrl` / `mimeType`, per the x402 Bazaar spec.
 - CDP Bazaar indexes a route after its first CDP-settled payment and refreshes ranking every ~6 h
   (30-day calls, unique payers, metadata quality, availability). Routes with no settlement for 30 days drop out.
-- `node scripts/rank-check.mjs` prints the recurring checklist (live status, Bazaar listing + rank per query,
-  CDP validate, on-chain sales, x402scan presence). A weekly GitHub Action runs it.
+- `node scripts/rank-check.mjs` prints the recurring checklist (live status, Bazaar listing + rank per query with and
+  without the Base filter, CDP validate, on-chain sales, `/stats` interest tracker, x402scan presence).
+- What moves Bazaar search order (CDP docs + observed rankings): relevance of `serviceName`, tags and description to
+  the query (hybrid text + semantic search), blended with 30-day unique buyers, settled calls, recency and metadata
+  completeness; recomputed about every 6 h; results are capped per domain; indexed metadata only refreshes after a new
+  CDP-settled payment.
 
 ## Guard rails
 

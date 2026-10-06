@@ -57,11 +57,19 @@ function termMatch(tok: string, term: string): boolean {
 
 type Query = { raw: string; core: string[]; aspect: string[]; intent: string[]; entities: string[]; cased: Record<string, string>; phrases: string[]; phrasesCased: string[]; siteKeys: string[]; kind: "define" | "cause" | "how" | "practice" | "history" | "compare" | "general"; keyword: string };
 
+// Words that describe the request ("summarize", "wikipedia summary of", "research ...") rather than the topic.
+const META = /\b(wikipedia|wiki|summar(?:y|ies|i[sz]e[sd]?|i[sz]ing)|overview(?: of)?|tl;?dr|(?:web |online |deep )?research(?:ing)?(?: (?:on|about|into))?|background(?: on)?|explain(?:er)?|tell me about|give me|introduction to|intro to|info(?:rmation)? (?:on|about)|quick facts?(?: about| on)?|in (?:a )?(?:few|short) (?:words|sentences))\b/gi;
+export function topicOf(q: string): string {
+  const t = q.replace(META, " ").replace(/\s+/g, " ").trim().replace(/^((a|an|the|of|on|about|into|for)\s+)+/i, "").trim();
+  return tokens(t).some((w) => !STOP.has(w)) ? t : q.trim();
+}
+
 export function parseQuery(q: string): Query {
   const raw = q.trim();
-  const words = raw.replace(/[?!.,;:()"]/g, " ").split(/\s+/).filter(Boolean);
+  const basis = topicOf(raw);
+  const words = basis.replace(/[?!.,;:()"]/g, " ").split(/\s+/).filter(Boolean);
   const core: string[] = [], intent: string[] = [];
-  for (const t of tokens(raw)) {
+  for (const t of tokens(basis)) {
     if (STOP.has(t)) continue;
     if (INTENT_WORDS.has(t)) { if (!intent.includes(t)) intent.push(t); continue; }
     if (!core.includes(t)) core.push(t);
@@ -81,7 +89,7 @@ export function parseQuery(q: string): Query {
     if (isCap) run.push(w); else flush();
   });
   flush();
-  const l = raw.toLowerCase();
+  const l = basis.toLowerCase();
   const kind: Query["kind"] =
     /\b(cause|causes|caused|why)\b/.test(l) ? "cause" :
     /\b(best practices?|tips|should i|recommend|guidelines?)\b/.test(l) ? "practice" :
@@ -161,6 +169,9 @@ function properNounRe(c: string): RegExp {
   const rest = [...c.slice(1)].map((ch) => (/[a-z]/i.test(ch) ? `[${ch.toLowerCase()}${ch.toUpperCase()}]` : esc(ch))).join("");
   return new RegExp(`(^|[^A-Za-z])${esc(c[0] ?? "")}${rest}(?![a-z])`, "g");
 }
+/** "Oregon City, Oregon" -> "Oregon City Oregon" so multi-word names match across punctuation. */
+const flatPunct = (s: string) => s.replace(/[,()\u2013\u2014:;]/g, " ").replace(/\s+/g, " ").trim();
+
 function relevance(q: Query, title: string, text: string): number {
   const tt = tokens(title);
   const bt = tokens(text.slice(0, 60_000));
@@ -178,7 +189,8 @@ function relevance(q: Query, title: string, text: string): number {
     for (const [, c] of casedEntries) if (!reFor(c).test(title) && (text.slice(0, 60_000).match(reFor(c)) ?? []).length < 2) return 0; // proper nouns must appear capitalised (Go the language, not "go")
   }
   const body60 = text.slice(0, 60_000);
-  for (const p of q.phrasesCased) if (!title.includes(p) && (body60.split(p).length - 1) < 3) return 0; // multi-word names: in title, or repeatedly in body (case-sensitive)
+  const titleN = flatPunct(title);
+  for (const p of q.phrasesCased) if (!titleN.includes(p) && (flatPunct(body60).split(p).length - 1) < 3) return 0; // multi-word names: in title, or repeatedly in body (case-sensitive)
   const bodyCov = inBody / n;
   if (bodyCov < (n >= 4 ? 0.5 : n === 3 ? 0.66 : 1)) return 0;
   // a page that only mentions the topic in passing is off-topic: need title coverage or repeated mentions
@@ -246,10 +258,10 @@ async function wikipedia(q: Query, lang: string, max: number): Promise<Doc[]> {
   }
   const docs = await Promise.all(pick.map(async (h): Promise<Doc | null> => {
     const title = String(h.title);
-    const d = await getJson<any>(`${base}/w/api.php?action=query&prop=extracts|info|pageprops&ppprop=wikibase_item&inprop=url&explaintext=1&exsectionformat=wiki&redirects=1&format=json&titles=${encodeURIComponent(title)}`, 7000);
+    const d = await getJson<any>(`${base}/w/api.php?action=query&prop=extracts|info|pageprops&ppprop=wikibase_item|disambiguation&inprop=url&explaintext=1&exsectionformat=wiki&redirects=1&format=json&titles=${encodeURIComponent(title)}`, 7000);
     const page: any = Object.values(d?.query?.pages ?? {})[0];
     const text: string = page?.extract ?? "";
-    if (!text || /may refer to:/.test(text.slice(0, 300))) return null;
+    if (!text || /may refer to:/.test(text.slice(0, 300)) || /\(disambiguation\)/i.test(String(page?.title ?? title)) || page?.pageprops?.disambiguation !== undefined) return null;
     const cut = text.split(/\n==\s*(See also|References|Notes|External links|Further reading|Bibliography|Sources)\s*==/)[0]!;
     const links: string[] = [];
     const qid = page?.pageprops?.wikibase_item;
@@ -458,7 +470,7 @@ function rankSentences(q: Query, docs: Doc[]): Cand[] {
     // must touch the asked-about aspect (e.g. "indexing", not just "Postgres"), or for pure-name queries the name itself
     const aspectHit = q.aspect.some((c) => t.some((w) => termMatch(w, c)) || !!SYN[c]?.test(x.s));
     if (q.aspect.length && !aspectHit && !(x.doc.type === "web_page" && x.doc.origin === "official-docs" && CUES[q.kind].test(x.s))) return;
-    if (!q.aspect.length && q.phrasesCased.length && !q.phrasesCased.some((p) => x.s.includes(p)) && !(q.phrasesCased.some((p) => x.doc.title.includes(p)) && CUES[q.kind].test(x.s))) return;
+    if (!q.aspect.length && q.phrasesCased.length && !q.phrasesCased.some((p) => flatPunct(x.s).includes(p)) && !(q.phrasesCased.some((p) => flatPunct(x.doc.title).includes(p)) && CUES[q.kind].test(x.s))) return;
     if (/:$|\bthe following\b|\bbelow\b|\babove\b/i.test(x.s)) return;
     if (q.kind === "compare" && !Object.values(q.cased).some((c) => properNounRe(c).test(x.s))) return;
     // pages not titled after the subject (comparisons, roundups) may only contribute sentences that name it
@@ -553,10 +565,31 @@ async function llmSynthesis(q: string, sources: Source[]): Promise<{ summary: st
 
 export type Depth = "quick" | "standard";
 
+/** Wikipedia page summary card (REST API): short description, lead extract, thumbnail. */
+async function wikiCard(lang: string, title: string) {
+  const j = await getJson<any>(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, "_"))}`, 4000);
+  if (!j || j.type === "disambiguation" || !j.extract) return null;
+  return {
+    title: String(j.title ?? title),
+    description: j.description ? String(j.description) : null,
+    extract: clip(String(j.extract), 700),
+    url: j.content_urls?.desktop?.page ?? `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`,
+    thumbnail: j.thumbnail?.source ?? null,
+    lastEdited: j.timestamp ?? null,
+    wikidataId: j.wikibase_item ?? null,
+  };
+}
+
+const briefCache = new Map<string, { at: number; value: any }>();
+const BRIEF_TTL = 15 * 60_000;
+
 export async function researchBrief(qRaw: string, opts: { lang?: string; depth?: Depth } = {}) {
   const started = Date.now();
   const lang = /^[a-z]{2,3}$/.test(opts.lang ?? "") ? opts.lang! : "en";
   const depth: Depth = opts.depth === "quick" ? "quick" : "standard";
+  const ck = `${lang}:${depth}:${qRaw.trim().toLowerCase()}`;
+  const hit = briefCache.get(ck);
+  if (hit && Date.now() - hit.at < BRIEF_TTL) return { ...hit.value, cached: true, latencyMs: Date.now() - started };
   const q = parseQuery(qRaw);
 
   // 1) discovery (parallel, each bounded)
@@ -602,6 +635,10 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
       for (const p of more) if (p && !docs.some((d) => d.url === p.url)) { score(p); if (p.relevance > 0) docs.push(p); }
     }
   }
+  // Other senses of an exactly-matched encyclopedia title ("Mount Hood" vs "Mount Hood (California)") are off-topic.
+  const baseT = (t: string) => t.replace(/\s*\(.*?\)\s*$/, "").toLowerCase();
+  const exactWiki = docs.find((d) => d.provider === "wikipedia" && !/\(.*\)$/.test(d.title) && flatPunct(d.title).toLowerCase() === flatPunct(topicOf(q.raw)).toLowerCase());
+  if (exactWiki) docs = docs.filter((d) => d === exactWiki || d.provider !== "wikipedia" || baseT(d.title) !== baseT(exactWiki.title));
   if (!docs.length) return null;
 
   // 3) rank sentences across sources and compose
@@ -625,20 +662,46 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
   let summary = comp.summaryParts.map(cite).join(" ");
   let bullets = comp.bulletParts.map(cite);
   let method = "extractive";
-  const llm = await llmSynthesis(q.raw, sources);
+  const wikiDoc = order.find((d) => d.provider === "wikipedia") ?? docs.find((d) => d.provider === "wikipedia" && d.relevance >= 0.6);
+  const [llm, wikiSummary] = await Promise.all([llmSynthesis(q.raw, sources), wikiDoc ? wikiCard(lang, wikiDoc.title).catch(() => null) : Promise.resolve(null)]);
   if (llm) { summary = llm.summary; bullets = llm.bullets; method = `llm-synthesis:${llm.model}`; }
+  else if (wikiSummary && wikiDoc && (q.kind === "general" || q.kind === "define") && wikiDoc.id > 0 && termCount(q, wikiSummary.title) / (q.core.length || 1) >= 0.99) {
+    // Overview questions ("Oregon City", "summarize photosynthesis"): the encyclopedia lead is the best summary;
+    // keep the ranked sentences as bullets, minus any that repeat the lead.
+    const lead = splitSentences(wikiSummary.extract).map((x) => x.s).filter(goodSentence).slice(0, 3);
+    if (lead.length >= 2) {
+      summary = lead.map((x) => `${x} [${wikiDoc.id}]`).join(" ");
+      const extra = comp.summaryParts.filter((c) => c.doc !== wikiDoc && !lead.some((l) => jacc(l, c.s) > 0.45)).map(cite);
+      bullets = [...extra, ...bullets.filter((b) => !lead.some((l) => jacc(l, b) > 0.45))].slice(0, 6);
+      method = "extractive (Wikipedia lead + ranked sentences)";
+    }
+  }
   const providers = [...new Set(order.map((d) => d.origin))];
-  return {
+  const cited = new Set([...comp.summaryParts, ...comp.bulletParts].map((c) => c.doc));
+  const confidence = cited.size >= 3 && providers.length >= 2 ? "high" : cited.size >= 2 || method.includes("Wikipedia lead") ? "medium" : "low";
+  const topic = topicOf(q.raw);
+  const top = sources.find((x) => x.type !== "encyclopedia") ?? sources[0];
+  const value = {
     query: q.raw,
+    topic,
     summary,
     bullets,
     sources,
     sourceCount: sources.length,
     providers,
+    confidence,
+    confidenceBasis: `${cited.size} cited source(s) from ${providers.length} provider(s)`,
+    wikipedia: wikiSummary,
+    next: [
+      ...(top ? [{ endpoint: "/read", call: `/read?url=${encodeURIComponent(top.url)}`, why: "full text of the top source as markdown" }] : []),
+      { endpoint: "/news", call: `/news?q=${encodeURIComponent(topic.slice(0, 120))}`, why: "what happened on this topic in the last 72 hours" },
+    ],
     method,
     depth,
     lang,
-    latencyMs: Date.now() - started,
     generatedAt: new Date().toISOString(),
   };
+  briefCache.set(ck, { at: Date.now(), value });
+  if (briefCache.size > 300) briefCache.delete(briefCache.keys().next().value!);
+  return { ...value, cached: false, latencyMs: Date.now() - started };
 }

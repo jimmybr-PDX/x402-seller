@@ -9,13 +9,14 @@ const PAY_TO = process.env.PAY_TO ?? "0x079471E6F43b6feeF80895E19cBFcBB496904852
 const ORIGIN = (process.env.ORIGIN ?? "https://x402-seller-pmlm.onrender.com").replace(/\/$/, "");
 const HOST = new URL(ORIGIN).host;
 const QUERIES = (process.env.QUERIES ??
-  "research brief|research brief with citations|answer a question with sources|web research|summarize a topic|wikipedia summary|read web page as markdown|url to markdown|web page to markdown|scrape article text|x402 endpoint check|validate x402 endpoint|news search|news headlines|token price|crypto price|solana token price|sol price|wallet balance|token balances|transaction receipt|decode transaction|gas price|gas fees"
+  "research brief|research brief with citations|answer a question with sources|web research|summarize a topic|wikipedia summary|x402 bazaar ranking|read web page as markdown|url to markdown|web page to markdown|scrape article text|x402 endpoint check|validate x402 endpoint|news search|news headlines|token price|crypto price|solana token price|sol price|wallet balance|token balances|transaction receipt|decode transaction|gas price|gas fees|ethereum gas|erc20 balance|tx status|latest news|crypto token price"
 ).split("|");
 const CDP = "https://api.cdp.coinbase.com/platform/v2/x402/discovery";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const UA = { "user-agent": "x402-seller-rankcheck/2 (self; excluded from /stats client counts)" };
 const j = async (u, init) => {
   try {
-    const r = await fetch(u, { ...init, signal: AbortSignal.timeout(20000) });
+    const r = await fetch(u, { ...init, headers: { ...UA, ...(init?.headers ?? {}) }, signal: AbortSignal.timeout(20000) });
     return { status: r.status, ms: 0, body: await r.json().catch(() => null) };
   } catch (e) {
     return { status: 0, body: null, error: String(e) };
@@ -30,7 +31,7 @@ for (const p of ["/health", "/llms.txt", "/openapi.json", "/.well-known/x402", "
   let status = 0;
   let hasChallenge = false;
   try {
-    const r = await fetch(ORIGIN + p, { signal: AbortSignal.timeout(90000) });
+    const r = await fetch(ORIGIN + p, { headers: UA, signal: AbortSignal.timeout(90000) });
     status = r.status;
     hasChallenge = !!r.headers.get("payment-required");
   } catch {}
@@ -53,12 +54,18 @@ out.bazaarListings = (m.body?.resources ?? []).map((r) => ({
 // 3. CDP Bazaar search rank per query (top 20; null = not in top 20)
 out.searchRank = [];
 for (const q of QUERIES) {
-  const s = await j(`${CDP}/search?limit=20&network=eip155:8453&query=${encodeURIComponent(q)}`);
+  const [s, sa] = await Promise.all([
+    j(`${CDP}/search?limit=20&network=eip155:8453&query=${encodeURIComponent(q)}`),
+    j(`${CDP}/search?limit=20&query=${encodeURIComponent(q)}`),
+  ]);
   const rs = s.body?.resources ?? [];
   const idx = rs.findIndex((r) => String(r.resource).includes(HOST));
+  const ia = (sa.body?.resources ?? []).findIndex((r) => String(r.resource).includes(HOST));
   out.searchRank.push({
     query: q,
     rank: idx >= 0 ? idx + 1 : null,
+    rankAnyNetwork: ia >= 0 ? ia + 1 : null,
+    ourRoute: idx >= 0 ? new URL(rs[idx].resource).pathname : null,
     results: rs.length,
     leader: rs[0] ? { resource: rs[0].resource, calls30d: rs[0].quality?.l30DaysTotalCalls ?? null, priceUsd: Number(rs[0].accepts?.[0]?.amount ?? 0) / 1e6 } : null,
   });
@@ -91,7 +98,28 @@ out.onchain = {
   note: "first page only (50 most recent transfers)",
 };
 
-// 6. x402scan presence (public page; 200 + host mention = listed)
+// 6. Our own interest tracker (/stats): real clients vs crawlers/bots per paid route
+{
+  const st = await j(`${ORIGIN}/stats`);
+  const b = st.body;
+  out.traffic = b
+    ? {
+        since: b.since,
+        persistence: b.persistence?.mode,
+        last24h: b.last24h?.totals,
+        yesterday: b.yesterday?.totals,
+        last7d: b.last7d?.totals,
+        routes24h: Object.fromEntries(
+          Object.entries(b.last24h?.routes ?? {})
+            .filter(([, v]) => v.unpaid402)
+            .map(([k, v]) => [k, { client402: v.unpaid402.client, automated402: v.unpaid402.automated, paid200: v.paid200, settleFailed: v.settleFailed, clientVisitors: v.visitors.client }]),
+        ),
+        topAgentsToday: (b.topAgentsToday ?? []).slice(0, 8),
+      }
+    : { error: `stats unavailable (HTTP ${st.status})` };
+}
+
+// 7. x402scan presence (public page; 200 + host mention = listed)
 try {
   const X402SCAN_ID = process.env.X402SCAN_ORIGIN_ID ?? "732c6ca1-b936-460c-984a-09368d91ac8d";
   const r = await fetch(`https://www.x402scan.com/server/${X402SCAN_ID}`, { signal: AbortSignal.timeout(20000) });
@@ -108,9 +136,23 @@ if (process.argv.includes("--json")) {
   console.log("\n## Live"); for (const l of out.live) console.log(`- ${l.path}: ${l.status} in ${l.ms} ms${l.hasChallenge === false ? " (NO PAYMENT-REQUIRED header!)" : ""}`);
   console.log("\n## Bazaar listings (payTo)"); for (const b of out.bazaarListings) console.log(`- ${b.resource}: ${b.calls30d} calls / ${b.payers30d} payers (30d), last call ${b.lastCalledAt}, name=${b.serviceName ?? "-"} tags=${(b.tags ?? []).join(",") || "-"}`);
   if (!out.bazaarListings.length) console.log("- none (endpoints need a CDP-settled payment to be indexed; dropped after 30 days without one)");
-  console.log("\n## Bazaar search rank (top 20, Base)"); for (const s of out.searchRank) console.log(`- "${s.query}": ${s.rank ?? "not in top 20"}  | #1 = ${s.leader?.resource ?? "-"} (${s.leader?.calls30d ?? "?"} calls, $${s.leader?.priceUsd ?? "?"})`);
+  console.log("\n## Bazaar search rank (top 20; Base filter / any network)"); for (const s of out.searchRank) console.log(`- "${s.query}": ${s.rank ?? "-"} / ${s.rankAnyNetwork ?? "-"}${s.ourRoute ? ` (${s.ourRoute})` : ""}  | #1 = ${s.leader?.resource ?? "-"} (${s.leader?.calls30d ?? "?"} calls, $${s.leader?.priceUsd ?? "?"})`);
+  const top = out.searchRank.filter((s) => s.rank === 1).length, top3 = out.searchRank.filter((s) => s.rank && s.rank <= 3).length, top20 = out.searchRank.filter((s) => s.rank).length;
+  console.log(`  summary (Base filter): #1 for ${top}, top-3 for ${top3}, top-20 for ${top20} of ${out.searchRank.length} queries`);
   console.log("\n## CDP validate"); for (const v of out.validate) console.log(`- ${v.path}: valid=${v.valid} sim=${v.simulation} indexed=${v.indexActive} lastCrawled=${v.lastCrawledAt} failed=[${v.failed.join(",")}]`);
   console.log(`\n## On-chain (Base USDC in, outside buyers only)\n- last 30d: ${out.onchain.last30dPayments} payments, $${out.onchain.last30dUsd}, ${out.onchain.last30dUniquePayers} unique payers`);
   for (const t of out.onchain.latest) console.log(`  - ${t.at} ${t.from} $${t.usd} ${t.tx}`);
+  const t = out.traffic;
+  console.log("\n## Interest tracker (/stats; resets on deploy unless a disk is mounted)");
+  if (t.error) console.log(`- ${t.error}`);
+  else {
+    const f = (x) => (x ? `client 402s ${x.unpaid402Client}, automated 402s ${x.unpaid402Automated}, paid ${x.paid200}, settle failed ${x.settleFailed}, client visitors ${x.clientVisitors}` : "-");
+    console.log(`- tracking since ${t.since} (${t.persistence})`);
+    console.log(`- last 24h: ${f(t.last24h)}`);
+    console.log(`- yesterday (UTC): ${f(t.yesterday)}`);
+    console.log(`- last 7d: ${f(t.last7d)}`);
+    for (const [k, v] of Object.entries(t.routes24h)) console.log(`  - ${k}: client402=${v.client402} automated402=${v.automated402} paid=${v.paid200} visitors=${v.clientVisitors}`);
+    console.log(`- top agents today: ${t.topAgentsToday.map((a) => `${a.class}:${a.agent}=${a.requests}`).join(", ")}`);
+  }
   console.log(`\n## x402scan\n- ${out.x402scan.url ?? ""} -> listed=${out.x402scan.listed ?? "?"} (${out.x402scan.status ?? out.x402scan.error})`);
 }

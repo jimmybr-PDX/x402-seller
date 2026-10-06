@@ -9,3 +9,4 @@ dist/
 .buyer.json
 .github-pat
 .github-user
+data/
