@@ -56,6 +56,12 @@ const FEEDS: { name: string; url: string }[] = [
   { name: "Decrypt", url: "https://decrypt.co/feed" },
   { name: "The Block", url: "https://www.theblock.co/rss.xml" },
   { name: "ScienceDaily", url: "https://www.sciencedaily.com/rss/all.xml" },
+  // More crypto/markets depth: the 1-7 day window beyond the 24 h GDELT index relies on feeds
+  { name: "CoinDesk", url: "https://www.coindesk.com/arc/outboundfeeds/rss" },
+  { name: "The Defiant", url: "https://thedefiant.io/api/feed" },
+  { name: "CryptoSlate", url: "https://cryptoslate.com/feed/" },
+  { name: "Bitcoin Magazine", url: "https://bitcoinmagazine.com/feed" },
+  { name: "Bloomberg Markets", url: "https://www.bloomberg.com/feeds/markets/news.rss" },
 ];
 
 const RSS_TTL_MS = 10 * 60 * 1000;

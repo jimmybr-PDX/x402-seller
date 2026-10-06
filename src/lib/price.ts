@@ -286,6 +286,7 @@ export async function tokenPrice(tokenRaw: string, chainRaw?: string) {
     k = (chainIn as ChainKey) ?? "ethereum";
   } else {
     const sym = t.toUpperCase().replace(/^\$/, "");
+    if (/^0x/i.test(t)) throw new PriceInputError(`invalid_address: ${t.slice(0, 44)} is not a valid ERC-20 address (0x followed by 40 hex characters)`);
     if (!/^[A-Z0-9.]{1,12}$/.test(sym)) throw new PriceInputError("token must be a symbol (e.g. ETH) or an ERC-20 address");
     const m = SYMBOLS[sym];
     if (!m) {
@@ -295,7 +296,17 @@ export async function tokenPrice(tokenRaw: string, chainRaw?: string) {
     address = getAddress(m.address.toLowerCase());
     k = m.chain;
     note = m.note;
-    if (chainIn && chainIn !== m.chain) throw new PriceInputError(`symbol ${sym} is priced on ${m.chain}; pass an address to price it on ${chainIn}`);
+    if (chainIn && chainIn !== m.chain) {
+      // Same asset on the requested chain when we know its canonical contract there; otherwise price it on its
+      // home chain (same asset, same USD price) and say so instead of failing.
+      const cfg = CHAINS[chainIn as ChainKey];
+      const local: Record<string, Address | undefined> = { ETH: cfg.weth, WETH: cfg.weth, USDC: cfg.usdc, USDT: cfg.usdt, ...(chainIn === "polygon" ? { POL: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270" as Address } : {}) };
+      if (local[sym]) {
+        address = getAddress(local[sym]!);
+        k = chainIn as ChainKey;
+        note = sym === "ETH" ? "priced as WETH" : sym === "POL" ? "priced as WPOL (wrapped POL)" : note;
+      } else note = `${sym} is priced on ${m.chain} (its deepest Uniswap v3 liquidity); pass the ${chainIn} contract address to price that chain's token`;
+    }
   }
   const key = `${k}:${address.toLowerCase()}`;
   const hit = cache.get(key);

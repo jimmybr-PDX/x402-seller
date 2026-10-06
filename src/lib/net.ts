@@ -29,23 +29,23 @@ export async function assertPublicHttps(raw: string): Promise<URL> {
   try {
     u = new URL(raw);
   } catch {
-    throw new InputError("invalid_url");
+    throw new InputError("invalid_url: pass a full public URL such as https://example.com/page");
   }
-  if (u.protocol !== "https:") throw new InputError("https_only");
-  if (u.username || u.password) throw new InputError("no_credentials_in_url");
-  if (u.port && u.port !== "443") throw new InputError("port_443_only");
+  if (u.protocol !== "https:") throw new InputError("https_only: the url must start with https:// (plain http is not fetched)");
+  if (u.username || u.password) throw new InputError("no_credentials_in_url: remove user:password@ from the url");
+  if (u.port && u.port !== "443") throw new InputError("port_443_only: only the default https port is allowed");
   const host = u.hostname.replace(/^\[|\]$/g, "");
   if (net.isIP(host)) {
-    if (isPrivateIp(host)) throw new InputError("non_public_host");
+    if (isPrivateIp(host)) throw new InputError("non_public_host: localhost, private and internal addresses are not allowed");
     return u;
   }
   let addrs: { address: string }[];
   try {
     addrs = await dns.lookup(host, { all: true });
   } catch {
-    throw new InputError("dns_lookup_failed");
+    throw new InputError("dns_lookup_failed: that host name does not resolve; check the domain spelling");
   }
-  if (!addrs.length || addrs.some((a) => isPrivateIp(a.address))) throw new InputError("non_public_host");
+  if (!addrs.length || addrs.some((a) => isPrivateIp(a.address))) throw new InputError("non_public_host: localhost, private and internal addresses are not allowed");
   return u;
 }
 
@@ -89,7 +89,7 @@ export async function safeFetch(
     const body = Buffer.concat(chunks).toString("utf8");
     return { url: u.toString(), status: res.status, headers: res.headers, body, truncated, ms: Date.now() - started };
   }
-  throw new InputError("too_many_redirects");
+  throw new InputError("too_many_redirects: the url redirected more than 3 times");
 }
 
 /** Small JSON GET for trusted public APIs (no SSRF concern: fixed hosts). */

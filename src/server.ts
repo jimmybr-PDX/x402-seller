@@ -1215,13 +1215,14 @@ async function main() {
     try {
       const out = await readPage(url, maxChars);
       if ("error" in out) {
-        res.status(422).json({ ...out, message: "Page could not be read. You were not charged." });
+        res.status(422).json({ ...out, message: `${(out as any).message ?? "Page could not be read"}. You were not charged.` });
         return;
       }
       res.json(out);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      res.status(err instanceof InputError ? 400 : 422).json({ error: "read_failed", message: `${msg}. You were not charged.` });
+      if (err instanceof InputError) res.status(400).json({ error: "bad_input", message: `${msg}. You were not charged.` });
+      else res.status(422).json({ error: "read_failed", message: `Could not fetch the page (${/timeout|abort/i.test(msg) ? "timed out after 12 s" : msg}); retry or try another URL. You were not charged.` });
     }
   });
 
@@ -1237,7 +1238,7 @@ async function main() {
       res.json(await checkX402Endpoint(target, method));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      res.status(err instanceof InputError ? 400 : 422).json({ error: "check_failed", message: `${msg}. You were not charged.` });
+      res.status(err instanceof InputError ? 400 : 422).json({ error: err instanceof InputError ? "bad_input" : "check_failed", message: `${msg}. You were not charged.` });
     }
   });
 

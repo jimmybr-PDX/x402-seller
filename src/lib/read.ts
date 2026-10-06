@@ -46,11 +46,14 @@ export function htmlToMarkdown(html: string, baseUrl: string) {
     .replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (_m, t) => `\n\n\`\`\`\n${t.replace(/<[^>]+>/g, "")}\n\`\`\`\n\n`)
     .replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, (_m, t) => `\`${t.replace(/<[^>]+>/g, "")}\``)
     .replace(/<a\b[^>]*href=["']([^"'#][^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi, (_m, h, t) => {
-      const text = t.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+      const inner = t.replace(/<[^>]+>/g, "");
+      const text = inner.replace(/\s+/g, " ").trim();
+      // keep whitespace that sat inside the link (`in<a> prices</a>` must not become "inprices")
+      const pre = /^\s/.test(inner) ? " " : "", post = /\s$/.test(inner) ? " " : "";
       const u = abs(h);
-      if (!u || !text || !/^https?:/.test(u)) return text;
+      if (!u || !text || !/^https?:/.test(u)) return pre + text + post;
       if (links.length < 200) links.push({ text: decode(text), url: u });
-      return `[${text}](${u})`;
+      return `${pre}[${text}](${u})${post}`;
     })
     .replace(/<li[^>]*>/gi, "\n- ")
     .replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, "**$2**")
@@ -74,11 +77,12 @@ export function htmlToMarkdown(html: string, baseUrl: string) {
 export async function readPage(target: string, maxChars: number) {
   const r = await safeFetch(target, { timeoutMs: 12_000, maxBytes: 3_000_000, accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5" });
   const ctype = r.headers.get("content-type") ?? "";
-  if (r.status >= 400) return { error: "upstream_status", status: r.status } as const;
+  if (r.status >= 400)
+    return { error: "upstream_status", status: r.status, message: `The page answered HTTP ${r.status}${r.status === 403 || r.status === 429 ? " (the site blocks automated readers or is rate limiting)" : r.status === 404 ? " (not found; check the URL)" : ""}` } as const;
   let out;
   if (/html|xml/i.test(ctype) || /^\s*</.test(r.body)) out = htmlToMarkdown(r.body, r.url);
   else if (/text\/|json/i.test(ctype)) out = { title: null, description: null, lang: null, published: null, markdown: r.body.trim(), headings: [], links: [] };
-  else return { error: "unsupported_content_type", contentType: ctype } as const;
+  else return { error: "unsupported_content_type", contentType: ctype, message: `Only HTML or text pages can be read; this URL returned ${ctype.split(";")[0] || "an unknown content type"}${/pdf/i.test(ctype) ? " (PDFs are not supported)" : ""}` } as const;
   const full = out.markdown;
   const markdown = full.length > maxChars ? full.slice(0, maxChars) : full;
   return {
