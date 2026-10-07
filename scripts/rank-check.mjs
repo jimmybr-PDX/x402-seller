@@ -81,22 +81,82 @@ for (const path of ["/report", "/read", "/check", "/news", "/price", "/solana-pr
   (out.validate ??= []).push({ path, valid: v.body?.valid ?? null, simulation: v.body?.simulation?.outcome ?? null, indexActive: v.body?.index?.active ?? null, lastCrawledAt: v.body?.index?.lastCrawledAt ?? null, failed: (v.body?.preflight ?? []).filter((c) => !c.passed).map((c) => c.check) });
 }
 
-// 5. On-chain USDC received (Base, Blockscout)
-const bs = await j(`https://base.blockscout.com/api/v2/addresses/${PAY_TO}/token-transfers?type=ERC-20&filter=to&token=${USDC}`);
-// Exclude our own test buyer and non-sale transfers (funding top-ups > $1).
+// 5. On-chain USDC received. Blockscout first; if it fails (it started returning non-JSON on 2026-10-07 and
+// silently reported 0 sales), fall back to direct Base RPC logs for the last LOOKBACK_H hours. A failed
+// source is reported as unknown, never as 0. Solana USDC account is checked too.
 const OWN = (process.env.OWN_ADDRS ?? "0x4862dac2c03fAA8B36A23D176932945193B04940").toLowerCase().split(",");
-const items = (bs.body?.items ?? []).filter(
-  (t) => t.to?.hash?.toLowerCase() === PAY_TO.toLowerCase() && !OWN.includes(t.from?.hash?.toLowerCase()) && Number(t.total.value) / 1e6 <= 1,
-);
-const since = Date.now() - 30 * 864e5;
-const last30 = items.filter((t) => Date.parse(t.timestamp) >= since);
-out.onchain = {
-  last30dPayments: last30.length,
-  last30dUsd: Math.round(last30.reduce((a, t) => a + Number(t.total.value) / 1e6, 0) * 1e6) / 1e6,
-  last30dUniquePayers: new Set(last30.map((t) => t.from.hash.toLowerCase())).size,
-  latest: items.slice(0, 5).map((t) => ({ at: t.timestamp, from: t.from.hash, usd: Number(t.total.value) / 1e6, tx: t.transaction_hash })),
-  note: "first page only (50 most recent transfers)",
+const LOOKBACK_H = Number(process.env.LOOKBACK_H ?? 48);
+const isSale = (from, usd) => !OWN.includes(String(from).toLowerCase()) && usd <= 1; // top-ups > $1 are not sales
+const rpc = async (url, method, params, tries = 3) => {
+  for (let i = 1; ; i++) {
+    try {
+      const r = await fetch(url, { method: "POST", headers: { ...UA, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: AbortSignal.timeout(20000) });
+      const b = await r.json();
+      if (b.error) throw new Error(JSON.stringify(b.error).slice(0, 160));
+      return b.result;
+    } catch (e) {
+      if (i >= tries || !/rate|429|too many|timeout|fetch failed|Unexpected token/i.test(String(e.message ?? e))) throw e;
+      await new Promise((ok) => setTimeout(ok, 1500 * i)); // back off on rate limits / flaky responses
+    }
+  }
 };
+out.onchain = { source: null, error: null, windowH: null, sales: [] };
+const bs = await j(`https://base.blockscout.com/api/v2/addresses/${PAY_TO}/token-transfers?type=ERC-20&filter=to&token=${USDC}`);
+if (Array.isArray(bs.body?.items)) {
+  out.onchain.source = "blockscout (50 most recent transfers)";
+  out.onchain.windowH = 30 * 24;
+  const since = Date.now() - 30 * 864e5;
+  out.onchain.sales = bs.body.items
+    .filter((t) => t.to?.hash?.toLowerCase() === PAY_TO.toLowerCase() && Date.parse(t.timestamp) >= since)
+    .map((t) => ({ at: t.timestamp, from: t.from.hash, usd: Number(t.total.value) / 1e6, tx: t.transaction_hash }))
+    .filter((t) => isSale(t.from, t.usd));
+} else {
+  const RPCS = (process.env.BASE_RPCS ?? "https://developer-access-mainnet.base.org|https://base-rpc.publicnode.com|https://mainnet.base.org").split("|");
+  const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+  const toTopic = "0x" + PAY_TO.slice(2).toLowerCase().padStart(64, "0");
+  for (const url of RPCS) {
+    try {
+      const latest = parseInt(await rpc(url, "eth_blockNumber", []), 16);
+      const startBlock = latest - Math.round((LOOKBACK_H * 3600) / 2); // Base: 2 s blocks
+      const logs = [];
+      for (let b = startBlock; b <= latest; b += 500) {
+        const e = Math.min(b + 499, latest);
+        logs.push(...(await rpc(url, "eth_getLogs", [{ address: USDC, fromBlock: "0x" + b.toString(16), toBlock: "0x" + e.toString(16), topics: [TRANSFER, null, toTopic] }])));
+      }
+      const sales = [];
+      for (const l of logs) {
+        const from = "0x" + l.topics[1].slice(-40);
+        const usd = parseInt(l.data, 16) / 1e6;
+        if (!isSale(from, usd)) continue;
+        const blk = await rpc(url, "eth_getBlockByNumber", [l.blockNumber, false]);
+        sales.push({ at: new Date(parseInt(blk.timestamp, 16) * 1000).toISOString(), from, usd, tx: l.transactionHash });
+      }
+      out.onchain = { source: `base rpc ${new URL(url).host} (blockscout unavailable)`, error: null, windowH: LOOKBACK_H, sales: sales.reverse() };
+      break;
+    } catch (e) {
+      out.onchain.error = `${out.onchain.error ? out.onchain.error + "; " : `blockscout status ${bs.status}; `}${new URL(url).host}: ${String(e.message ?? e).slice(0, 120)}`;
+    }
+  }
+}
+// Solana: USDC token account activity in the window (balance change per tx; positive = money in)
+const SOL_RPC = process.env.SOL_RPC ?? "https://api.mainnet-beta.solana.com";
+const SOL_USDC_ATA = process.env.SOL_USDC_ATA ?? "2Ra4aQkTs3fYZrS8bafnT6LsExhaDbtqai4keRacTbYs";
+out.solana = { ata: SOL_USDC_ATA, balance: null, inflows: [], error: null };
+try {
+  out.solana.balance = (await rpc(SOL_RPC, "getTokenAccountBalance", [SOL_USDC_ATA])).value.uiAmount;
+  const sigs = await rpc(SOL_RPC, "getSignaturesForAddress", [SOL_USDC_ATA, { limit: 20 }]);
+  const cutoff = Date.now() / 1000 - LOOKBACK_H * 3600;
+  for (const s of sigs.filter((x) => x.blockTime >= cutoff && !x.err)) {
+    const tx = await rpc(SOL_RPC, "getTransaction", [s.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]);
+    const keys = tx.transaction.message.accountKeys.map((k) => k.pubkey ?? k);
+    const idx = keys.indexOf(SOL_USDC_ATA);
+    const amt = (arr) => Number(arr?.find((b) => b.accountIndex === idx)?.uiTokenAmount?.uiAmount ?? 0);
+    const delta = Math.round((amt(tx.meta.postTokenBalances) - amt(tx.meta.preTokenBalances)) * 1e6) / 1e6;
+    if (delta > 0) out.solana.inflows.push({ at: new Date(s.blockTime * 1000).toISOString(), usd: delta, sig: s.signature, saleSized: delta <= 1 });
+  }
+} catch (e) {
+  out.solana.error = String(e.message ?? e).slice(0, 160);
+}
 
 // 6. Our own interest tracker (/stats): real clients vs crawlers/bots per paid route
 {
@@ -140,8 +200,19 @@ if (process.argv.includes("--json")) {
   const top = out.searchRank.filter((s) => s.rank === 1).length, top3 = out.searchRank.filter((s) => s.rank && s.rank <= 3).length, top20 = out.searchRank.filter((s) => s.rank).length;
   console.log(`  summary (Base filter): #1 for ${top}, top-3 for ${top3}, top-20 for ${top20} of ${out.searchRank.length} queries`);
   console.log("\n## CDP validate"); for (const v of out.validate) console.log(`- ${v.path}: valid=${v.valid} sim=${v.simulation} indexed=${v.indexActive} lastCrawled=${v.lastCrawledAt} failed=[${v.failed.join(",")}]`);
-  console.log(`\n## On-chain (Base USDC in, outside buyers only)\n- last 30d: ${out.onchain.last30dPayments} payments, $${out.onchain.last30dUsd}, ${out.onchain.last30dUniquePayers} unique payers`);
-  for (const t of out.onchain.latest) console.log(`  - ${t.at} ${t.from} $${t.usd} ${t.tx}`);
+  const oc = out.onchain;
+  console.log(`\n## On-chain sales (USDC in, outside buyers only)`);
+  if (!oc.source) console.log(`- Base: UNKNOWN, every source failed (${oc.error}); do not read this as zero sales`);
+  else {
+    console.log(`- Base, last ${oc.windowH}h via ${oc.source}: ${oc.sales.length} payments, $${Math.round(oc.sales.reduce((a, t) => a + t.usd, 0) * 1e6) / 1e6}, ${new Set(oc.sales.map((t) => t.from.toLowerCase())).size} unique payers`);
+    for (const t of oc.sales.slice(0, 10)) console.log(`  - ${t.at} ${t.from} $${t.usd} ${t.tx}`);
+  }
+  const so = out.solana;
+  if (so.error) console.log(`- Solana: UNKNOWN (${so.error})`);
+  else {
+    console.log(`- Solana USDC balance ${so.balance}; money in, last ${LOOKBACK_H}h: ${so.inflows.length}`);
+    for (const t of so.inflows) console.log(`  - ${t.at} +$${t.usd}${t.saleSized ? "" : " (over $1, likely a top-up)"} ${t.sig}`);
+  }
   const t = out.traffic;
   console.log("\n## Interest tracker (/stats; resets on deploy unless a disk is mounted)");
   if (t.error) console.log(`- ${t.error}`);
