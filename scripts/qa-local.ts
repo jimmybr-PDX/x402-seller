@@ -2,7 +2,7 @@
  * Local quality check for every paid tool (no payments, no server): calls the same library functions the
  * paid handlers call, maps results to the HTTP status the buyer would get (400 input / 422 nothing found /
  * 503 upstream), and records latency + output. Usage:
- *   npx tsx scripts/qa-local.ts [tool ...]      # tools: report read check news price solana balance tx gas
+ *   npx tsx scripts/qa-local.ts [tool ...]      # tools: report read check news search price solana balance tx gas
  * Writes full outputs to $QA_OUT (default ./qa-out). Free: only public RPC / public APIs are called.
  */
 import fs from "node:fs";
@@ -11,6 +11,7 @@ import { researchBrief } from "../src/lib/research.js";
 import { readPage } from "../src/lib/read.js";
 import { checkX402Endpoint } from "../src/lib/check.js";
 import { newsSearch, warmNews } from "../src/lib/news.js";
+import { webSearch } from "../src/lib/search.js";
 import { PriceInputError, tokenPrice } from "../src/lib/price.js";
 import { SolanaInputError, solanaTokenPrice } from "../src/lib/solana.js";
 import { WalletInputError, walletBalances } from "../src/lib/wallet.js";
@@ -44,6 +45,7 @@ for (const q of (process.env.QA_REPORT_QS ?? "What causes inflation?|Why is the 
 for (const u of ["https://en.wikipedia.org/wiki/HTTP_402", "https://www.coinbase.com/developer-platform/products/x402", "https://docs.cdp.coinbase.com/x402/welcome", "http://example.com", "https://localhost/", "https://no-such-host-x402qa.invalid/", "not a url", "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"]) add("read", u, () => readPage(u, 20000));
 for (const u of ["https://x402-seller-pmlm.onrender.com/report", "https://api.anchor-x402.com/v1/price/token", "https://example.com", "http://example.com/x", "nope"]) add("check", u, () => checkX402Endpoint(u, "GET"));
 for (const [q, o] of [["bitcoin ETF", {}], ["Federal Reserve interest rates", {}], ["OpenAI", { hours: 24, limit: 5 }], ["the and of", {}], ["zzqxv flormp", {}], ["solana", { hours: 9999, limit: 0 }]] as const) add("news", `${q} ${JSON.stringify(o)}`, () => newsSearch(q, o as any));
+for (const [q, n] of [["latest news Federal Reserve rate decision", 5], ["how to fix CORS error in express", 5], ["plumber near Beaverton OR", 5], ["iPhone 17 Pro review", 5], ["define ephemeral", 3], ["x402 protocol coinbase", 10], ["Rust vs Go performance 2026", 5], ["zzqxv flormp wkjhq", 5], ["x", 5]] as const) add("search", `${q} n=${n}`, () => webSearch(q, n));
 for (const [t, c] of [["ETH", undefined], ["BTC", undefined], ["PEPE", undefined], ["USDC", undefined], ["0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed", "base"], ["ARB", "arbitrum"], ["POL", "polygon"], ["SOL", undefined], ["FOOBARCOIN", undefined], ["0x1234", undefined], ["ETH", "dogechain"]] as const) add("price", `${t} ${c ?? ""}`, () => tokenPrice(t, c));
 for (const t of ["SOL", "JUP", "BONK", "WIF", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "NOTATOKEN", "1111111111111111111111111111111111"]) add("solana", t, () => solanaTokenPrice(t));
 for (const [a, c] of [["vitalik.eth", undefined], ["0x079471E6F43b6feeF80895E19cBFcBB496904852", "base"], ["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "polygon"], ["787RZwDGpjmRsG5wgnyBeWQHBuARax8Qo6P7dmDuqKeW", undefined], ["0x1234", undefined], ["thisnamedoesnotexist-qa-x402.eth", undefined], ["vitalik.eth", "avalanche"]] as const) add("balance", `${a} ${c ?? ""}`, () => walletBalances(a, { chain: c }));
@@ -66,6 +68,7 @@ const summarize = (tool: string, o: any): string => {
     case "read": return `${o.title} | words=${o.wordCount} | md=${String(o.markdown).slice(0, 160).replace(/\n/g, " ")}`;
     case "check": return `score=${o.score} grade=${o.grade} ${o.passed}/${o.total} fixes=${(o.fixes ?? []).length}: ${(o.fixes ?? []).slice(0, 3).join(" | ").slice(0, 300)}`;
     case "news": return `count=${o.count} hours=${o.hours} | ${(o.articles ?? []).slice(0, 3).map((a: any) => `${a.title} (${a.source}, ${a.publishedAt})`).join(" | ")}`;
+    case "search": return `[${o.source}] ${o.count} results, ${o.pages_loaded} pages | ${(o.results ?? []).slice(0, 3).map((r: any) => `${r.title} (${r.domain})`).join(" | ")}`;
     case "price": case "solana": return `${o.token?.symbol} ${o.token?.chain} $${o.priceUsd} conf=${o.confidence} 24h=${o.change24hPct} pools=${o.pools?.length} depth=${o.totalDepthUsd} ${o.note ?? ""}`;
     case "balance": return `total=$${o.totalUsd} ${(o.chains ?? []).map((c: any) => `${c.chain}:${c.native?.symbol}=${c.native?.balance} tok=${c.tokens?.length} $${c.totalUsd}${c.error ? " ERR " + c.error : ""}`).join("; ")}`;
     case "tx": return `${o.chain} ${o.status} ${o.method?.name ?? ""} fee=${JSON.stringify(o.fee ?? null).slice(0, 100)} transfers=${(o.tokenTransfers ?? o.tokenChanges ?? []).length}`;

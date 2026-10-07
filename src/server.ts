@@ -11,6 +11,7 @@
  *   GET /solana-price?token=  Solana token price by symbol or mint (Orca, Raydium CLMM, PumpSwap, pump.fun curve)
  *   GET /balance?address=     wallet balances + USD (EVM chains or Solana; ENS supported)
  *   GET /tx?hash=             transaction status + decoded token transfers (EVM chains or Solana)
+ *   GET|POST /search?q=&n=    web search: top results + cleaned page text (Brave, DuckDuckGo, Bing, Wikipedia; no API key)
  *   GET /gas                  live gas / priority fees + USD cost per tx type (EVM chains + Solana)
  *
  * Buyers are only charged on HTTP 2xx: @x402/express skips settlement when the handler
@@ -32,6 +33,7 @@ import { InputError, PUBLIC_URL } from "./lib/net.js";
 import { researchBrief } from "./lib/research.js";
 import { readPage } from "./lib/read.js";
 import { checkX402Endpoint } from "./lib/check.js";
+import { webSearch } from "./lib/search.js";
 import { newsSearch, newsStatus, warmNews } from "./lib/news.js";
 import { PRICE_CHAINS, PRICE_SYMBOLS, PriceInputError, tokenPrice } from "./lib/price.js";
 import { SOLANA_PRICE_SYMBOLS, SolanaInputError, solanaTokenPrice } from "./lib/solana.js";
@@ -62,6 +64,7 @@ const SOL_PRICE = process.env.SOL_PRICE ?? "$0.002";
 const BALANCE_PRICE = process.env.BALANCE_PRICE ?? "$0.003";
 const TX_PRICE = process.env.TX_PRICE ?? "$0.003";
 const GAS_PRICE = process.env.GAS_PRICE ?? "$0.002";
+const SEARCH_PRICE = process.env.SEARCH_PRICE ?? "$0.01";
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
 // PNG: the Bazaar re-hosts PNG/JPEG icons; our SVG icon never showed up in listings
 const ICON_URL = `${PUBLIC_URL}/icon.png`;
@@ -119,7 +122,10 @@ const PAID = {
   "/balance": BALANCE_PRICE,
   "/tx": TX_PRICE,
   "/gas": GAS_PRICE,
+  "/search": SEARCH_PRICE,
 } as const;
+/** Paid paths that also accept POST (JSON body). */
+const POST_OK = new Set<string>(["/search"]);
 type PaidPath = keyof typeof PAID;
 
 const FAIL_WINDOW_MS = 10 * 60 * 1000;
@@ -252,7 +258,7 @@ async function main() {
   // Guard rails + accurate settlement logging (runs before payment middleware).
   app.use((req: Request, res: Response, next: NextFunction) => {
     const p = req.path as PaidPath;
-    if (req.method !== "GET" || !(p in PAID)) return next();
+    if (!(p in PAID) || !(req.method === "GET" || (req.method === "POST" && POST_OK.has(p)))) return next();
     const price = PAID[p];
     const hasPayment = !!(req.header("payment-signature") || req.header("x-payment"));
     if (hasPayment) {
@@ -273,7 +279,7 @@ async function main() {
           // Payment verified, handler produced content, but settlement failed (buyer not charged, got 402).
           counters.settleFailed++;
           settleFailures.push(Date.now());
-          appendPaymentLog({ type: "error", kind: "settle_failed", route: `GET ${p}`, reason: pr?.errorReason ?? null, payer: pr?.payer ?? null });
+          appendPaymentLog({ type: "error", kind: "settle_failed", route: `${req.method} ${p}`, reason: pr?.errorReason ?? null, payer: pr?.payer ?? null });
         } else if (hasPayment) {
           counters.paymentInvalid++; // bad/expired signature: rejected at verify; does not trip the circuit
         } else counters.unpaid402++;
@@ -288,13 +294,13 @@ async function main() {
         appendPaymentLog({
           type: "settlement",
           confirmed: true,
-          route: `GET ${p}`,
+          route: `${req.method} ${p}`,
           price,
           priceUsd: parsePriceUsd(price),
           network: pr.network ?? NETWORKS[0],
           payer: pr.payer ?? null,
           transaction: pr.transaction ?? null,
-          query: String(req.query.q ?? req.query.url ?? req.query.token ?? req.query.address ?? req.query.hash ?? req.query.chain ?? "").slice(0, 200),
+          query: String(req.query.q ?? req.body?.q ?? req.query.url ?? req.query.token ?? req.query.address ?? req.query.hash ?? req.query.chain ?? "").slice(0, 200),
         });
       }
     });
@@ -462,6 +468,8 @@ async function main() {
     "cached": false,
     "latencyMs": 940,
   };
+
+  const searchExample = {"query": "best open source vector database", "n": 3, "count": 3, "results": [{"rank": 1, "title": "We Tried and Tested 10 Best Vector Databases for RAG Pipelines - ZenML Blog", "url": "https://www.zenml.io/blog/vector-databases-for-rag", "domain": "zenml.io", "snippet": "Milvus is a highly scalable, open-source vector database. Built with a cloud-native, distributed architecture that separates compute and storage, Milvus can sca", "published": "2025-10-01T00:00:00.000Z", "text": "On this pageThe choice of Vector database for RAG pipelines can make or break your agent’s core paradigm.\nA well-chosen vector store recalls relevant documents with low query latency, and a poor choice can slow down responses and cause…"}, {"rank": 2, "title": "r/MachineLearning on Reddit: What's the best Vector DB? What's new in vector db and how is one better than other? [D]", "url": "https://www.reddit.com/r/MachineLearning/comments/1ijxrqj/whats_the_best_vector_db_whats_new_in_vector_db/", "domain": "reddit.com", "snippet": "Wow, all the answers here are good answers (yep, those are vector databases), but there's no context or reasoning besides u/electric_hotdog2k 's suggestion of M", "published": null, "text": null}, {"rank": 3, "title": "Milvus | High-Performance Vector Database Built for Scale", "url": "https://milvus.io/", "domain": "milvus.io", "snippet": "Based on our research, Milvus was selected as the vector database of choice (over Chroma and Pinecone). Milvus is an open-source vector database designed specif", "published": null, "text": null}], "source": "brave", "pages_loaded": 1, "fetched_at": "2026-10-07T17:01:23.760Z", "latencyMs": 1031};
 
   pinAnswer("example-rag", reportExample); // the permalink shown in the /report example resolves
 
@@ -682,6 +690,112 @@ async function main() {
             },
           },
         }),
+      },
+    },
+    "GET /search": {
+      accepts: accept(SEARCH_PRICE),
+      description:
+        `Web search API (SERP) with page text: like a search API key, pay per call. Pass q, optional n (1-10, default 5). Returns ranked results with title, url, domain, snippet, publish date and up to 1500 chars of cleaned main text from each page, fetched live, so agents can answer without opening links. Fresh results for news, docs, products, local businesses, definitions. ${perCall(SEARCH_PRICE)}`,
+      mimeType: "application/json",
+      serviceName: "Web Search + Page Text",
+      tags: ["web search", "search api", "serp", "search results with page text", "google search alternative"],
+      iconUrl: ICON_URL,
+      extensions: {
+        ...declareDiscoveryExtension({
+          input: { q: "best open source vector database", n: 3 },
+          inputSchema: {
+            properties: {
+              q: { type: "string", minLength: 2, maxLength: 300, description: "Search query, e.g. 'best open source vector database', 'Fed rate decision', 'plumber Beaverton OR'" },
+              n: { type: "integer", minimum: 1, maximum: 10, description: "Number of results (default 5, max 10)" },
+            },
+            required: ["q"],
+          },
+          output: {
+            example: searchExample,
+            schema: {
+              properties: {
+                query: { type: "string" },
+                n: { type: "integer" },
+                count: { type: "integer" },
+                results: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      rank: { type: "integer" },
+                      title: { type: "string" },
+                      url: { type: "string" },
+                      domain: { type: "string" },
+                      snippet: { type: "string" },
+                      published: { type: ["string", "null"], description: "ISO date if the page or index states one" },
+                      text: { type: ["string", "null"], description: "Cleaned main page text, max ~1500 chars; null if the page blocked or timed out" },
+                    },
+                    required: ["rank", "title", "url", "domain", "snippet"],
+                  },
+                },
+                source: { type: "string", enum: ["brave", "duckduckgo", "bing", "bing-rss", "wikipedia"] },
+                pages_loaded: { type: "integer" },
+                fetched_at: { type: "string" },
+                latencyMs: { type: "integer" },
+              },
+              required: ["query", "count", "results", "source", "fetched_at"],
+            },
+          },
+        }),
+      },
+    },
+    "POST /search": {
+      accepts: accept(SEARCH_PRICE),
+      description:
+        `Web search API (SERP) with page text: like a search API key, pay per call. Pass q, optional n (1-10, default 5). Returns ranked results with title, url, domain, snippet, publish date and up to 1500 chars of cleaned main text from each page, fetched live, so agents can answer without opening links. Fresh results for news, docs, products, local businesses, definitions. ${perCall(SEARCH_PRICE)}`,
+      mimeType: "application/json",
+      serviceName: "Web Search + Page Text",
+      tags: ["web search", "search api", "serp", "search results with page text", "google search alternative"],
+      iconUrl: ICON_URL,
+      extensions: {
+        ...declareDiscoveryExtension({
+          method: "POST",
+          bodyType: "json",
+          input: { q: "best open source vector database", n: 3 },
+          inputSchema: {
+            properties: {
+              q: { type: "string", minLength: 2, maxLength: 300, description: "Search query, e.g. 'best open source vector database', 'Fed rate decision', 'plumber Beaverton OR'" },
+              n: { type: "integer", minimum: 1, maximum: 10, description: "Number of results (default 5, max 10)" },
+            },
+            required: ["q"],
+          },
+          output: {
+            example: searchExample,
+            schema: {
+              properties: {
+                query: { type: "string" },
+                n: { type: "integer" },
+                count: { type: "integer" },
+                results: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      rank: { type: "integer" },
+                      title: { type: "string" },
+                      url: { type: "string" },
+                      domain: { type: "string" },
+                      snippet: { type: "string" },
+                      published: { type: ["string", "null"], description: "ISO date if the page or index states one" },
+                      text: { type: ["string", "null"], description: "Cleaned main page text, max ~1500 chars; null if the page blocked or timed out" },
+                    },
+                    required: ["rank", "title", "url", "domain", "snippet"],
+                  },
+                },
+                source: { type: "string", enum: ["brave", "duckduckgo", "bing", "bing-rss", "wikipedia"] },
+                pages_loaded: { type: "integer" },
+                fetched_at: { type: "string" },
+                latencyMs: { type: "integer" },
+              },
+              required: ["query", "count", "results", "source", "fetched_at"],
+            },
+          },
+        } as any),
       },
     },
     "GET /price": {
@@ -936,12 +1050,12 @@ async function main() {
     res.set("Cache-Control", "public, max-age=3600").json({
       service: SERVICE_NAME,
       note: "Real responses captured Oct 6, 2026 for exactly the input shown (values change; long text and arrays trimmed so the 402 header stays small). Call any route without payment to get its 402 challenge.",
-      examples: Object.keys(r).map((k) => ({
+      examples: Object.keys(r).filter((k) => k.startsWith("GET ")).map((k) => ({
         route: k,
         url: `${PUBLIC_URL}${k.split(" ")[1]}`,
         priceUsd: Number(usd(PAID[k.split(" ")[1] as PaidPath])),
         serviceName: r[k].serviceName,
-        input: r[k].extensions.bazaar.info.input.queryParams ?? null,
+        input: r[k].extensions.bazaar.info.input.queryParams ?? r[k].extensions.bazaar.info.input.body ?? null,
         output: r[k].extensions.bazaar.info.output.example,
       })),
     });
@@ -991,6 +1105,7 @@ async function main() {
       `- GET ${PUBLIC_URL}/read?url=<https url>  (${READ_PRICE}) — web page to clean LLM-ready markdown with title, description, publish date, headings, links. Optional maxChars (default 20000).`,
       `- GET ${PUBLIC_URL}/check?url=<https x402 endpoint>  (${CHECK_PRICE}) — x402 endpoint check + Bazaar listing audit: one unpaid probe, score, grade, prioritized fixes, Coinbase validator verdict, live Bazaar listing (30-day calls/payers, stale metadata) and search rank for its own name and tags. Optional method=GET|POST.`,
       `- GET ${PUBLIC_URL}/news?q=<keywords>  (${NEWS_PRICE}) — news search: recent headlines (outlet, link, publish time, match score) from the GDELT global news index (15-min updates), major publisher feeds and Hacker News. Optional hours=1-168 (default 72), limit=1-25 (default 10). Headlines + links only; use /read for full text.`,
+      `- GET|POST ${PUBLIC_URL}/search?q=<query>  (${SEARCH_PRICE}) — web search API / SERP with page text: ranked results (title, url, domain, snippet, published) plus up to 1500 chars of cleaned main text per page, fetched live. Optional n=1-10 (default 5). POST takes JSON {"q": "...", "n": 5}. No API key; failed searches are not charged.`,
       `- GET ${PUBLIC_URL}/price?token=<symbol|address>  (${TOKEN_PRICE}) — crypto token price read onchain: USD price + 24h change + total supply + FDV from Uniswap v3 pools (ethereum, base, arbitrum, polygon) or Orca/Raydium/PumpSwap (solana): pools, depth, cross-pool spread, confidence, block. Optional chain=. Pools under $25k depth -> 422 (not charged).`,
       `- GET ${PUBLIC_URL}/solana-price?token=<symbol|mint>  (${SOL_PRICE}) — Solana token price by symbol or SPL mint from Orca Whirlpool, Raydium CLMM, PumpSwap and pump.fun bonding curves (public RPC): price, pools, depth, spread, confidence, slot. Pools under $5k depth -> 422; under $25k flagged thinLiquidity.`,
       `- GET ${PUBLIC_URL}/balance?address=<0x|name.eth|solana address>  (${BALANCE_PRICE}) — wallet balance: native + major tokens with USD values on ethereum, base, arbitrum, polygon (all in one call) or Solana. Optional chain=, tokens=<comma-separated contracts or mints>.`,
@@ -1017,7 +1132,7 @@ async function main() {
   app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt()));
 
   app.get("/robots.txt", (_req, res) => {
-    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", "Disallow: /solana-price", "Disallow: /balance", "Disallow: /tx", "Disallow: /gas", `Sitemap: ${PUBLIC_URL}/openapi.json`, ""].join("\n"));
+    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", "Disallow: /solana-price", "Disallow: /balance", "Disallow: /tx", "Disallow: /gas", "Disallow: /search", `Sitemap: ${PUBLIC_URL}/openapi.json`, ""].join("\n"));
   });
 
   const ICON_PNG = (() => { try { return fs.readFileSync(path.join(__dirname, "assets", "icon.png")); } catch { return null; } })();
@@ -1076,7 +1191,7 @@ async function main() {
         version: "2.0.0",
         description: `Pay-per-call research and onchain data tools for AI agents over x402 (${ON_NETWORKS}). ` + ERRORS_DOC,
         "x-guidance":
-          "Use /report for a cited answer to a question, /read to turn a known URL into markdown, /news for recent headlines on a topic, /price or /solana-price for a verifiable onchain token price (+24h change on EVM), /balance for wallet holdings, /tx to check or decode a transaction, /gas for current fees, /check to validate an x402 endpoint. Call without payment to get the 402 challenge, then retry with PAYMENT-SIGNATURE.",
+          "Use /report for a cited answer to a question, /read to turn a known URL into markdown, /search for web search results with page text, /news for recent headlines on a topic, /price or /solana-price for a verifiable onchain token price (+24h change on EVM), /balance for wallet holdings, /tx to check or decode a transaction, /gas for current fees, /check to validate an x402 endpoint. Call without payment to get the 402 challenge, then retry with PAYMENT-SIGNATURE.",
       },
       servers: [{ url: PUBLIC_URL }],
       paths: {
@@ -1134,6 +1249,20 @@ async function main() {
             responses: { "200": { description: "Headlines", content: { "application/json": { schema: r["GET /news"].extensions.bazaar.schema.properties.output.properties.example, example: newsExample } } }, ...errs },
           },
         },
+        "/search": (() => {
+          const op = (post: boolean) => ({
+            operationId: post ? "webSearchPost" : "webSearch",
+            summary: "Web search: ranked results with snippet and cleaned page text",
+            description: r["GET /search"].description,
+            tags: ["Search"],
+            ...(post
+              ? { requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { q: { type: "string", minLength: 2, maxLength: 300 }, n: { type: "integer", minimum: 1, maximum: 10 } }, required: ["q"] } } } } }
+              : { parameters: [qp("q", { type: "string", minLength: 2, maxLength: 300 }, true, "Search query"), qp("n", { type: "integer", minimum: 1, maximum: 10 }, false, "Number of results (default 5)")] }),
+            ...pay(SEARCH_PRICE),
+            responses: { "200": { description: "Search results", content: { "application/json": { schema: r["GET /search"].extensions.bazaar.schema.properties.output.properties.example, example: searchExample } } }, ...errs },
+          });
+          return { get: op(false), post: op(true) };
+        })(),
         "/price": {
           get: {
             operationId: "tokenPrice",
@@ -1286,6 +1415,35 @@ async function main() {
     }
   });
 
+  const searchHandler = async (req: Request, res: Response) => {
+    res.locals.paidHandlerRan = true;
+    const src = req.method === "POST" && req.body && typeof req.body === "object" ? { ...req.query, ...req.body } : req.query;
+    const q = typeof src.q === "string" ? src.q.trim() : "";
+    if (q.length < 2 || q.length > 300) {
+      res.status(400).json({ error: "bad_input", message: "q is required (2-300 chars). You were not charged." });
+      return;
+    }
+    const n = src.n === undefined || src.n === "" ? 5 : Number(src.n);
+    if (!Number.isFinite(n) || n < 1 || n > 10) {
+      res.status(400).json({ error: "bad_input", message: "n must be 1-10 (default 5). You were not charged." });
+      return;
+    }
+    try {
+      const out: any = await webSearch(q, n);
+      if (out.error) {
+        res.status(422).json({ ...out, message: "No relevant results from any search source; try different keywords. You were not charged." });
+        return;
+      }
+      res.json(out);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (err instanceof InputError) res.status(400).json({ error: "bad_input", message: `${msg}. You were not charged.` });
+      else res.status(503).json({ error: "search_unavailable", message: `${msg}. You were not charged.` });
+    }
+  };
+  app.get("/search", searchHandler);
+  app.post("/search", searchHandler);
+
   app.get("/price", async (req, res) => {
     res.locals.paidHandlerRan = true;
     const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
@@ -1381,7 +1539,7 @@ async function main() {
     startTraffic();
     warmNews();
     console.log(`x402 seller listening on http://localhost:${PORT}  env=${X402_ENV} networks=${NETWORKS.join(",")} (${NETWORK_LABEL})`);
-    console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}, /news ${NEWS_PRICE}, /price ${TOKEN_PRICE}, /solana-price ${SOL_PRICE}, /balance ${BALANCE_PRICE}, /tx ${TX_PRICE}, /gas ${GAS_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}`);
+    console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}, /news ${NEWS_PRICE}, /price ${TOKEN_PRICE}, /solana-price ${SOL_PRICE}, /balance ${BALANCE_PRICE}, /tx ${TX_PRICE}, /gas ${GAS_PRICE}, /search ${SEARCH_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}`);
   });
 }
 

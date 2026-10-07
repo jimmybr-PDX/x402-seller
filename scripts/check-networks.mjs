@@ -11,10 +11,16 @@ const WANT = {
   "eip155:43114": ["Avalanche", "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", EVM],
   "eip155:1329": ["Sei", "0xe15fC38F6D8c56aF07bbCBe3BAf5708A2Bf42392", EVM],
 };
-const ROUTES = { "/report?q=test": 10000, "/read?url=https://example.com": 5000, "/check?url=https://example.com": 5000, "/news?q=test": 5000, "/price?token=ETH": 2000, "/solana-price?token=SOL": 2000, "/balance?address=vitalik.eth": 3000, ["/tx?hash=0x" + "ab".repeat(32)]: 3000, "/gas": 2000 };
+const ROUTES = { "/report?q=test": 10000, "/read?url=https://example.com": 5000, "/check?url=https://example.com": 5000, "/news?q=test": 5000, "/price?token=ETH": 2000, "/solana-price?token=SOL": 2000, "/balance?address=vitalik.eth": 3000, ["/tx?hash=0x" + "ab".repeat(32)]: 3000, "/gas": 2000, "/search?q=test": 10000 };
 let bad = 0;
 for (const [p, amount] of Object.entries(ROUTES)) {
   const r = await fetch(ORIGIN + p, { headers: { "user-agent": "x402-seller-rankcheck/2 (self; network check)" } });
+  if (p.startsWith("/search")) { // the POST variant must answer the same challenge
+    const rp = await fetch(ORIGIN + "/search", { method: "POST", headers: { "content-type": "application/json", "user-agent": "x402-seller-rankcheck/2 (self; network check)" }, body: JSON.stringify({ q: "test" }) });
+    const n = rp.headers.get("payment-required") ? JSON.parse(Buffer.from(rp.headers.get("payment-required"), "base64").toString()).accepts?.length : 0;
+    console.log(`POST /search   ${rp.status} ${n} networks ${rp.status === 402 && n === Object.keys(WANT).length ? "OK" : "PROBLEMS"}`);
+    if (rp.status !== 402 || n !== Object.keys(WANT).length) bad++;
+  }
   const hdr = r.headers.get("payment-required");
   const ch = hdr ? JSON.parse(Buffer.from(hdr, "base64").toString()) : null;
   const acc = ch?.accepts ?? [];
