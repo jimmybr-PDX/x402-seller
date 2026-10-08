@@ -8,7 +8,9 @@
     "dev": "tsx src/server.ts",
     "start": "tsx src/server.ts",
     "report-week": "tsx scripts/report-week.ts",
-    "rank-check": "node scripts/rank-check.mjs"
+    "rank-check": "node scripts/rank-check.mjs",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "engines": {
     "node": ">=22"

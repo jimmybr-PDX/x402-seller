@@ -11,7 +11,7 @@
  *   GET /solana-price?token=  Solana token price by symbol or mint (Orca, Raydium CLMM, PumpSwap, pump.fun curve)
  *   GET /balance?address=     wallet balances + USD (EVM chains or Solana; ENS supported)
  *   GET /tx?hash=             transaction status + decoded token transfers (EVM chains or Solana)
- *   GET|POST /search?q=&n=    web search: top results + cleaned page text (Brave, DuckDuckGo, Bing, Wikipedia; no API key)
+ *   GET|POST /search?q=&n=    web search: top results + cleaned page text (Serper if SERPER_API_KEY, then Brave, DuckDuckGo, Bing, Wikipedia)
  *   GET /gas                  live gas / priority fees + USD cost per tx type (EVM chains + Solana)
  *
  * Buyers are only charged on HTTP 2xx: @x402/express skips settlement when the handler

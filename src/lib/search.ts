@@ -1,8 +1,9 @@
 /**
- * Web search (no API key): Bing HTML results -> Bing RSS -> DuckDuckGo HTML -> Wikipedia search, first source
- * that returns usable results wins. Top pages are fetched in parallel (short timeout) and their main text is
- * extracted with the /read extractor. Small in-memory cache. DDG answers datacenter IPs with a 202 "anomaly"
- * captcha, so it is a fallback only.
+ * Web search: Serper (Google results API, only when SERPER_API_KEY is set) -> Brave HTML -> DuckDuckGo HTML ->
+ * Bing HTML -> Bing RSS -> Wikipedia search. Each source has a short timeout; if a source yields fewer than the
+ * requested count, the next source tops up the list (deduped by URL, max 2 per domain). Top pages are fetched in
+ * parallel (short timeout) and their main text is extracted with the /read extractor. Small in-memory cache.
+ * DDG answers datacenter IPs with a 202 "anomaly" captcha and Brave often 429s them, so they are fallbacks only.
  */
 import { htmlToMarkdown } from "./read.js";
 import { safeFetch, InputError } from "./net.js";
@@ -20,10 +21,15 @@ const decode = (s: string) =>
   });
 const strip = (s: string) => decode(s.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
 
-type Hit = { title: string; url: string; snippet: string; published?: string | null };
+type Hit = { title: string; url: string; snippet: string; published?: string | null; src?: string };
 export type SearchResult = { rank: number; title: string; url: string; domain: string; snippet: string; published: string | null; text: string | null };
 
-async function get(url: string, init: RequestInit = {}, ms = 6000): Promise<{ status: number; body: string }> {
+/** Per-request timeout for the scraped fallbacks (Serper has its own). */
+const FALLBACK_MS = 3500;
+/** Once we hold at least one result, stop topping up after this much time spent on sources. */
+const SOURCE_BUDGET_MS = 8000;
+
+async function get(url: string, init: RequestInit = {}, ms = FALLBACK_MS): Promise<{ status: number; body: string }> {
   const r = await fetch(url, { ...init, signal: AbortSignal.timeout(ms), headers: { "user-agent": BROWSER_UA, "accept-language": "en-US,en;q=0.9", accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", ...(init.headers as any) } });
   return { status: r.status, body: await r.text() };
 }
@@ -47,7 +53,7 @@ function unwrapDdg(href: string): string {
 }
 
 /** Brave answers Node's fetch (TLS/HTTP fingerprint) with 429 but serves curl over HTTP/2, so use curl (argv, no shell). */
-function curlGet(url: string, ms = 7000): Promise<{ status: number; body: string }> {
+function curlGetImpl(url: string, ms = FALLBACK_MS): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     execFile("curl", ["-s", "--http2", "--compressed", "--max-time", String(ms / 1000), "-A", BROWSER_UA, "-H", "accept: text/html,application/xhtml+xml,*/*;q=0.8", "-H", "accept-language: en-US,en;q=0.9", "-w", "\n%{http_code}", url], { maxBuffer: 4_000_000, timeout: ms + 1000 }, (err, stdout) => {
       if (err) return reject(new Error(`curl ${(err as any).code ?? err.message}`));
@@ -56,11 +62,36 @@ function curlGet(url: string, ms = 7000): Promise<{ status: number; body: string
     });
   });
 }
+let curlGet = curlGetImpl;
+/** Test hook: replace the curl transport (unit tests must not hit the network). */
+export function __setCurlForTests(fn?: typeof curlGetImpl) { curlGet = fn ?? curlGetImpl; }
+
+const SERPER_URL = "https://google.serper.dev/search";
+const SERPER_MS = 5000;
+/** Serper (Google SERP API). Key read per call, sent only as a header, never logged or echoed in errors. */
+async function serper(q: string): Promise<Hit[]> {
+  const key = process.env.SERPER_API_KEY?.trim();
+  if (!key) throw new Error("serper no key");
+  const r = await fetch(SERPER_URL, {
+    method: "POST",
+    signal: AbortSignal.timeout(SERPER_MS),
+    headers: { "X-API-KEY": key, "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ q, num: 10, gl: "us", hl: "en" }),
+  });
+  if (!r.ok) { await r.body?.cancel().catch(() => {}); throw new Error(`serper ${r.status}`); } // 4xx (bad key/quota) or 5xx
+  const j: any = await r.json().catch(() => null);
+  if (!j || !Array.isArray(j.organic)) throw new Error("serper bad_response");
+  return j.organic
+    .filter((o: any) => typeof o?.link === "string" && typeof o?.title === "string")
+    .map((o: any) => ({ title: strip(o.title), url: o.link, snippet: typeof o.snippet === "string" ? strip(o.snippet) : "" }));
+}
 
 async function braveHtml(q: string): Promise<Hit[]> {
   const url = `https://search.brave.com/search?q=${encodeURIComponent(q)}&source=web`;
+  const t0 = Date.now();
   let r = await curlGet(url);
-  if (r.status === 429) { await new Promise((ok) => setTimeout(ok, 1200)); r = await curlGet(url); } // short burst limit
+  // short burst limit: one quick retry only if the 429 came back fast (keeps Brave under ~4 s total)
+  if (r.status === 429 && Date.now() - t0 < 1500) { await new Promise((ok) => setTimeout(ok, 700)); r = await curlGet(url, Math.max(1000, 4000 - (Date.now() - t0))); }
   if (r.status !== 200) throw new Error(`brave ${r.status}`);
   const hits: Hit[] = [];
   for (const b of r.body.split(/<div class="snippet[^"]*" data-pos="\d+" data-type="web"/).slice(1)) {
@@ -103,7 +134,7 @@ async function bingRss(q: string): Promise<Hit[]> {
   }));
 }
 async function ddgHtml(q: string): Promise<Hit[]> {
-  const r = await get("https://html.duckduckgo.com/html/", { method: "POST", body: new URLSearchParams({ q, kl: "us-en" }), headers: { "content-type": "application/x-www-form-urlencoded" } }, 3500);
+  const r = await get("https://html.duckduckgo.com/html/", { method: "POST", body: new URLSearchParams({ q, kl: "us-en" }), headers: { "content-type": "application/x-www-form-urlencoded" } });
   if (r.status !== 200 || /anomaly/i.test(r.body)) throw new Error(`ddg ${r.status}${/anomaly/i.test(r.body) ? " captcha" : ""}`);
   return r.body.split(/class="result results_links/).slice(1).filter((b) => !/result--ad/.test(b.slice(0, 200))).map((b) => ({
     url: unwrapDdg(decode(b.match(/class="result__a"[^>]*href="([^"]+)"/)?.[1] ?? "")),
@@ -119,7 +150,9 @@ async function wikipedia(q: string): Promise<Hit[]> {
 
 // Bing serves off-topic results to cookieless clients from some datacenter IPs, so Bing hits must pass the
 // relevance check below; DDG often captchas datacenter IPs (202 "anomaly").
-const SOURCES: [string, (q: string) => Promise<Hit[]>][] = [["brave", braveHtml], ["duckduckgo", ddgHtml], ["bing", bingHtml], ["bing-rss", bingRss], ["wikipedia", wikipedia]];
+const FALLBACKS: [string, (q: string) => Promise<Hit[]>][] = [["brave", braveHtml], ["duckduckgo", ddgHtml], ["bing", bingHtml], ["bing-rss", bingRss], ["wikipedia", wikipedia]];
+/** Serper goes first only when a key is configured; without it the chain is exactly the scraped fallbacks. */
+const sources = (): [string, (q: string) => Promise<Hit[]>][] => (process.env.SERPER_API_KEY?.trim() ? [["serper", serper], ...FALLBACKS] : FALLBACKS);
 const STOP = new Set("a an and are as at be by for from how i in is it near of on or the to what when where which who why with vs best top latest today news define definition meaning review".split(" "));
 const terms = (q: string) => [...new Set(q.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1 && !STOP.has(w)))];
 /** Share of query terms found in title+snippet+url. */
@@ -182,21 +215,26 @@ export async function webSearch(qRaw: string, nRaw?: number) {
   const started = Date.now();
   const qt = terms(q);
   const tried: Record<string, string> = {};
-  let source = "", hits: (Hit & { domain: string })[] = [];
-  for (const [name, fn] of SOURCES) {
+  // Walk the chain; each source tops up the list until n results (deduped by URL, max 2 per domain via clean()).
+  let raw: Hit[] = [], hits: (Hit & { domain: string })[] = [];
+  for (const [name, fn] of sources()) {
+    if (hits.length >= n) break;
+    if (hits.length && Date.now() - started > SOURCE_BUDGET_MS) { tried[name] = "skipped (time budget)"; continue; }
     try {
-      const h = clean(await fn(q), n, qt);
-      tried[name] = `ok (${h.length})`;
-      if (h.length >= Math.min(3, n) || (h.length && name === "wikipedia")) { source = name; hits = h; break; }
-      if (h.length > hits.length) { source = name; hits = h; }
+      const got = (await fn(q)).map((h) => ({ ...h, src: name }));
+      tried[name] = `ok (${clean(got, n, qt).length})`;
+      raw = raw.concat(got);
+      hits = clean(raw, n, qt);
     } catch (e) {
       tried[name] = e instanceof Error ? e.message : String(e);
     }
   }
   if (!hits.length) return { error: "no_results", query: q, sources_tried: tried };
+  const used = [...new Set(hits.map((h) => h.src!))];
+  const source = used[0]!;
   const pages = await Promise.all(hits.map((h) => pageText(h.url)));
   const results: SearchResult[] = hits.map((h, i) => ({ rank: i + 1, title: h.title, url: h.url, domain: h.domain, snippet: h.snippet, published: pages[i]!.published ?? h.published ?? null, text: pages[i]!.text }));
-  const v = { query: q, n, count: results.length, results, source, sources_tried: tried, pages_loaded: pages.filter((p) => p.text).length, fetched_at: new Date().toISOString(), latencyMs: Date.now() - started };
+  const v = { query: q, n, count: results.length, results, source, sources_used: used, sources_tried: tried, pages_loaded: pages.filter((p) => p.text).length, fetched_at: new Date().toISOString(), latencyMs: Date.now() - started };
   cache.set(key, { at: Date.now(), v });
   if (cache.size > 300) cache.delete(cache.keys().next().value!);
   return v;

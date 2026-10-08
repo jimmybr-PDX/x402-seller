@@ -63,6 +63,7 @@ npm ci && npm run dev  # http://localhost:8402
 | `PUBLIC_URL` | Render URL | Used in discovery docs |
 | `DAILY_SPEND_CAP_USD` | `50` | Runaway guard on confirmed settlements per UTC day |
 | `GROK_API_KEY` or `OPENAI_API_KEY` | — | Optional: LLM synthesis over the cited sources; without it `/report` is extractive |
+| `SERPER_API_KEY` | — | Optional: Serper (Google results API) as the first `/search` source (5 s timeout); on error/quota or if unset, falls back to Brave → DuckDuckGo → Bing → Bing RSS → Wikipedia, topping up short result lists |
 
 Free routes: `/health`, `/stats`, `/examples`, `/llms.txt`, `/openapi.json`, `/.well-known/x402`, `/robots.txt`, `/icon.png` (`/icon.svg`).
 
