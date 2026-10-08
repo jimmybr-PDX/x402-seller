@@ -25,6 +25,7 @@ import { CDP_SUPPORTED_EXTENSIONS, createCdpFacilitatorClient, getCdpDefaultSche
 import { HTTPFacilitatorClient, x402HTTPResourceServer, x402ResourceServer } from "@x402/core/server";
 import { paymentMiddlewareFromHTTPServer } from "@x402/express";
 import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
+import { BUILDER_CODE, declareBuilderCodeExtension } from "@x402/extensions/builder-code";
 import express, { type Request, type Response, type NextFunction } from "express";
 import fs from "node:fs";
 import path from "node:path";
@@ -92,6 +93,19 @@ const NETWORK_INFO: Record<string, { name: string; usdc: string; facilitator: Fa
 const PAY_TO_EVM = process.env.X402_PAY_TO?.trim() || "0x079471E6F43b6feeF80895E19cBFcBB496904852";
 const PAY_TO_SVM = process.env.X402_SOLANA_PAY_TO?.trim() || "787RZwDGpjmRsG5wgnyBeWQHBuARax8Qo6P7dmDuqKeW";
 const PAYAI_FACILITATOR_URL = process.env.PAYAI_FACILITATOR_URL?.trim() || "https://facilitator.payai.network";
+// Base Builder Code (ERC-8021 attribution). Declared via the x402 "builder-code" extension; the CDP facilitator
+// appends it to EVM settlement calldata (docs.x402.org/extensions/builder-code, docs.cdp.coinbase.com/x402/seller/facilitator).
+// BUILDER_CODE env overrides the default; set it to "off" (or empty) to disable. An invalid code is ignored with a warning
+// so a bad env value can never block payments.
+const BUILDER_CODE_RAW = (process.env.BUILDER_CODE ?? "bc_rdtmtdd1").trim();
+let BUILDER_CODE_EXT: ReturnType<typeof declareBuilderCodeExtension> | null = null;
+if (BUILDER_CODE_RAW && BUILDER_CODE_RAW.toLowerCase() !== "off") {
+  try {
+    BUILDER_CODE_EXT = declareBuilderCodeExtension(BUILDER_CODE_RAW);
+  } catch (e) {
+    console.warn(`BUILDER_CODE ignored: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
 const DEFAULT_NETWORKS =
   X402_ENV === "production"
     ? ["eip155:8453", "eip155:137", "eip155:42161", SOLANA_MAINNET, "eip155:43114", "eip155:1329"] // Solana payTo has an initialized USDC ATA
@@ -994,8 +1008,11 @@ async function main() {
   for (const scheme of getCdpDefaultSchemes()) resourceServer.register(scheme.network as any, scheme.server as any);
   for (const ext of getCdpExtensionRegistrations()) resourceServer.registerExtension(ext as any);
   const hasEvm = NETWORKS.some((n) => NETWORK_INFO[n]!.family === "evm");
+  // Builder code only when Base is offered: it attributes Base settlements (extensions are per route, not per network,
+  // same as the CDP SDK's own server, which adds it to every route with an EVM option; other facilitators ignore it).
+  const builderCode = BUILDER_CODE_EXT && NETWORKS.includes("eip155:8453") ? { [BUILDER_CODE]: BUILDER_CODE_EXT } : {};
   const resolvedRoutes = Object.fromEntries(
-    Object.entries(routes).map(([k, r]) => [k, { ...r, extensions: { ...(hasEvm ? CDP_SUPPORTED_EXTENSIONS : {}), ...r.extensions } }]),
+    Object.entries(routes).map(([k, r]) => [k, { ...r, extensions: { ...(hasEvm ? CDP_SUPPORTED_EXTENSIONS : {}), ...builderCode, ...r.extensions } }]),
   );
   const server = new x402HTTPResourceServer(resourceServer, resolvedRoutes as any);
   await server.initialize(); // fetches /supported from each facilitator and fails fast on an unsupported network
@@ -1539,7 +1556,7 @@ async function main() {
     startTraffic();
     warmNews();
     console.log(`x402 seller listening on http://localhost:${PORT}  env=${X402_ENV} networks=${NETWORKS.join(",")} (${NETWORK_LABEL})`);
-    console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}, /news ${NEWS_PRICE}, /price ${TOKEN_PRICE}, /solana-price ${SOL_PRICE}, /balance ${BALANCE_PRICE}, /tx ${TX_PRICE}, /gas ${GAS_PRICE}, /search ${SEARCH_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}`);
+    console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}, /news ${NEWS_PRICE}, /price ${TOKEN_PRICE}, /solana-price ${SOL_PRICE}, /balance ${BALANCE_PRICE}, /tx ${TX_PRICE}, /gas ${GAS_PRICE}, /search ${SEARCH_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}${Object.keys(builderCode).length ? ` builderCode=${BUILDER_CODE_RAW}` : ""}`);
   });
 }
 
