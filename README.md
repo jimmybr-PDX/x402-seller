@@ -9,7 +9,7 @@ Arbitrum (`eip155:42161`), Solana mainnet (CDP facilitator) or Avalanche (`eip15
 
 | Endpoint | Price | Use it when | Returns |
 |---|---|---|---|
-| `GET /report?q=<question>` | $0.01 | You need a quick, cited answer or background on a topic | `summary`, 3-6 cited `bullets`, `sources[]` (official docs, Wikipedia, Stack Overflow, GitHub, papers; off-topic sources dropped) with URLs + dates |
+| `GET /report?q=<question>` | $0.01 | You need a quick, cited answer or background on a topic | 1-3 sentence `answer`, `key_points` tied to source ids, `sources[]` (typically 1-5: Wikipedia first, plus Stack Overflow, GitHub, Crossref papers, official docs when they match; off-topic sources dropped) with URLs, dates and supporting quotes, `confidence` |
 | `GET /read?url=<https url>` | $0.005 | You have a URL and need its text for an LLM | `title`, `description`, `publishedAt`, clean `markdown`, `wordCount`, `headings[]`, `links[]` |
 | `GET /check?url=<x402 endpoint>` | $0.005 | You are about to pay for or list an x402 API | readiness `score`, per-check results, `fixes[]` (one unpaid probe; never pays the target) |
 | `GET /news?q=<keywords>` | $0.005 | You need what happened on a topic in the last 1-7 days | `articles[]` (title, url, outlet, `publishedAt`, match `score`, `partialMatch`), `outlets`, provider status. Optional `hours` (1-168, default 72), `limit` (1-25). Headlines + links only |
@@ -69,7 +69,7 @@ Free routes: `/health`, `/stats`, `/examples`, `/llms.txt`, `/openapi.json`, `/.
 
 ## Answer permalinks (`/a/<id>`)
 
-Every paid `/report` answer gets a free shareable page at `/a/<id>` (clean HTML; `?format=json` for the stored JSON) with a footer link back to the service. Stored in memory only (max 500, 30 days), so links reset on each Render deploy/restart. Only the answer is stored (question, answer, sources), never IP, user agent or payer. `/a/example-rag` is a pinned demo. The paid response leads with bot-friendly fields: `answer`, `answer_citations`, `key_points[{text,citations}]`, sources with `publisher`, `published`, `quote`, `confidence` + `confidence_why`, `checked_at`, `permalink`; the original fields (`summary`, `bullets`, ...) are unchanged.
+Every paid `/report` answer gets a free shareable page at `/a/<id>` (clean HTML; `?format=json` for the stored JSON) with a footer link back to the service. Stored in memory only (max 500, 30 days), so links reset on each Render deploy/restart. Only the answer is stored (question, answer, sources), never IP, user agent or payer. `/a/example-mcp` is a pinned demo. The paid response leads with bot-friendly fields: `answer`, `answer_citations`, `key_points[{text,citations}]`, sources with `publisher`, `published`, `quote`, `confidence` + `confidence_why`, `checked_at`, `permalink`; the original fields (`summary`, `bullets`, ...) are unchanged.
 
 ## Interest tracker (`/stats`)
 

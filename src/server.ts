@@ -3,7 +3,7 @@
  * Pattern: https://docs.cdp.coinbase.com/x402/quickstart-for-sellers
  *
  * Paid (USDC on Base, Polygon, Arbitrum, Solana via the CDP facilitator; Avalanche, Sei via PayAI):
- *   GET /report?q=   cited research brief (official docs, Wikipedia, Stack Overflow, GitHub, HN-linked articles, Crossref; relevance-filtered extractive summary)
+ *   GET /report?q=   cited research brief (Wikipedia first, plus Stack Overflow, GitHub, Crossref, DuckDuckGo, official docs, HN-linked articles; relevance-filtered)
  *   GET /read?url=   any public web page -> clean LLM-ready markdown + title, headings, links
  *   GET /check?url=  x402 endpoint readiness + Bazaar ranking check (one unpaid probe)
  *   GET /news?q=     recent news headlines (GDELT, Hacker News, major publisher RSS feeds)
@@ -331,20 +331,21 @@ async function main() {
       maxTimeoutSeconds: 300,
     }));
 
-  // Trimmed for the 402 header: legacy fields (summary, bullets, snippet, wikipedia, next, ...) are also returned; see schema.
+  // Real local run of researchBrief("What is the Model Context Protocol?") on 2026-10-09, trimmed for the 402 header:
+  // legacy fields (summary, bullets, snippet, wikipedia, next, ...) are also returned; see schema.
   const reportExample = {
-    "answer": "Retrieval-augmented generation (RAG) is a technique that enables large language models (LLMs) to retrieve and incorporate new information from external data sources. With RAG, LLMs first refer to a specified set of documents, then respond to user queries.",
-    "answer_citations": [2],
-    "key_points": [{"text": "Retrieval-Augmented Generation (RAG) has shown significant improvements in various natural language processing tasks by integrating the strengths of…", "citations": [1]}, {"text": "Retrieval-augmented generation is a technique for enhancing the accuracy and reliability of generative AI models with information fetched from…", "citations": [3]}, {"text": "The term retrieval-augmented generation (RAG) was introduced in a 2020 paper that described combining a parametric language model with a…", "citations": [2]}],
+    "answer": "The Model Context Protocol (MCP) is an open standard and open-source framework introduced by Anthropic in November 2024 to standardize the way artificial intelligence (AI) systems like large language models (LLMs) integrate and share data with external tools, systems, and data sources. MCP provides a standardized interface for reading files, executing functions, and handling contextual prompts.",
+    "answer_citations": [1],
+    "key_points": [{"text": "This repository is a collection of reference implementations for the Model Context Protocol (MCP), as well as references to community-built servers and additional resources.", "citations": [2]}, {"text": "The Model Context Protocol lets you build servers that expose data and functionality to LLM applications in a secure, standardized way.", "citations": [3]}],
     "confidence": "high",
-    "confidence_why": "3 cited sources from 3 publisher(s), incl. primary/authoritative: arxiv.org.",
-    "checked_at": "2026-10-06T07:13:00.721Z",
-    "permalink": "https://x402-seller-pmlm.onrender.com/a/example-rag",
-    "sources": [{"id": 1, "type": "web_page", "publisher": "arxiv.org", "title": "[2404.12457] RAGCache: Efficient Knowledge Caching for…", "url": "https://arxiv.org/abs/2404.12457", "published": "2024-04-30", "quote": "Retrieval-Augmented Generation (RAG) has shown significant improvements in various natural language…"}, {"id": 2, "type": "encyclopedia", "publisher": "Wikipedia", "title": "Retrieval-augmented generation", "url": "https://en.wikipedia.org/wiki/Retrieval-augmented_generation", "published": "2026-10-02", "quote": "Retrieval-augmented generation (RAG) is a technique that enables large language models (LLMs) to retrieve and…"}, {"id": 3, "type": "web_page", "publisher": "blogs.nvidia.com", "title": "What Is Retrieval-Augmented Generation aka RAG | NVIDIA Blogs", "url": "https://blogs.nvidia.com/blog/what-is-retrieval-augmented-generation/", "published": "2025-01-31", "quote": "Retrieval-augmented generation is a technique for enhancing the accuracy and reliability of generative AI…"}],
-    "query": "What is retrieval-augmented generation?",
+    "confidence_why": "3 cited sources from 2 publisher(s), no primary/authoritative source found.",
+    "checked_at": "2026-10-09T17:43:22.098Z",
+    "permalink": "https://x402-seller-pmlm.onrender.com/a/example-mcp",
+    "sources": [{"id": 1, "type": "encyclopedia", "publisher": "Wikipedia", "title": "Model Context Protocol", "url": "https://en.wikipedia.org/wiki/Model_Context_Protocol", "published": "2026-10-06", "quote": "The Model Context Protocol (MCP) is an open standard and open-source framework introduced by Anthropic in November 2024 to standardize the way artificial intelligence (AI) systems like large language models (LLMs)…"}, {"id": 2, "type": "web_page", "publisher": "GitHub", "title": "modelcontextprotocol/servers: Model Context Protocol Servers", "url": "https://github.com/modelcontextprotocol/servers", "published": "2026-10-07", "quote": "This repository is a collection of reference implementations for the Model Context Protocol (MCP), as well as references to community-built servers and additional resources."}, {"id": 3, "type": "web_page", "publisher": "GitHub", "title": "modelcontextprotocol/python-sdk: The official Python SDK for Model Context Protocol servers and clients", "url": "https://github.com/modelcontextprotocol/python-sdk", "published": "2026-10-05", "quote": "The Model Context Protocol lets you build servers that expose data and functionality to LLM applications in a secure, standardized way."}],
+    "query": "What is the Model Context Protocol?",
     "sourceCount": 3,
     "method": "extractive (Wikipedia lead + ranked sentences)",
-    "latencyMs": 3805,
+    "latencyMs": 1087,
   };
 
   const readExample = {
@@ -485,24 +486,24 @@ async function main() {
 
   const searchExample = {"query": "best open source vector database", "n": 3, "count": 3, "results": [{"rank": 1, "title": "We Tried and Tested 10 Best Vector Databases for RAG Pipelines - ZenML Blog", "url": "https://www.zenml.io/blog/vector-databases-for-rag", "domain": "zenml.io", "snippet": "Milvus is a highly scalable, open-source vector database. Built with a cloud-native, distributed architecture that separates compute and storage, Milvus can sca", "published": "2025-10-01T00:00:00.000Z", "text": "On this pageThe choice of Vector database for RAG pipelines can make or break your agent’s core paradigm.\nA well-chosen vector store recalls relevant documents with low query latency, and a poor choice can slow down responses and cause…"}, {"rank": 2, "title": "r/MachineLearning on Reddit: What's the best Vector DB? What's new in vector db and how is one better than other? [D]", "url": "https://www.reddit.com/r/MachineLearning/comments/1ijxrqj/whats_the_best_vector_db_whats_new_in_vector_db/", "domain": "reddit.com", "snippet": "Wow, all the answers here are good answers (yep, those are vector databases), but there's no context or reasoning besides u/electric_hotdog2k 's suggestion of M", "published": null, "text": null}, {"rank": 3, "title": "Milvus | High-Performance Vector Database Built for Scale", "url": "https://milvus.io/", "domain": "milvus.io", "snippet": "Based on our research, Milvus was selected as the vector database of choice (over Chroma and Pinecone). Milvus is an open-source vector database designed specif", "published": null, "text": null}], "source": "brave", "pages_loaded": 1, "fetched_at": "2026-10-07T17:01:23.760Z", "latencyMs": 1031};
 
-  pinAnswer("example-rag", reportExample); // the permalink shown in the /report example resolves
+  pinAnswer("example-mcp", reportExample); // the permalink shown in the /report example resolves
 
   const strArr = { type: "array", items: { type: "string" } };
   const routes = {
     "GET /report": {
       accepts: accept(REPORT_PRICE),
       description:
-        `Research brief with citations: web research on any question or topic in one call. Use to summarize a topic, get a Wikipedia summary, or answer with sources before writing or deciding. Pass q. Returns a direct answer, key points with citation ids, 3-5 vetted sources (official docs, .gov/.edu, journals, Wikipedia as backup) with publisher, date and supporting quote, confidence with reason, and a shareable permalink. ${perCall(REPORT_PRICE)}`,
+        `Ask a question, get a short cited answer in one call. Returns a 1-3 sentence answer, key points tied to source ids, and the sources used (typically 1-5: title, URL, publisher, date, supporting quote), plus confidence with a reason and a free permalink. Sources: Wikipedia first, plus Stack Overflow, GitHub, Crossref papers, official docs when relevant. Best for definitions, overviews, how-it-works, history. Example: "What is the Model Context Protocol?". ${perCall(REPORT_PRICE)}`,
       mimeType: "application/json",
       serviceName: "Research Brief with Citations",
       tags: ["research brief", "web research", "summarize a topic", "wikipedia summary", "answer a question with sources"],
       iconUrl: ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
-          input: { q: "What is retrieval-augmented generation?" },
+          input: { q: "What is the Model Context Protocol?" },
           inputSchema: {
             properties: {
-              q: { type: "string", minLength: 2, maxLength: 300, description: "Question or topic in plain words, e.g. 'history of the transistor', 'summarize photosynthesis', 'wikipedia summary of Mount Hood'" },
+              q: { type: "string", minLength: 2, maxLength: 300, description: "Question or topic in plain words, e.g. 'What is the Model Context Protocol?', 'How does a heat pump work?', 'history of the transistor'" },
               depth: { type: "string", enum: ["quick", "standard"], description: "quick = encyclopedia + instant answer only (faster); standard (default) adds official docs, Stack Overflow, GitHub, articles linked from Hacker News, and scholarly papers" },
               lang: { type: "string", pattern: "^[a-z]{2,3}$", description: "Wikipedia language code, default en" },
             },
@@ -1066,7 +1067,7 @@ async function main() {
     const r = routes as any;
     res.set("Cache-Control", "public, max-age=3600").json({
       service: SERVICE_NAME,
-      note: "Real responses captured Oct 6, 2026 for exactly the input shown (values change; long text and arrays trimmed so the 402 header stays small). Call any route without payment to get its 402 challenge.",
+      note: "Real responses captured Oct 6-9, 2026 for exactly the input shown (values change; long text and arrays trimmed so the 402 header stays small). Call any route without payment to get its 402 challenge.",
       examples: Object.keys(r).filter((k) => k.startsWith("GET ")).map((k) => ({
         route: k,
         url: `${PUBLIC_URL}${k.split(" ")[1]}`,
@@ -1118,7 +1119,7 @@ async function main() {
       `> Pay to: ${payToAddr} (EVM chains)${payToSolana ? `, ${payToSolana} (Solana)` : ""}. ${ERRORS_DOC}`,
       "",
       "## Paid endpoints",
-      `- GET ${PUBLIC_URL}/report?q=<question or topic>  (${REPORT_PRICE}) — research brief with citations / web research / topic summary: summary, cited bullets, sources from official docs, Wikipedia, Stack Overflow, GitHub, HN-linked articles, Crossref (off-topic sources dropped), Wikipedia summary card, confidence, suggested follow-up calls. Optional depth=quick|standard, lang=en.`,
+      `- GET ${PUBLIC_URL}/report?q=<question or topic>  (${REPORT_PRICE}) — research brief with citations: ask a question, get a short cited answer in one call. Returns a 1-3 sentence answer, key points tied to source ids, the sources used (typically 1-5; title, URL, publisher, date, supporting quote), confidence with reason, Wikipedia summary card, free permalink and suggested follow-up calls. Sources: Wikipedia first, plus Stack Overflow, GitHub READMEs, Crossref papers, DuckDuckGo instant answers, official docs and HN-linked articles when they match (off-topic sources dropped). Optional depth=quick|standard, lang=en. No sources found -> 422 (not charged).`,
       `- GET ${PUBLIC_URL}/read?url=<https url>  (${READ_PRICE}) — web page to clean LLM-ready markdown with title, description, publish date, headings, links. Optional maxChars (default 20000).`,
       `- GET ${PUBLIC_URL}/check?url=<https x402 endpoint>  (${CHECK_PRICE}) — x402 endpoint check + Bazaar listing audit: one unpaid probe, score, grade, prioritized fixes, Coinbase validator verdict, live Bazaar listing (30-day calls/payers, stale metadata) and search rank for its own name and tags. Optional method=GET|POST.`,
       `- GET ${PUBLIC_URL}/news?q=<keywords>  (${NEWS_PRICE}) — news search: recent headlines (outlet, link, publish time, match score) from the GDELT global news index (15-min updates), major publisher feeds and Hacker News. Optional hours=1-168 (default 72), limit=1-25 (default 10). Headlines + links only; use /read for full text.`,
@@ -1142,7 +1143,7 @@ async function main() {
       `- ${PUBLIC_URL}/health — status`,
       "",
       "## Example",
-      `curl -i "${PUBLIC_URL}/report?q=history+of+the+transistor"   # 402 challenge`,
+      `curl -i "${PUBLIC_URL}/report?q=What+is+the+Model+Context+Protocol%3F"   # 402 challenge`,
       "",
     ].join("\n");
 
@@ -1217,7 +1218,7 @@ async function main() {
         "/report": {
           get: {
             operationId: "researchBrief",
-            summary: "Research brief with citations",
+            summary: "Research brief with citations: a short cited answer to a question in one call",
             description: r["GET /report"].description,
             tags: ["Research"],
             parameters: [
