@@ -9,7 +9,7 @@ const PAY_TO = process.env.PAY_TO ?? "0x079471E6F43b6feeF80895E19cBFcBB496904852
 const ORIGIN = (process.env.ORIGIN ?? "https://x402-seller-pmlm.onrender.com").replace(/\/$/, "");
 const HOST = new URL(ORIGIN).host;
 const QUERIES = (process.env.QUERIES ??
-  "research brief|research brief with citations|answer a question with sources|web research|summarize a topic|wikipedia summary|x402 bazaar ranking|read web page as markdown|url to markdown|web page to markdown|scrape article text|x402 endpoint check|validate x402 endpoint|news search|news headlines|token price|crypto price|solana token price|sol price|wallet balance|token balances|transaction receipt|decode transaction|gas price|gas fees|ethereum gas|erc20 balance|tx status|latest news|crypto token price"
+  "research brief|research brief with citations|answer a question with sources|web research|summarize a topic|wikipedia summary|x402 bazaar ranking|read web page as markdown|url to markdown|web page to markdown|scrape article text|x402 endpoint check|validate x402 endpoint|news search|news headlines|token price|crypto price|solana token price|sol price|wallet balance|token balances|transaction receipt|decode transaction|gas price|gas fees|ethereum gas|erc20 balance|tx status|latest news|crypto token price|web search|search api|serp api|search results with page text"
 ).split("|");
 const CDP = "https://api.cdp.coinbase.com/platform/v2/x402/discovery";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -26,7 +26,7 @@ const out = { at: new Date().toISOString(), origin: ORIGIN, payTo: PAY_TO };
 
 // 1. Live endpoints + latency
 out.live = [];
-for (const p of ["/health", "/llms.txt", "/openapi.json", "/.well-known/x402", "/report?q=test", "/read?url=https://example.com", "/check?url=https://example.com", "/news?q=test", "/price?token=ETH", "/solana-price?token=SOL", "/balance?address=vitalik.eth", "/tx?hash=0x" + "ab".repeat(32), "/gas"]) {
+for (const p of ["/health", "/llms.txt", "/openapi.json", "/.well-known/x402", "/report?q=test", "/read?url=https://example.com", "/check?url=https://example.com", "/news?q=test", "/price?token=ETH", "/solana-price?token=SOL", "/balance?address=vitalik.eth", "/tx?hash=0x" + "ab".repeat(32), "/gas", "/search?q=test"]) {
   const t = Date.now();
   let status = 0;
   let hasChallenge = false;
@@ -72,7 +72,7 @@ for (const q of QUERIES) {
 }
 
 // 4. CDP validate (free)
-for (const path of ["/report", "/read", "/check", "/news", "/price", "/solana-price", "/balance", "/tx", "/gas"]) {
+for (const path of ["/report", "/read", "/check", "/news", "/price", "/solana-price", "/balance", "/tx", "/gas", "/search"]) {
   const v = await j("https://api.cdp.coinbase.com/platform/v2/x402/validate", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -111,7 +111,7 @@ if (Array.isArray(bs.body?.items)) {
     .map((t) => ({ at: t.timestamp, from: t.from.hash, usd: Number(t.total.value) / 1e6, tx: t.transaction_hash }))
     .filter((t) => isSale(t.from, t.usd));
 } else {
-  const RPCS = (process.env.BASE_RPCS ?? "https://developer-access-mainnet.base.org|https://base-rpc.publicnode.com|https://mainnet.base.org").split("|");
+  const RPCS = (process.env.BASE_RPCS ?? "https://base.gateway.tenderly.co|https://developer-access-mainnet.base.org|https://base-rpc.publicnode.com|https://mainnet.base.org").split("|");
   const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
   const toTopic = "0x" + PAY_TO.slice(2).toLowerCase().padStart(64, "0");
   for (const url of RPCS) {
@@ -119,9 +119,12 @@ if (Array.isArray(bs.body?.items)) {
       const latest = parseInt(await rpc(url, "eth_blockNumber", []), 16);
       const startBlock = latest - Math.round((LOOKBACK_H * 3600) / 2); // Base: 2 s blocks
       const logs = [];
-      for (let b = startBlock; b <= latest; b += 500) {
-        const e = Math.min(b + 499, latest);
-        logs.push(...(await rpc(url, "eth_getLogs", [{ address: USDC, fromBlock: "0x" + b.toString(16), toBlock: "0x" + e.toString(16), topics: [TRANSFER, null, toTopic] }])));
+      // 500-block chunks (public gateways cap ranges at 1000), 6 in parallel; any chunk error fails this RPC
+      const chunks = [];
+      for (let b = startBlock; b <= latest; b += 500) chunks.push([b, Math.min(b + 499, latest)]);
+      for (let i = 0; i < chunks.length; i += 6) {
+        const got = await Promise.all(chunks.slice(i, i + 6).map(([b, e]) => rpc(url, "eth_getLogs", [{ address: USDC, fromBlock: "0x" + b.toString(16), toBlock: "0x" + e.toString(16), topics: [TRANSFER, null, toTopic] }])));
+        for (const g of got) logs.push(...g);
       }
       const sales = [];
       for (const l of logs) {
