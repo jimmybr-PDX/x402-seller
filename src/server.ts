@@ -1012,8 +1012,46 @@ async function main() {
   // Builder code only when Base is offered: it attributes Base settlements (extensions are per route, not per network,
   // same as the CDP SDK's own server, which adds it to every route with an EVM option; other facilitators ignore it).
   const builderCode = BUILDER_CODE_EXT && NETWORKS.includes("eip155:8453") ? { [BUILDER_CODE]: BUILDER_CODE_EXT } : {};
+  // Unpaid API calls used to get an empty {} body; agents that read the body (not the header) saw nothing.
+  // Now: what the tool returns, the price, how to pay, and a real sample output, so a look can become a buy.
+  // The PAYMENT-REQUIRED header stays the canonical x402 v2 challenge (no x402Version/accepts in the body,
+  // so v1-style parsers never mistake this for a challenge). Browsers still get the paywall HTML.
+  const unpaidBodyFor = (k: string, r: any) => {
+    const path = k.split(" ")[1] as PaidPath;
+    const info = r.extensions?.bazaar?.info ?? {};
+    const body = {
+      error: "payment_required",
+      tool: r.serviceName,
+      priceUsd: Number(usd(PAID[path])),
+      whatYouGet: r.description,
+      charged: "Only when the call succeeds (HTTP 2xx). Failed calls are free.",
+      howToPay: `x402 v2: decode the base64 JSON in this response's PAYMENT-REQUIRED header (one accepts entry per network: ${NETWORK_NAMES.join(", ")}; USDC), sign with any x402 client (e.g. @x402/fetch wrapFetchWithPayment), then retry the same request with the PAYMENT-SIGNATURE header.`,
+      exampleInput: info.input?.queryParams ?? info.input?.body ?? null,
+      exampleOutput: info.output?.example ?? null,
+      more: { examples: `${PUBLIC_URL}/examples`, llms: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json` },
+    };
+    return () => ({ contentType: "application/json", body });
+  };
+  const settleFailedBody = (_ctx: unknown, f: { errorReason?: string; errorMessage?: string }) => ({
+    contentType: "application/json",
+    body: {
+      error: "settlement_failed",
+      charged: false,
+      reason: f?.errorReason ?? "unknown",
+      ...(f?.errorMessage ? { detail: String(f.errorMessage).slice(0, 200) } : {}),
+      next: "You were not charged. Retry with a fresh payment signature; if it keeps failing, try another listed network.",
+    },
+  });
   const resolvedRoutes = Object.fromEntries(
-    Object.entries(routes).map(([k, r]) => [k, { ...r, extensions: { ...(hasEvm ? CDP_SUPPORTED_EXTENSIONS : {}), ...builderCode, ...r.extensions } }]),
+    Object.entries(routes).map(([k, r]) => [
+      k,
+      {
+        ...r,
+        unpaidResponseBody: unpaidBodyFor(k, r),
+        settlementFailedResponseBody: settleFailedBody,
+        extensions: { ...(hasEvm ? CDP_SUPPORTED_EXTENSIONS : {}), ...builderCode, ...r.extensions },
+      },
+    ]),
   );
   const server = new x402HTTPResourceServer(resourceServer, resolvedRoutes as any);
   await server.initialize(); // fetches /supported from each facilitator and fails fast on an unsupported network
