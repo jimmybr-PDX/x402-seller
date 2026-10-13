@@ -3,7 +3,7 @@
  * Pattern: https://docs.cdp.coinbase.com/x402/quickstart-for-sellers
  *
  * Paid (USDC on Base, Polygon, Arbitrum, Solana via the CDP facilitator; Avalanche, Sei via PayAI):
- *   GET /report?q=   cited research brief (Wikipedia first, plus Stack Overflow, GitHub, Crossref, DuckDuckGo, official docs, HN-linked articles; relevance-filtered)
+ *   GET /report?q=   cited research brief (Wikipedia first, plus Stack Overflow, GitHub, Crossref, DuckDuckGo, official docs, HN-linked articles, and top web pages for practical questions Wikipedia doesn't cover; relevance-filtered)
  *   GET /read?url=   any public web page -> clean LLM-ready markdown + title, headings, links
  *   GET /check?url=  x402 endpoint readiness + Bazaar ranking check (one unpaid probe)
  *   GET /news?q=     recent news headlines (GDELT, Hacker News, major publisher RSS feeds)
@@ -1157,7 +1157,7 @@ async function main() {
       `> Pay to: ${payToAddr} (EVM chains)${payToSolana ? `, ${payToSolana} (Solana)` : ""}. ${ERRORS_DOC}`,
       "",
       "## Paid endpoints",
-      `- GET ${PUBLIC_URL}/report?q=<question or topic>  (${REPORT_PRICE}) — research brief with citations: ask a question, get a short cited answer in one call. Returns a 1-3 sentence answer, key points tied to source ids, the sources used (typically 1-5; title, URL, publisher, date, supporting quote), confidence with reason, Wikipedia summary card, free permalink and suggested follow-up calls. Sources: Wikipedia first, plus Stack Overflow, GitHub READMEs, Crossref papers, DuckDuckGo instant answers, official docs and HN-linked articles when they match (off-topic sources dropped). Optional depth=quick|standard, lang=en. No sources found -> 422 (not charged).`,
+      `- GET ${PUBLIC_URL}/report?q=<question or topic>  (${REPORT_PRICE}) — research brief with citations: ask a question, get a short cited answer in one call. Returns a 1-3 sentence answer, key points tied to source ids, the sources used (typically 1-5; title, URL, publisher, date, supporting quote), confidence with reason, Wikipedia summary card, free permalink and suggested follow-up calls. Sources: Wikipedia first, plus Stack Overflow, GitHub READMEs, Crossref papers, DuckDuckGo instant answers, official docs, HN-linked articles, and top web pages for practical questions Wikipedia doesn't cover (e.g. best time to visit Japan), when they match (off-topic sources dropped). Optional depth=quick|standard, lang=en. No sources found -> 422 (not charged).`,
       `- GET ${PUBLIC_URL}/read?url=<https url>  (${READ_PRICE}) — web page to clean LLM-ready markdown with title, description, publish date, headings, links. Optional maxChars (default 20000).`,
       `- GET ${PUBLIC_URL}/check?url=<https x402 endpoint>  (${CHECK_PRICE}) — x402 endpoint check + Bazaar listing audit: one unpaid probe, score, grade, prioritized fixes, Coinbase validator verdict, live Bazaar listing (30-day calls/payers, stale metadata) and search rank for its own name and tags. Optional method=GET|POST.`,
       `- GET ${PUBLIC_URL}/news?q=<keywords>  (${NEWS_PRICE}) — news search: recent headlines (outlet, link, publish time, match score) from the GDELT global news index (15-min updates), major publisher feeds and Hacker News. Optional hours=1-168 (default 72), limit=1-25 (default 10). Headlines + links only; use /read for full text.`,

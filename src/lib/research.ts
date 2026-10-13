@@ -3,7 +3,8 @@
  * sources; official docs, .gov/.edu/journals and pages the Wikipedia article itself cites outrank Wikipedia):
  *   Wikipedia (search + full plain-text article), Stack Overflow (Stack Exchange API, no key),
  *   GitHub (repo search + README), Hacker News (Algolia; used to discover linked articles),
- *   DuckDuckGo Instant Answer, and Crossref (scholarly works).
+ *   DuckDuckGo Instant Answer, Crossref (scholarly works), and - only when no on-topic Wikipedia article exists
+ *   (practical questions like "best time to visit Japan") - the top web-search pages whose titles match the question.
  * Pipeline: discover candidates -> fetch real page text -> drop off-topic sources by relevance
  * scoring against the query -> follow links to official docs -> extractive summary built from
  * the best query-matching sentences (intent-aware), every sentence cited [n].
@@ -11,6 +12,7 @@
  */
 import { getJson, safeFetch, USER_AGENT } from "./net.js";
 import { htmlToMarkdown } from "./read.js";
+import { searchLinks } from "./search.js";
 
 export type Source = {
   id: number;
@@ -399,10 +401,10 @@ async function crossref(q: Query): Promise<Doc[]> {
     });
 }
 
-async function fetchPage(url: string, title: string | null, origin: string, at: string | null = null): Promise<Doc | null> {
+async function fetchPage(url: string, title: string | null, origin: string, at: string | null = null, timeoutMs = 6000): Promise<Doc | null> {
   try {
     if (/\.(pdf|zip|png|jpe?g|gif|mp4|mp3)(\?|$)/i.test(url) || /(youtube\.com|youtu\.be|twitter\.com|x\.com)\//.test(url)) return null;
-    const r = await safeFetch(url, { timeoutMs: 6000, maxBytes: 1_500_000, accept: "text/html,application/xhtml+xml,*/*;q=0.8" });
+    const r = await safeFetch(url, { timeoutMs, maxBytes: 1_500_000, accept: "text/html,application/xhtml+xml,*/*;q=0.8" });
     if (r.status >= 400 || !/html/i.test(r.headers.get("content-type") ?? "")) return null;
     const p = htmlToMarkdown(r.body, r.url);
     const text = markdownToText(p.markdown);
@@ -578,7 +580,7 @@ function rankSentences(q: Query, docs: Doc[]): Cand[] {
     if (def && (q.kind === "define" || q.kind === "general")) score += 0.4;
     if (x.pos < 3 && x.section === "") score += 0.15; // lead sentences are usually the gist
     score -= Math.min(0.2, x.pos / 2000);
-    if (/^(this|these|it|they|he|she|however|but|also|so|and|thus|therefore)\b/i.test(x.s)) score -= 0.25; // dangling references read badly out of context
+    if (/^(this|these|it|they|he|she|however|but|also|so|and|thus|therefore|instead|otherwise|similarly|likewise|meanwhile|plus|much like|like other)\b|^(the|this|that) (brand|company|product|latter|former|one)\b/i.test(x.s)) score -= 0.25; // dangling references read badly out of context
     if (/\?$/.test(x.s)) score -= 0.4;
     if (FIGURATIVE.test(x.s)) return; // metaphors / rhetorical openers are not answers
     if (q.kind !== "history" && MARKET.test(x.s)) score -= 0.45; // forecasts and market sizes don't explain what/why/how
@@ -833,6 +835,12 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
   docs = docs.map(score);
   if (process.env.RESEARCH_DEBUG) console.error("relevance:", docs.map((d) => `${d.title}=${d.relevance}`));
   docs = docs.filter((d) => d.relevance > 0);
+  // Practical / non-encyclopedic questions ("best time to visit Japan", "how to remove rust from cast iron"):
+  // when no on-topic Wikipedia article exists, add the top web-search pages whose titles match the question.
+  const nCore = q.core.length || 1;
+  const wikiCov = Math.max(0, ...docs.filter((d) => d.provider === "wikipedia").map((d) => Math.max(termCount(q, d.title), d.alias ? termCount(q, d.alias) : 0) / nCore));
+  const wantWeb = depth === "standard" && lang === "en" && q.kind !== "compare" && wikiCov < 0.75 && process.env.REPORT_WEB_SEARCH !== "off";
+  const webLinks = wantWeb ? searchLinks(q.raw, 8, 4000, ["wikipedia"]) : Promise.resolve([]);
   if (depth === "standard") {
     const seen = new Set(docs.map((d) => d.url));
     const leadWiki = docs.filter((d) => d.provider === "wikipedia").sort((a, b) => b.relevance - a.relevance)[0];
@@ -848,8 +856,13 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
       })),
       ...hn.filter((h) => !seen.has(h.url)).slice(0, 3).map((h) => fetchPage(h.url, h.title, "hackernews", h.at)),
       ...(await refUrls).filter((u) => !seen.has(u) && !official.includes(u)).slice(0, 6).map((u) => fetchPage(u, null, "primary-sources")), // parallel; many cited pages moved or block bots
+      ...(await webLinks).filter((h) => !seen.has(h.url) && !official.includes(h.url) && !WEAK.test(h.domain) && termCount(q, h.title) / nCore >= 0.66).slice(0, 4).map((h) => fetchPage(h.url, h.title, "web-search", null, 4500)),
     ]);
-    for (const p of pages) if (p && !docs.some((d) => d.url === p.url)) { score(p); if (p.relevance > 0) docs.push(p); }
+    for (const p of pages) if (p && !docs.some((d) => d.url === p.url)) {
+      score(p);
+      if (p.origin === "web-search" && /^\d{1,2}\s+\S/.test(p.title)) p.quality *= 0.75; // "5 Store-Bought Cookie Doughs...": product roundups talk about items, not the general answer
+      if (p.relevance > 0) docs.push(p);
+    }
     // one hop from official hub pages (e.g. a docs chapter index) to its most on-topic subpages
     const hubs = officialRaw; // includes hub pages that are not themselves on-topic
     if (hubs.length) {

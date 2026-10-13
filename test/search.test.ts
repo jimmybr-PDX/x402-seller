@@ -5,7 +5,7 @@
  */
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { webSearch, __setCurlForTests } from "../src/lib/search.js";
+import { webSearch, searchLinks, __setCurlForTests } from "../src/lib/search.js";
 
 const KEY = "test-serper-key-DO-NOT-LOG-123";
 const realFetch = globalThis.fetch;
@@ -123,4 +123,16 @@ test("all sources failing returns no_results (handler maps to 422, caller not ch
   const out: any = await webSearch("nothing here", 5);
   assert.equal(out.error, "no_results");
   assert.equal(out.sources_tried.serper, "serper 500");
+});
+
+test("searchLinks: ranked links only (no page fetches), skips listed sources, never throws", async () => {
+  delete process.env.SERPER_API_KEY;
+  const urls = ["https://93.184.216.20/a", "https://93.184.216.21/b", "https://93.184.216.22/c"];
+  mockFetch((url) => (url.includes("bing.com/search") && !url.includes("format=rss") ? html(200, bingPage(urls, "sourdough")) : html(404, "")));
+  const links = await searchLinks("sourdough", 3, 4000, ["wikipedia"]);
+  assert.equal(links.length, 3);
+  assert.deepEqual(links.map((l) => l.url), urls.map((u) => new URL(u).toString()));
+  assert.ok(!calls.some((c) => urls.some((u) => c.url.startsWith(u))), "must not fetch result pages");
+  assert.ok(!calls.some((c) => c.url.includes("wikipedia.org")), "skipped source must not be called");
+  assert.deepEqual(await searchLinks("x"), []); // too short -> empty, no throw
 });

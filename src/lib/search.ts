@@ -205,21 +205,16 @@ async function pageText(url: string): Promise<{ text: string | null; published: 
 const cache = new Map<string, { at: number; v: any }>();
 const TTL = 10 * 60 * 1000;
 
-export async function webSearch(qRaw: string, nRaw?: number) {
-  const q = qRaw.replace(/\s+/g, " ").trim();
-  if (q.length < 2 || q.length > 300) throw new InputError("q is required (2-300 chars)");
-  const n = Math.min(10, Math.max(1, Math.floor(Number(nRaw) || 5)));
-  const key = `${q.toLowerCase()}|${n}`;
-  const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < TTL) return { ...hit.v, cached: true };
+/** Walk the source chain; each source tops up the list until n results (deduped by URL, max 2 per domain via clean()). */
+async function findHits(q: string, n: number, budgetMs: number, skip: string[] = []) {
   const started = Date.now();
   const qt = terms(q);
   const tried: Record<string, string> = {};
-  // Walk the chain; each source tops up the list until n results (deduped by URL, max 2 per domain via clean()).
   let raw: Hit[] = [], hits: (Hit & { domain: string })[] = [];
   for (const [name, fn] of sources()) {
     if (hits.length >= n) break;
-    if (hits.length && Date.now() - started > SOURCE_BUDGET_MS) { tried[name] = "skipped (time budget)"; continue; }
+    if (skip.includes(name)) continue;
+    if (Date.now() - started > budgetMs && (hits.length || budgetMs < SOURCE_BUDGET_MS)) { tried[name] = "skipped (time budget)"; continue; }
     try {
       const got = (await fn(q)).map((h) => ({ ...h, src: name }));
       tried[name] = `ok (${clean(got, n, qt).length})`;
@@ -229,6 +224,25 @@ export async function webSearch(qRaw: string, nRaw?: number) {
       tried[name] = e instanceof Error ? e.message : String(e);
     }
   }
+  return { hits, tried };
+}
+
+/** Ranked result links only (no page fetch), for callers that fetch pages themselves (e.g. /report). Never throws. */
+export async function searchLinks(qRaw: string, n = 6, budgetMs = 4000, skip: string[] = []): Promise<{ title: string; url: string; domain: string; snippet: string }[]> {
+  const q = qRaw.replace(/\s+/g, " ").trim();
+  if (q.length < 2 || q.length > 300) return [];
+  try { return (await findHits(q, Math.min(10, Math.max(1, n)), budgetMs, skip)).hits.map((h) => ({ title: h.title, url: h.url, domain: h.domain, snippet: h.snippet })); } catch { return []; }
+}
+
+export async function webSearch(qRaw: string, nRaw?: number) {
+  const q = qRaw.replace(/\s+/g, " ").trim();
+  if (q.length < 2 || q.length > 300) throw new InputError("q is required (2-300 chars)");
+  const n = Math.min(10, Math.max(1, Math.floor(Number(nRaw) || 5)));
+  const key = `${q.toLowerCase()}|${n}`;
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < TTL) return { ...hit.v, cached: true };
+  const started = Date.now();
+  const { hits, tried } = await findHits(q, n, SOURCE_BUDGET_MS);
   if (!hits.length) return { error: "no_results", query: q, sources_tried: tried };
   const used = [...new Set(hits.map((h) => h.src!))];
   const source = used[0]!;
