@@ -1185,7 +1185,7 @@ async function main() {
         ...r,
         unpaidResponseBody: unpaidBodyFor(k, r),
         settlementFailedResponseBody: settleFailedBody,
-        extensions: { ...(hasEvm ? CDP_SUPPORTED_EXTENSIONS : {}), ...builderCode, ...r.extensions },
+        extensions: { ...(hasEvm && k !== "GET /credits/buy" ? CDP_SUPPORTED_EXTENSIONS : {}), ...builderCode, ...r.extensions }, // dynamic-price route: CDP gas-sponsoring extensions need a static price to fill their info
       },
     ]),
   );
