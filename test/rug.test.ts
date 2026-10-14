@@ -21,3 +21,10 @@ test("rejects bad input and unknown chain", async () => {
   await assert.rejects(rugCheck("JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", "dogechain"), /chain must be one of/);
 });
 test("evm chain aliases accepted", async () => { const { CHAINS } = await import("../src/lib/rug.js"); for (const c of ["bnb", "ethereum", "arbitrum", "base"]) assert.ok((CHAINS as readonly string[]).includes(c)); await assert.rejects(rugCheck("nope", "bsc"), /bnb token contract/); });
+test("established EVM token with admin mint is not false-medium; honeypot stays high", () => {
+  const legit = scoreEvm({ is_mintable: "1", is_in_cex: { listed: "1", cex_list: ["Coinbase"] }, lp_holders: [{ address: "0xabc", percent: "1", is_locked: 0 }] }, 300000, 900 * 24);
+  assert.equal(legit.level, "low");
+  assert.ok(legit.reasons.some((x) => x.check === "established"));
+  assert.equal(scoreEvm({ is_honeypot: "1", is_in_cex: "1", is_mintable: "1" }, 5e6, 1000 * 24).level, "high");
+  assert.equal(scoreEvm({ is_mintable: "1", lp_holders: [{ address: "0xabc", percent: "1", is_locked: 0 }] }, 20000, 48).level, "medium");
+});

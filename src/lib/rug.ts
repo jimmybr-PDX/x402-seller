@@ -192,6 +192,14 @@ export function scoreEvm(g: any, liquidityUsd: number | null, ageHours: number |
   if ((g?.lp_holders ?? []).length && lpLocked < 50) add("lp_unlocked", 10, `Only ${lpLocked.toFixed(0)}% of LP tokens are locked or burned.`);
   if (liquidityUsd == null || liquidityUsd < 5000) add("liquidity", 15, liquidityUsd == null ? "No DEX pool found." : `Very thin liquidity ($${Math.round(liquidityUsd)}).`);
   if (ageHours != null && ageHours < 24) add("age", 10, `Very new: ${ageHours.toFixed(1)} hours old.`);
+  // Established tokens (CEX-listed, or $1M+ liquidity and 90+ days old): owner powers stay in the reasons at low weight;
+  // admin mint/pause/proxy is common for legit tokens, and rugs rarely last that long with deep liquidity.
+  const cex = g?.is_in_cex === "1" || g?.is_in_cex?.listed === "1";
+  const established = !on("is_honeypot") && (cex || Number(g?.holder_count || 0) >= 100000 || ((liquidityUsd ?? 0) >= 1e6 && (ageHours ?? 0) >= 90 * 24));
+  if (established) {
+    for (const x of r) if (["mint_function", "owner_control", "proxy", "lp_unlocked", "unverified"].includes(x.check)) { x.points = Math.round(x.points / 4); x.detail += " (down-weighted: established token)"; }
+    r.push({ check: "established", points: 0, detail: cex ? `Listed on a centralized exchange${g?.is_in_cex?.cex_list?.length ? ` (${g.is_in_cex.cex_list.slice(0, 3).join(", ")})` : ""}.` : Number(g?.holder_count || 0) >= 100000 ? `${Number(g.holder_count).toLocaleString("en-US")} holders.` : `Established: $${Math.round(liquidityUsd!).toLocaleString("en-US")} liquidity and ${Math.round(ageHours! / 24)} days old.` });
+  }
   const score = Math.min(100, r.reduce((a, x) => a + x.points, 0));
   return { score, level: score >= 50 ? "high" : score >= 25 ? "medium" : "low", reasons: r.sort((a, b) => b.points - a.points) };
 }
