@@ -29,7 +29,7 @@ export type Facts = {
   liquidityUsd: number | null; priceUsd: number | null; pairs: number; lpNote: string | null;
   ageHours: number | null; creator: string | null; funder: string | null;
   priorLaunches: number | null; priorDead: number | null;
-  creatorFlagged: boolean; funderFlagged: boolean; unknown: string[]; holderSource?: string | null; holderCount?: number | null; launchpad?: string | null;
+  creatorFlagged: boolean; funderFlagged: boolean; unknown: string[]; timingsMs?: Record<string, number>; holderSource?: string | null; holderCount?: number | null; launchpad?: string | null;
 };
 export type Reason = { check: string; points: number; detail: string };
 
@@ -97,15 +97,22 @@ const mintsCreated = (tx: any): string[] => {
 
 export async function gatherFacts(mint: string): Promise<Facts> {
   const unknown: string[] = [];
-  const acct = await rpc<any>("getAccountInfo", [mint, { encoding: "jsonParsed" }], { timeoutMs: 6000 });
+  const timingsMs: Record<string, number> = {};
+  const t0 = Date.now();
+  const timed = <T>(name: string, p: Promise<T>) => p.finally(() => { timingsMs[name] = Date.now() - t0; });
+  // Parallel: mint account (RPC), Jupiter token data and DexScreener market start together.
+  const acctP = timed("rpcMint", rpc<any>("getAccountInfo", [mint, { encoding: "jsonParsed" }], { timeoutMs: 3500 }));
+  const jupP = timed("jupiter", jupiter(mint));
+  const marketP = timed("dexscreener", marketOf(mint));
+  const acct = await acctP;
   const info = acct?.value?.data?.parsed?.info;
   if (!acct?.value || acct.value.data?.parsed?.type !== "mint" || !KNOWN_PROGRAM_OWNERS.has(acct.value.owner)) throw new SolanaInputError("not an SPL token mint address");
   const decimals = info.decimals ?? null; const supply = Number(info.supply) / 10 ** (decimals ?? 0);
-  const jup = await jupiter(mint);
+  const jup = await jupP;
   const fast = !!(jup?.dev && jup.createdAt && jup.audit?.topHoldersPercentage != null);
   const [largest, market, oldest] = await Promise.all([
     fast ? null : rpc<any>("getTokenLargestAccounts", [mint], { timeoutMs: 6000 }).catch(() => null),
-    marketOf(mint),
+    marketP,
     fast ? null : oldestTx(mint).catch(() => null),
   ]);
   let top1Pct: number | null = null, top10Pct: number | null = null, holderSource: string | null = null;
@@ -125,10 +132,17 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   } else unknown.push("creator (token has too much history for the free RPC lookup)");
   if (creator && fast) {
     if (priorDead! >= 3 && priorDead! / Math.max(1, priorLaunches!) >= 0.5) flagDeployer(creator, priorDead!, priorLaunches!);
-    try {
-      const first = await oldestTx(creator, 1).catch(() => null);
-      if (first?.complete) { const t = await getTx(first.sig); funder = (t?.transaction?.message?.instructions ?? []).find((i: any) => i?.parsed?.type === "transfer" && i.parsed.info?.destination === creator)?.parsed?.info?.source ?? null; }
-    } catch {}
+    // Funder lookup is the slowest public-RPC step from Render: time-box it and report unknown instead of waiting.
+    const look = (async () => {
+      const first = await oldestTx(creator!, 1).catch(() => null);
+      if (!first?.complete) return null;
+      const t = await getTx(first.sig);
+      return (t?.transaction?.message?.instructions ?? []).find((i: any) => i?.parsed?.type === "transfer" && i.parsed.info?.destination === creator)?.parsed?.info?.source ?? null;
+    })().catch(() => null);
+    const FUNDER_MS = Number(process.env.RUG_FUNDER_MS ?? 1500);
+    const got = await Promise.race([look, new Promise<"timeout">((r) => setTimeout(() => r("timeout"), FUNDER_MS).unref?.())]);
+    if (got === "timeout") unknown.push("funding wallet (lookup over time budget)"); else funder = got as string | null;
+    timingsMs.funder = Date.now() - t0;
   } else if (creator) {
     try {
       const sigs = await rpc<any[]>("getSignaturesForAddress", [creator, { limit: 100 }], { timeoutMs: 8000 });
@@ -148,7 +162,7 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   }
   return { mint, decimals, supply, mintAuthority: info.mintAuthority ?? null, freezeAuthority: info.freezeAuthority ?? null, token2022: acct.value.owner !== "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
     top1Pct, top10Pct, liquidityUsd: market.liquidityUsd, priceUsd: market.priceUsd, pairs: market.pairs.length,
-    holderSource, holderCount: jup?.holderCount ?? null, launchpad: jup?.launchpad ?? null,
+    timingsMs: { ...timingsMs, total: Date.now() - t0 }, holderSource, holderCount: jup?.holderCount ?? null, launchpad: jup?.launchpad ?? null,
     lpNote: market.pairs.length ? `${market.pairs.length} pool(s) on ${[...new Set(market.pairs.map((p: any) => p.dexId))].join(", ")}; LP lock/burn status not verified` : null,
     ageHours, creator, funder, priorLaunches, priorDead, creatorFlagged: !!(creator && list[creator] && !(priorDead! >= 3)), funderFlagged: !!(funder && list[funder]), unknown };
 }
@@ -222,7 +236,18 @@ async function evmCheck(addr: string, chain: string) {
 export const CHAINS = ["solana", "base", "bnb", "ethereum", "arbitrum"] as const; // EVM chains: add to EVM map (GoPlus chain id + DexScreener slug)
 
 const verdictOf = (l: string) => (l === "high" ? "Multiple high-risk patterns found." : l === "medium" ? "Some high-risk patterns found." : "No major high-risk patterns found.");
+const CACHE_MS = 60_000;
+const cache = new Map<string, { at: number; v: any }>();
 export async function rugCheck(mintRaw: string, chainRaw = "solana") {
+  const ck = `${(chainRaw || "solana").toLowerCase()}:${mintRaw.trim()}`;
+  const hit = cache.get(ck);
+  if (hit && Date.now() - hit.at < CACHE_MS) return { ...hit.v, cached: true };
+  const v = await rugCheckUncached(mintRaw, chainRaw);
+  cache.set(ck, { at: Date.now(), v });
+  if (cache.size > 500) cache.delete(cache.keys().next().value!);
+  return { ...v, cached: false };
+}
+async function rugCheckUncached(mintRaw: string, chainRaw = "solana") {
   const c0 = (chainRaw || "solana").toLowerCase(); const chain = ALIAS[c0] ?? c0;
   if (!(CHAINS as readonly string[]).includes(chain)) throw new SolanaInputError(`chain must be one of: ${CHAINS.join(", ")}`);
   if (EVM[chain]) {
