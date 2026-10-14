@@ -29,7 +29,7 @@ export type Facts = {
   liquidityUsd: number | null; priceUsd: number | null; pairs: number; lpNote: string | null;
   ageHours: number | null; creator: string | null; funder: string | null;
   priorLaunches: number | null; priorDead: number | null;
-  creatorFlagged: boolean; funderFlagged: boolean; unknown: string[];
+  creatorFlagged: boolean; funderFlagged: boolean; unknown: string[]; holderSource?: string | null; holderCount?: number | null; launchpad?: string | null;
 };
 export type Reason = { check: string; points: number; detail: string };
 
@@ -42,9 +42,9 @@ export function scoreFacts(f: Facts): { score: number; level: "low" | "medium" |
   if (f.freezeAuthority) add("freeze_authority", 20, "Freeze authority is still active: holders' tokens can be frozen, a common honeypot pattern.");
   else add("freeze_authority", 0, "Freeze authority is revoked.");
   if (f.top10Pct == null) add("holders", 5, "Top-holder concentration unavailable from public RPC.");
-  else if (f.top1Pct! > 30 || f.top10Pct > 70) add("holders", 20, `Top holder owns ${f.top1Pct!.toFixed(1)}%, top 10 own ${f.top10Pct.toFixed(1)}% (may include pool/curve accounts): heavy concentration.`);
-  else if (f.top10Pct > 40) add("holders", 10, `Top 10 holders own ${f.top10Pct.toFixed(1)}% (may include pool/curve accounts).`);
-  else add("holders", 0, `Top 10 holders own ${f.top10Pct.toFixed(1)}%: spread out.`);
+  else if (f.top1Pct! > 30 || f.top10Pct > 70) add("holders", 20, `Top holders own ${f.top10Pct.toFixed(1)}%${f.top1Pct! > 30 ? ` (largest ~${f.top1Pct!.toFixed(1)}%)` : ""} (may include pool/curve accounts): heavy concentration.`);
+  else if (f.top10Pct > 40) add("holders", 10, `Top holders own ${f.top10Pct.toFixed(1)}% (may include pool/curve accounts).`);
+  else add("holders", 0, `Top holders own ${f.top10Pct.toFixed(1)}%: spread out.`);
   if (f.liquidityUsd == null) add("liquidity", 15, "No DEX pool found: cannot sell easily (or not launched yet).");
   else if (f.liquidityUsd < 5000) add("liquidity", 15, `Very thin liquidity ($${Math.round(f.liquidityUsd)}).`);
   else if (f.liquidityUsd < 50000) add("liquidity", 7, `Modest liquidity ($${Math.round(f.liquidityUsd)}).`);
@@ -55,8 +55,8 @@ export function scoreFacts(f: Facts): { score: number; level: "low" | "medium" |
   else add("age", 0, `${Math.round(f.ageHours / 24)} days old.`);
   if (f.priorLaunches != null && f.priorLaunches > 0) {
     const share = (f.priorDead ?? 0) / f.priorLaunches;
-    if ((f.priorDead ?? 0) >= 3 && share >= 0.5) add("deployer_history", 20, `Creator wallet launched ${f.priorLaunches} other token(s) recently; ${f.priorDead} have no liquidity left (serial-launch high-risk pattern).`);
-    else if ((f.priorDead ?? 0) >= 1) add("deployer_history", 8, `Creator wallet launched ${f.priorLaunches} other token(s); ${f.priorDead} have no liquidity left.`);
+    if ((f.priorDead ?? 0) >= 3 && share >= 0.5) add("deployer_history", 20, `Creator wallet launched ${f.priorLaunches} other token(s); ${f.priorDead} never graduated or have no liquidity left (serial-launch high-risk pattern).`);
+    else if ((f.priorDead ?? 0) >= 1) add("deployer_history", 8, `Creator wallet launched ${f.priorLaunches} other token(s); ${f.priorDead} never graduated or have no liquidity left.`);
     else add("deployer_history", 0, `Creator wallet launched ${f.priorLaunches} other token(s), all still with liquidity.`);
   } else if (f.creator) add("deployer_history", 0, "No other recent launches found from the creator wallet.");
   if (f.creatorFlagged) add("known_pattern", 25, "Creator wallet is on our list of deployers behind earlier high-risk patterns.");
@@ -75,6 +75,9 @@ export async function marketOf(mint: string) {
   return { pairs, liquidityUsd: pairs.length ? liq : null, priceUsd: best?.priceUsd ? Number(best.priceUsd) : null, createdAt: pairs.length ? Math.min(...pairs.map((p) => p.pairCreatedAt ?? Infinity)) : null };
 }
 
+async function jupiter(mint: string): Promise<any | null> {
+  try { const r = await fetch(`https://lite-api.jup.ag/tokens/v2/search?query=${mint}`, { signal: AbortSignal.timeout(4000) }); const j = r.ok ? ((await r.json()) as any[]) : []; return j.find((t) => t.id === mint) ?? null; } catch { return null; }
+}
 async function oldestTx(addr: string, pages = 6): Promise<{ sig: string; time: number | null; complete: boolean } | null> {
   let before: string | undefined; let last: any = null;
   for (let i = 0; i < pages; i++) {
@@ -98,23 +101,35 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   const info = acct?.value?.data?.parsed?.info;
   if (!acct?.value || acct.value.data?.parsed?.type !== "mint" || !KNOWN_PROGRAM_OWNERS.has(acct.value.owner)) throw new SolanaInputError("not an SPL token mint address");
   const decimals = info.decimals ?? null; const supply = Number(info.supply) / 10 ** (decimals ?? 0);
+  const jup = await jupiter(mint);
+  const fast = !!(jup?.dev && jup.createdAt && jup.audit?.topHoldersPercentage != null);
   const [largest, market, oldest] = await Promise.all([
-    rpc<any>("getTokenLargestAccounts", [mint], { timeoutMs: 6000 }).catch(() => null),
+    fast ? null : rpc<any>("getTokenLargestAccounts", [mint], { timeoutMs: 6000 }).catch(() => null),
     marketOf(mint),
-    oldestTx(mint).catch(() => null),
+    fast ? null : oldestTx(mint).catch(() => null),
   ]);
-  let top1Pct: number | null = null, top10Pct: number | null = null;
-  if (largest?.value?.length && supply > 0) {
+  let top1Pct: number | null = null, top10Pct: number | null = null, holderSource: string | null = null;
+  if (jup?.audit?.topHoldersPercentage != null) { top10Pct = Number(jup.audit.topHoldersPercentage); top1Pct = top10Pct / 3; holderSource = "jupiter"; } // Jupiter gives the top-holders share only; top1 is a conservative stand-in
+  else if (largest?.value?.length && supply > 0) {
     const amts = largest.value.map((a: any) => Number(a.uiAmount ?? 0));
     top1Pct = (amts[0] / supply) * 100; top10Pct = (amts.slice(0, 10).reduce((a: number, b: number) => a + b, 0) / supply) * 100;
   } else unknown.push("holders");
   let creator: string | null = null, funder: string | null = null, priorLaunches: number | null = null, priorDead: number | null = null;
   let ageHours = market.createdAt && isFinite(market.createdAt) ? (Date.now() - market.createdAt) / 3.6e6 : null;
-  if (oldest?.complete) {
+  if (fast) {
+    creator = jup.dev; ageHours = (Date.now() - Date.parse(jup.createdAt)) / 3.6e6;
+    if (typeof jup.audit?.devMints === "number") { priorLaunches = Math.max(0, jup.audit.devMints - 1); priorDead = Math.max(0, priorLaunches - (jup.audit.devMigrations ?? 0)); }
+  } else if (oldest?.complete) {
     if (oldest.time) ageHours = (Date.now() / 1000 - oldest.time) / 3600;
     creator = feePayer(await getTx(oldest.sig));
   } else unknown.push("creator (token has too much history for the free RPC lookup)");
-  if (creator) {
+  if (creator && fast) {
+    if (priorDead! >= 3 && priorDead! / Math.max(1, priorLaunches!) >= 0.5) flagDeployer(creator, priorDead!, priorLaunches!);
+    try {
+      const first = await oldestTx(creator, 1).catch(() => null);
+      if (first?.complete) { const t = await getTx(first.sig); funder = (t?.transaction?.message?.instructions ?? []).find((i: any) => i?.parsed?.type === "transfer" && i.parsed.info?.destination === creator)?.parsed?.info?.source ?? null; }
+    } catch {}
+  } else if (creator) {
     try {
       const sigs = await rpc<any[]>("getSignaturesForAddress", [creator, { limit: 100 }], { timeoutMs: 8000 });
       const txs: any[] = [];
@@ -133,6 +148,7 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   }
   return { mint, decimals, supply, mintAuthority: info.mintAuthority ?? null, freezeAuthority: info.freezeAuthority ?? null, token2022: acct.value.owner !== "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
     top1Pct, top10Pct, liquidityUsd: market.liquidityUsd, priceUsd: market.priceUsd, pairs: market.pairs.length,
+    holderSource, holderCount: jup?.holderCount ?? null, launchpad: jup?.launchpad ?? null,
     lpNote: market.pairs.length ? `${market.pairs.length} pool(s) on ${[...new Set(market.pairs.map((p: any) => p.dexId))].join(", ")}; LP lock/burn status not verified` : null,
     ageHours, creator, funder, priorLaunches, priorDead, creatorFlagged: !!(creator && list[creator] && !(priorDead! >= 3)), funderFlagged: !!(funder && list[funder]), unknown };
 }
@@ -218,6 +234,6 @@ export async function rugCheck(mintRaw: string, chainRaw = "solana") {
     product: "RugRadar", chain, token: mint, riskScore: score, riskLevel: level, verdict: verdictOf(level),
     reasons: reasons.filter((x) => x.points > 0).map((x) => x.detail), checks: reasons,
     facts: { ...f, top1Pct: f.top1Pct && +f.top1Pct.toFixed(2), top10Pct: f.top10Pct && +f.top10Pct.toFixed(2), ageHours: f.ageHours && +f.ageHours.toFixed(1) },
-    disclaimer: DISCLAIMER, method: "public Solana RPC (mint account, largest holders, creator transactions) + keyless DexScreener (pools, liquidity, prior launches)", generatedAt: new Date().toISOString(),
+    disclaimer: DISCLAIMER, method: "public Solana RPC (mint account; creator/funder transactions) + keyless Jupiter token API (holders, dev wallet, dev launches/graduations, age) + keyless DexScreener (pools, liquidity); RPC fallbacks when Jupiter lacks data", generatedAt: new Date().toISOString(),
   };
 }
