@@ -1252,7 +1252,7 @@ async function main() {
   });
 
   const ICON_PNG = (() => { try { return fs.readFileSync(path.join(__dirname, "assets", "icon.png")); } catch { return null; } })();
-  app.use("/rugradar", express.static(path.join(__dirname, "assets", "rugradar"), { maxAge: "7d", index: false }));
+  app.use("/rugradar", express.static(path.join(__dirname, "assets", "rugradar"), { maxAge: "7d", index: false, redirect: false }));
   app.get("/favicon.ico", (_req, res) => res.sendFile(path.join(__dirname, "assets", "rugradar", "favicon.ico"), { maxAge: "7d" }));
   app.get("/rugradar", (_req, res) => {
     const ex = `${PUBLIC_URL}/rug-check?token=JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN&chain=solana`;
