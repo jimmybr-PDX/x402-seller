@@ -20,3 +20,4 @@ test("rejects bad input and unknown chain", async () => {
   await assert.rejects(rugCheck("not-a-mint"), /mint is required/);
   await assert.rejects(rugCheck("JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", "dogechain"), /chain must be one of/);
 });
+test("evm chain aliases accepted", async () => { const { CHAINS } = await import("../src/lib/rug.js"); for (const c of ["bnb", "ethereum", "arbitrum", "base"]) assert.ok((CHAINS as readonly string[]).includes(c)); await assert.rejects(rugCheck("nope", "bsc"), /bnb token contract/); });

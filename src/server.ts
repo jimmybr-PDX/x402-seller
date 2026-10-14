@@ -96,6 +96,7 @@ const NETWORK_INFO: Record<string, { name: string; usdc: string; facilitator: Fa
 const PAY_TO_EVM = process.env.X402_PAY_TO?.trim() || "0x079471E6F43b6feeF80895E19cBFcBB496904852";
 const PAY_TO_SVM = process.env.X402_SOLANA_PAY_TO?.trim() || "787RZwDGpjmRsG5wgnyBeWQHBuARax8Qo6P7dmDuqKeW";
 // RugRadar (/rug-check) only: dedicated Solana payout wallet (EVM payTo unchanged)
+const RUG_PAY_TO_EVM = process.env.RUG_EVM_PAY_TO?.trim() || "0xa4096858C850Fe94C96e6A5c5B548b98f185Aa68";
 const RUG_PAY_TO_SVM = process.env.RUG_SOLANA_PAY_TO?.trim() || "3a9DUWEA34ejDaMbWo96gFfuqN2TvojJewUBCA14Dg75";
 const PAYAI_FACILITATOR_URL = process.env.PAYAI_FACILITATOR_URL?.trim() || "https://facilitator.payai.network";
 // Base Builder Code (ERC-8021 attribution). Declared via the x402 "builder-code" extension; the CDP facilitator
@@ -328,12 +329,12 @@ async function main() {
   });
 
   // One accepts entry per network; CDP resolves "$0.01" to each chain's native USDC.
-  const accept = (price: string, svmPayTo?: string) =>
+  const accept = (price: string, svmPayTo?: string, evmPayTo?: string) =>
     NETWORKS.map((network) => ({
       scheme: "exact",
       price,
       network,
-      payTo: svmPayTo && NETWORK_INFO[network]!.family === "svm" ? svmPayTo : payToFor(network),
+      payTo: svmPayTo && NETWORK_INFO[network]!.family === "svm" ? svmPayTo : evmPayTo && NETWORK_INFO[network]!.family === "evm" ? evmPayTo : payToFor(network),
       maxTimeoutSeconds: 300,
     }));
 
@@ -900,9 +901,9 @@ async function main() {
       },
     },
     "GET /rug-check": {
-      accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM),
+      accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
       description:
-        `RugRadar: Solana rug check and rug pull checker for new tokens and pump.fun memecoins (Base too: chain=base, with honeypot check). Pass a mint/contract. Returns a 0-100 risk score and plain reasons: mint/freeze authority, top-holder concentration, liquidity, token age, deployer history (prior launches that died), funding wallet linked to earlier high-risk patterns. Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
+        `RugRadar: Solana rug check and rug pull checker for pump.fun memecoins, plus BNB rug check / BSC honeypot check (four.meme rug check), Base, Ethereum, Arbitrum via chain=. Returns a 0-100 risk score and plain reasons: mint/freeze authority, top-holder concentration, liquidity, token age, deployer history (prior launches that died), funder linked to earlier high-risk patterns. Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "RugRadar: Solana Rug Check & Token Safety Score",
       tags: ["rug check", "rug pull checker", "solana token safety", "pump.fun rug check", "honeypot check"],
@@ -911,7 +912,7 @@ async function main() {
         ...declareDiscoveryExtension({
           input: { token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", chain: "solana" },
           inputSchema: {
-            properties: { token: { type: "string", minLength: 32, maxLength: 44, description: "Solana SPL mint address (incl. pump.fun) or Base token contract (0x...)" }, chain: { type: "string", enum: ["solana", "base"], description: "default solana" } },
+            properties: { token: { type: "string", minLength: 32, maxLength: 44, description: "Solana SPL mint address (incl. pump.fun) or EVM token contract (0x...) on base/bnb/ethereum/arbitrum" }, chain: { type: "string", enum: ["solana", "base", "bnb", "ethereum", "arbitrum"], description: "default solana; 0x addresses default to base" } },
             required: ["token"],
           },
           output: {

@@ -142,7 +142,7 @@ const VAL_FILE = process.env.RUG_VALIDATION_FILE ?? path.join(process.cwd(), "da
 export function logValidation(mint: string, score: number, priceUsd: number | null, liquidityUsd: number | null, delayMs = 10 * 60_000, chain = "solana") {
   const at = new Date().toISOString();
   const t = setTimeout(async () => {
-    const m = chain === "base" ? await fetch(`https://api.dexscreener.com/tokens/v1/base/${mint.slice(5)}`).then((r) => r.json()).then((p: any[]) => ({ priceUsd: p[0]?.priceUsd ? Number(p[0].priceUsd) : null, liquidityUsd: p.length ? p.reduce((a, x) => a + (x.liquidity?.usd ?? 0), 0) : null })).catch(() => null) : await marketOf(mint).catch(() => null);
+    const m = EVM[chain] ? await fetch(`https://api.dexscreener.com/tokens/v1/${EVM[chain]!.ds}/${mint.split(":")[1]}`).then((r) => r.json()).then((p: any[]) => ({ priceUsd: p[0]?.priceUsd ? Number(p[0].priceUsd) : null, liquidityUsd: p.length ? p.reduce((a, x) => a + (x.liquidity?.usd ?? 0), 0) : null })).catch(() => null) : await marketOf(mint).catch(() => null);
     const row = { chain, mint, score, checkedAt: at, priceAtCheck: priceUsd, liquidityAtCheck: liquidityUsd, laterAt: new Date().toISOString(), priceLater: m?.priceUsd ?? null, liquidityLater: m?.liquidityUsd ?? null,
       liquidityDropPct: liquidityUsd && m?.liquidityUsd != null ? Math.round((1 - m.liquidityUsd / liquidityUsd) * 1000) / 10 : null };
     try { fs.mkdirSync(path.dirname(VAL_FILE), { recursive: true }); fs.appendFileSync(VAL_FILE, JSON.stringify(row) + "\n"); } catch {}
@@ -179,30 +179,33 @@ export function scoreEvm(g: any, liquidityUsd: number | null, ageHours: number |
   const score = Math.min(100, r.reduce((a, x) => a + x.points, 0));
   return { score, level: score >= 50 ? "high" : score >= 25 ? "medium" : "low", reasons: r.sort((a, b) => b.points - a.points) };
 }
-async function baseCheck(addr: string) {
+const EVM: Record<string, { id: number; ds: string }> = { base: { id: 8453, ds: "base" }, bnb: { id: 56, ds: "bsc" }, ethereum: { id: 1, ds: "ethereum" }, arbitrum: { id: 42161, ds: "arbitrum" } };
+const ALIAS: Record<string, string> = { bsc: "bnb", eth: "ethereum", arb: "arbitrum" };
+async function evmCheck(addr: string, chain: string) {
+  const c = EVM[chain]!;
   const [gj, dsr] = await Promise.all([
-    fetch(`https://api.gopluslabs.io/api/v1/token_security/8453?contract_addresses=${addr}`, { signal: AbortSignal.timeout(8000) }).then((r) => r.json()).catch(() => null) as Promise<any>,
-    fetch(`https://api.dexscreener.com/tokens/v1/base/${addr}`, { signal: AbortSignal.timeout(6000) }).then((r) => (r.ok ? r.json() : [])).catch(() => []) as Promise<any[]>,
+    fetch(`https://api.gopluslabs.io/api/v1/token_security/${c.id}?contract_addresses=${addr}`, { signal: AbortSignal.timeout(8000) }).then((r) => r.json()).catch(() => null) as Promise<any>,
+    fetch(`https://api.dexscreener.com/tokens/v1/${c.ds}/${addr}`, { signal: AbortSignal.timeout(6000) }).then((r) => (r.ok ? r.json() : [])).catch(() => []) as Promise<any[]>,
   ]);
   const g = gj?.result?.[addr.toLowerCase()];
-  if (!g) throw new SolanaInputError("token security data unavailable for this Base address (not a token, or the free GoPlus API is busy); you were not charged");
+  if (!g) throw new SolanaInputError(`token security data unavailable for this address on ${chain} (not a token, or the free GoPlus API is busy); you were not charged`);
   const liq = dsr.length ? dsr.reduce((a, p) => a + (p.liquidity?.usd ?? 0), 0) : null;
   const created = dsr.length ? Math.min(...dsr.map((p) => p.pairCreatedAt ?? Infinity)) : null;
   const age = created && isFinite(created) ? (Date.now() - created) / 3.6e6 : null;
   const price = dsr[0]?.priceUsd ? Number(dsr[0].priceUsd) : null;
   return { ...scoreEvm(g, liq, age), facts: { token: g.token_symbol, creator: g.creator_address || null, owner: g.owner_address || null, holderCount: Number(g.holder_count || 0), liquidityUsd: liq, priceUsd: price, ageHours: age && +age.toFixed(1), buyTax: g.buy_tax, sellTax: g.sell_tax }, price, liq };
 }
-export const CHAINS = ["solana", "base"] as const; // hook: add "bsc" (GoPlus 56), "ethereum" (1), "arbitrum" (42161) the same way as base
+export const CHAINS = ["solana", "base", "bnb", "ethereum", "arbitrum"] as const; // EVM chains: add to EVM map (GoPlus chain id + DexScreener slug)
 
 const verdictOf = (l: string) => (l === "high" ? "Multiple high-risk patterns found." : l === "medium" ? "Some high-risk patterns found." : "No major high-risk patterns found.");
 export async function rugCheck(mintRaw: string, chainRaw = "solana") {
-  const chain = (chainRaw || "solana").toLowerCase();
+  const c0 = (chainRaw || "solana").toLowerCase(); const chain = ALIAS[c0] ?? c0;
   if (!(CHAINS as readonly string[]).includes(chain)) throw new SolanaInputError(`chain must be one of: ${CHAINS.join(", ")}`);
-  if (chain === "base") {
+  if (EVM[chain]) {
     const a = mintRaw.trim();
-    if (!/^0x[0-9a-fA-F]{40}$/.test(a)) throw new SolanaInputError("token must be a Base token contract address (0x...)");
-    const b = await baseCheck(a);
-    if (b.level === "low") logValidation(`base:${a}`, b.score, b.price, b.liq, 10 * 60_000, "base");
+    if (!/^0x[0-9a-fA-F]{40}$/.test(a)) throw new SolanaInputError(`token must be a ${chain} token contract address (0x...)`);
+    const b = await evmCheck(a, chain);
+    if (b.level === "low") logValidation(`${chain}:${a}`, b.score, b.price, b.liq, 10 * 60_000, chain);
     return { product: "RugRadar", chain, token: a, riskScore: b.score, riskLevel: b.level, verdict: verdictOf(b.level), reasons: b.reasons.map((x) => x.detail), checks: b.reasons, facts: b.facts,
       disclaimer: DISCLAIMER, method: "keyless GoPlus token security (honeypot simulation, owner functions, holders, LP lock, creator's earlier honeypots) + keyless DexScreener (liquidity, age)", generatedAt: new Date().toISOString() };
   }
