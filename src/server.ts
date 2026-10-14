@@ -1110,7 +1110,8 @@ async function main() {
       };
     });
 
-  app.get("/health", (_req, res) => {
+  app.get("/health", (_req, res) => { res.set("Cache-Control", "no-store").json({ ok: true }); }); // tiny: keep-awake pingers cap response size
+  app.get("/health/full", (_req, res) => {
     res.json({
       ok: true,
       env: X402_ENV,
