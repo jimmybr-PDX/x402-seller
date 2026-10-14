@@ -21,7 +21,7 @@
  * with the real tx hash and payer. No invented hashes.
  */
 
-import { CDP_SUPPORTED_EXTENSIONS, createCdpFacilitatorClient, getCdpDefaultSchemes, getCdpExtensionRegistrations } from "@coinbase/cdp-sdk/x402";
+import { createCdpFacilitatorClient, getCdpDefaultSchemes, getCdpExtensionRegistrations } from "@coinbase/cdp-sdk/x402";
 import { HTTPFacilitatorClient, x402HTTPResourceServer, x402ResourceServer } from "@x402/core/server";
 import { paymentMiddlewareFromHTTPServer } from "@x402/express";
 import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
@@ -1185,7 +1185,7 @@ async function main() {
         ...r,
         unpaidResponseBody: unpaidBodyFor(k, r),
         settlementFailedResponseBody: settleFailedBody,
-        extensions: { ...(hasEvm && k !== "GET /credits/buy" ? CDP_SUPPORTED_EXTENSIONS : {}), ...builderCode, ...r.extensions }, // dynamic-price route: CDP gas-sponsoring extensions need a static price to fill their info
+        extensions: { ...builderCode, ...r.extensions }, // CDP gas-sponsoring extensions (eip2612/erc20Approval) dropped: their 402 entries started failing validation ("missing required info") on every paid route; USDC EIP-3009 payments do not need them
       },
     ]),
   );
