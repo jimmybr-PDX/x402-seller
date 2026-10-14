@@ -43,6 +43,7 @@ import { WalletInputError, walletBalances } from "./lib/wallet.js";
 import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
 import { rugCheck, DISCLAIMER as RUG_DISCLAIMER } from "./lib/rug.js";
+import { registerRugradarWeb } from "./lib/rugradar-web.js";
 import { initCredits, issueKey, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell } from "./lib/credits.js";
 import { startSales, salesStats } from "./lib/sales.js";
 import { classify, recordRejection, recordRequest, startTraffic, trafficStats, type Outcome } from "./lib/traffic.js";
@@ -234,7 +235,7 @@ async function main() {
   app.use(express.json());
 
   // Interest tracker (counts only; visitor = salted hash of IP+UA, raw IPs never stored).
-  const FREE_LABELS = new Set(["/", "/health", "/stats", "/examples", "/llms.txt", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png", "/favicon.ico", "/rugradar", "/credits/balance"]);
+  const FREE_LABELS = new Set(["/", "/health", "/stats", "/examples", "/llms.txt", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png", "/favicon.ico", "/rugradar", "/credits/balance", "/sitemap.xml", "/mcp", "/rugradar/api/check"]);
   app.use((req: Request, res: Response, next: NextFunction) => {
     const method = req.method;
     // HEAD on a paid route: answer like GET without payment (402 + PAYMENT-REQUIRED, no body) instead of
@@ -1326,29 +1327,13 @@ async function main() {
   app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt()));
 
   app.get("/robots.txt", (_req, res) => {
-    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", "Disallow: /solana-price", "Disallow: /balance", "Disallow: /tx", "Disallow: /gas", "Disallow: /search", "Disallow: /rug-check", "Disallow: /token-safety", "Disallow: /honeypot-check", `Sitemap: ${PUBLIC_URL}/openapi.json`, ""].join("\n"));
+    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", "Disallow: /solana-price", "Disallow: /balance", "Disallow: /tx", "Disallow: /gas", "Disallow: /search", "Disallow: /rug-check", "Disallow: /token-safety", "Disallow: /honeypot-check", "Disallow: /credits/", "Disallow: /mcp", "Disallow: /rugradar/api/", `Sitemap: ${PUBLIC_URL}/sitemap.xml`, ""].join("\n"));
   });
 
   const ICON_PNG = (() => { try { return fs.readFileSync(path.join(__dirname, "assets", "icon.png")); } catch { return null; } })();
   app.use("/rugradar", express.static(path.join(__dirname, "assets", "rugradar"), { maxAge: "7d", index: false, redirect: false }));
   app.get("/favicon.ico", (_req, res) => res.sendFile(path.join(__dirname, "assets", "rugradar", "favicon.ico"), { maxAge: "7d" }));
-  app.get("/rugradar", (_req, res) => {
-    const ex = `${PUBLIC_URL}/rug-check?token=JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN&chain=solana`;
-    res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>RugRadar: Solana rug check & token safety score</title><meta name="description" content="RugRadar: 0-100 rug pull / honeypot risk score with plain reasons for new Solana, BNB, Base, Ethereum and Arbitrum tokens. ${usd(RUG_PRICE)} USDC per call via x402.">
-<link rel="icon" href="/favicon.ico"><link rel="icon" type="image/png" sizes="32x32" href="/rugradar/rug-radar-32.png"><link rel="apple-touch-icon" href="/rugradar/rug-radar-192.png">
-<meta property="og:title" content="RugRadar"><meta property="og:image" content="${PUBLIC_URL}/rugradar/preview-label.png">
-<style>body{margin:0;background:#0A1630;color:#E8EEF8;font:16px/1.5 system-ui,sans-serif;display:flex;justify-content:center}main{max-width:720px;padding:40px 20px;text-align:center}
-h1{color:#46DC64;font-size:44px;margin:8px 0;text-shadow:0 0 18px rgba(70,220,100,.55)}img.logo{width:200px;height:200px}p.pitch{font-size:20px}
-.box{background:#12224a;border-radius:10px;padding:14px 18px;text-align:left;margin:18px 0}code{color:#F7931A;word-break:break-all}small{color:#9fb0cc}</style></head>
-<body><main><div style="background:#0f2a1a;border:2px solid #46DC64;border-radius:12px;padding:16px 18px;margin-bottom:22px;box-shadow:0 0 18px rgba(70,220,100,.35)"><div style="color:#46DC64;font-size:28px;font-weight:800">Prepaid credits: ~${CREDIT_SPEED.creditS}s per check vs ~${CREDIT_SPEED.paidS}s pay-per-call: ${CREDIT_SPEED.x}x faster</div><div style="font-size:17px;margin:6px 0 12px">Measured live: 6 cache-free checks each way. Pay once, then check with just a key, no wallet signing per call. Same ${usd(RUG_PRICE)} per check, buy 1 to 1,000.</div><a href="${PUBLIC_URL}/credits/buy?credits=100" style="display:inline-block;background:#46DC64;color:#0A1630;font-weight:800;padding:10px 22px;border-radius:8px;text-decoration:none">Buy credits</a></div><img class="logo" src="/rugradar/rug-radar-512.png" alt="RugRadar emblem"><h1>RugRadar</h1>
-<p class="pitch">Check a new token before you buy: a 0-100 rug pull and honeypot risk score with plain-English reasons, in one call.</p>
-<div class="box"><b>Price:</b> ${usd(RUG_PRICE)} USDC per call (x402); failed calls are free.<br><b>Chains:</b> Solana (incl. pump.fun), BNB (four.meme), Base, Ethereum, Arbitrum.<br>
-<b>Checks:</b> mint/freeze authority, honeypot simulation (EVM), top-holder share, liquidity, token age, deployer launches that died, linked funding wallet.</div>
-<div class="box"><b>Prepaid credits</b> (same ${usd(RUG_PRICE)} per check, no discount): <code>GET ${PUBLIC_URL}/credits/buy?credits=100</code> pays $1.00 once via x402 and returns a secret key. Send it as <code>X-RugRadar-Key</code> to skip the payment step on every check. ${CREDIT_GAP_S ? `Credits skip payment: about ${CREDIT_GAP_S} seconds faster per check (measured).` : ""} Balance (free): <code>${PUBLIC_URL}/credits/balance</code>.</div>
-<div class="box"><b>Example request</b><br><code>GET ${ex}</code><br><small>Unpaid calls return HTTP 402 with payment instructions; pay with any x402 client. Also at /token-safety. Pass chain=bnb|base|ethereum|arbitrum for EVM tokens.</small></div>
-<p><small>Automated heuristic, may be wrong. Not financial advice. Do your own research.</small></p></main></body></html>`);
-  });
+  registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), spend, refund });
   app.get("/icon.png", (_req, res) => {
     if (!ICON_PNG) return res.redirect(302, "/icon.svg");
     res.type("image/png").set("Cache-Control", "public, max-age=86400").send(ICON_PNG);

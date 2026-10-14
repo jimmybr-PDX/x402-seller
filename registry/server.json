@@ -1,0 +1,10 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.jimmybr-PDX/rugradar",
+  "title": "RugRadar",
+  "description": "Rug-pull, token-safety and honeypot risk checks for Solana and EVM tokens. $0.01 per call.",
+  "version": "1.0.0",
+  "websiteUrl": "https://x402-seller-pmlm.onrender.com/rugradar",
+  "repository": { "url": "https://github.com/jimmybr-PDX/x402-seller", "source": "github" },
+  "remotes": [ { "type": "streamable-http", "url": "https://x402-seller-pmlm.onrender.com/mcp", "headers": [ { "name": "X-RugRadar-Key", "description": "Prepaid RugRadar credit key (optional; without it tools return the x402 payment requirement)", "isRequired": false, "isSecret": true } ] } ]
+}

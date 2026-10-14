@@ -1,0 +1,4 @@
+{ "name": "@rugradar/goat-plugin-rugradar", "version": "0.1.0", "description": "RugRadar rug-pull / token-safety / honeypot checks for GOAT SDK. Automated heuristic, may be wrong. Not financial advice. Do your own research.", "type": "module", "main": "dist/index.js", "types": "dist/index.d.ts",
+  "files": ["dist", "README.md"], "scripts": { "build": "tsc -p ." }, "keywords": ["rug check","honeypot","token safety","solana","x402","goat-sdk"],
+  "license": "MIT", "repository": { "type": "git", "url": "https://github.com/jimmybr-PDX/x402-seller", "directory": "plugins/goat-plugin-rugradar" },
+  "peerDependencies": { "@goat-sdk/core": ">=0.4.0", "zod": ">=3" } }

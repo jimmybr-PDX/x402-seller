@@ -1,0 +1,5 @@
+# Smithery: add as an external (remote) server at https://smithery.ai/new — requires the owner's Smithery login.
+name: rugradar
+url: https://x402-seller-pmlm.onrender.com/mcp
+transport: streamable-http
+configSchema: { type: object, properties: { apiKey: { type: string, description: "RugRadar credit key, sent as X-RugRadar-Key" } } }
