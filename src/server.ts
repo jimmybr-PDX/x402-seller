@@ -41,6 +41,7 @@ import { SOLANA_PRICE_SYMBOLS, SolanaInputError, solanaTokenPrice } from "./lib/
 import { WalletInputError, walletBalances } from "./lib/wallet.js";
 import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
+import { rugCheck, DISCLAIMER as RUG_DISCLAIMER } from "./lib/rug.js";
 import { startSales, salesStats } from "./lib/sales.js";
 import { classify, recordRejection, recordRequest, startTraffic, trafficStats, type Outcome } from "./lib/traffic.js";
 import { statsHtml } from "./lib/stats-page.js";
@@ -67,6 +68,7 @@ const BALANCE_PRICE = process.env.BALANCE_PRICE ?? "$0.003";
 const TX_PRICE = process.env.TX_PRICE ?? "$0.003";
 const GAS_PRICE = process.env.GAS_PRICE ?? "$0.001";
 const SEARCH_PRICE = process.env.SEARCH_PRICE ?? "$0.01";
+const RUG_PRICE = process.env.RUG_PRICE ?? "$0.002";
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
 // PNG: the Bazaar re-hosts PNG/JPEG icons; our SVG icon never showed up in listings
 const ICON_URL = `${PUBLIC_URL}/icon.png`;
@@ -138,6 +140,7 @@ const PAID = {
   "/tx": TX_PRICE,
   "/gas": GAS_PRICE,
   "/search": SEARCH_PRICE,
+  "/rug-check": RUG_PRICE,
 } as const;
 /** Paid paths that also accept POST (JSON body). */
 const POST_OK = new Set<string>(["/search"]);
@@ -894,6 +897,31 @@ async function main() {
         }),
       },
     },
+    "GET /rug-check": {
+      accepts: accept(RUG_PRICE),
+      description:
+        `RugRadar: Solana rug check and rug pull checker for new tokens and pump.fun memecoins (Base too: chain=base, with honeypot check). Pass a mint/contract. Returns a 0-100 risk score and plain reasons: mint/freeze authority, top-holder concentration, liquidity, token age, deployer history (prior launches that died), funding wallet linked to earlier high-risk patterns. Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
+      mimeType: "application/json",
+      serviceName: "RugRadar: Solana Rug Check & Token Safety Score",
+      tags: ["rug check", "rug pull checker", "solana token safety", "pump.fun rug check", "honeypot check"],
+      iconUrl: ICON_URL,
+      extensions: {
+        ...declareDiscoveryExtension({
+          input: { token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", chain: "solana" },
+          inputSchema: {
+            properties: { token: { type: "string", minLength: 32, maxLength: 44, description: "Solana SPL mint address (incl. pump.fun) or Base token contract (0x...)" }, chain: { type: "string", enum: ["solana", "base"], description: "default solana" } },
+            required: ["token"],
+          },
+          output: {
+            example: { product: "RugRadar", chain: "solana", token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", riskScore: 5, riskLevel: "low", verdict: "No major high-risk patterns found.", reasons: ["Top-holder concentration unavailable from public RPC."], disclaimer: "Automated heuristic, may be wrong. Not financial advice. Do your own research." },
+            schema: {
+              properties: { product: { type: "string" }, chain: { type: "string" }, token: { type: "string" }, riskScore: { type: "integer", minimum: 0, maximum: 100 }, riskLevel: { type: "string", enum: ["low", "medium", "high"] }, verdict: { type: "string" }, reasons: { type: "array", items: { type: "string" } }, checks: { type: "array", items: { type: "object" } }, facts: { type: "object" }, disclaimer: { type: "string" } },
+              required: ["riskScore", "riskLevel", "reasons", "disclaimer"],
+            },
+          },
+        }),
+      },
+    },
     "GET /balance": {
       accepts: accept(BALANCE_PRICE),
       description:
@@ -1189,7 +1217,7 @@ async function main() {
   app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt()));
 
   app.get("/robots.txt", (_req, res) => {
-    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", "Disallow: /solana-price", "Disallow: /balance", "Disallow: /tx", "Disallow: /gas", "Disallow: /search", `Sitemap: ${PUBLIC_URL}/openapi.json`, ""].join("\n"));
+    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", "Disallow: /solana-price", "Disallow: /balance", "Disallow: /tx", "Disallow: /gas", "Disallow: /search", "Disallow: /rug-check", `Sitemap: ${PUBLIC_URL}/openapi.json`, ""].join("\n"));
   });
 
   const ICON_PNG = (() => { try { return fs.readFileSync(path.join(__dirname, "assets", "icon.png")); } catch { return null; } })();
@@ -1545,6 +1573,18 @@ async function main() {
     };
   const qs = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 
+  app.get(
+    "/rug-check",
+    onchainHandler(
+      async (req) => {
+        const token = qs(req.query.token) || qs(req.query.mint);
+        if (!token) throw new SolanaInputError("token is required (Solana mint address, or Base 0x contract with chain=base)");
+        return rugCheck(token, qs(req.query.chain) || (token.startsWith("0x") ? "base" : "solana"));
+      },
+      [SolanaInputError],
+      "Public Solana RPC / token data APIs did not answer",
+    ),
+  );
   app.get(
     "/solana-price",
     onchainHandler(
