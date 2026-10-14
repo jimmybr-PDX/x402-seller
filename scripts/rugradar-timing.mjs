@@ -16,15 +16,20 @@ if (!j.key) { console.log("buy failed", r.status, JSON.stringify(j).slice(0, 200
 writeFileSync("/tmp/rugradar-test-key", j.key, { mode: 0o600 });
 console.log("bought", j.credits, "credits for $", j.priceUsd, "status", r.status, "store", j.store);
 const q = (t) => `${B}/rug-check?token=${t}`;
-const rows = [];
-for (const t of tokens) {
-  let s = Date.now(); const a = await pay(q(t)); const aj = await a.json(); const paidMs = Date.now() - s;
-  s = Date.now(); const c = await fetch(q(t), { headers: { "X-RugRadar-Key": j.key } }); const cj = await c.json(); const credMs = Date.now() - s;
-  rows.push({ token: t.slice(0, 8), paidStatus: a.status, paidMs, credStatus: c.status, credMs, left: cj.credits_remaining, paidTip: aj.tip ? "yes" : "no", sameScore: aj.riskScore === cj.riskScore });
+const rows = tokens.map((t) => ({ token: t.slice(0, 8) }));
+// Credit checks first, then wait past RugRadar's 60 s per-token cache so paid checks are not served from cache.
+for (const [i, t] of tokens.entries()) {
+  const s = Date.now(); const c = await fetch(q(t), { headers: { "X-RugRadar-Key": j.key } }); const cj = await c.json();
+  Object.assign(rows[i], { credStatus: c.status, credMs: Date.now() - s, credCached: cj.cached, left: cj.credits_remaining, credScore: cj.riskScore });
+}
+await new Promise((r) => setTimeout(r, 65000));
+for (const [i, t] of tokens.entries()) {
+  const s = Date.now(); const a = await pay(q(t)); const aj = await a.json();
+  Object.assign(rows[i], { paidStatus: a.status, paidMs: Date.now() - s, paidCached: aj.cached, paidTip: aj.tip ? "yes" : "no", sameScore: aj.riskScore === rows[i].credScore });
 }
 console.table(rows);
 const avg = (k) => Math.round(rows.reduce((x, r) => x + r[k], 0) / rows.length);
-console.log("avgPaidMs", avg("paidMs"), "avgCreditMs", avg("credMs"), "gapMs", avg("paidMs") - avg("credMs"));
+console.log("avgPaidMs", avg("paidMs"), "avgCreditMs", avg("credMs"), "gapMs", avg("paidMs") - avg("credMs"), "ratio", (avg("paidMs") / avg("credMs")).toFixed(2));
 const bal = await (await fetch(`${B}/credits/balance`, { headers: { "X-RugRadar-Key": j.key } })).json();
 console.log("balance", bal.credits, bal.store);
 const empty = await fetch(q(tokens[0]), { headers: { "X-RugRadar-Key": j.key } });

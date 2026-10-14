@@ -72,7 +72,7 @@ const GAS_PRICE = process.env.GAS_PRICE ?? "$0.001";
 const SEARCH_PRICE = process.env.SEARCH_PRICE ?? "$0.01";
 const RUG_PRICE = process.env.RUG_PRICE ?? "$0.01";
 // Measured end-to-end gap between a paid x402 RugRadar call and a credit-key call (seconds); null until measured.
-const CREDIT_GAP_S: number | null = 3; // measured 2026-10-13 on Render: 3 tokens, paid x402 avg 7.0 s vs credit key avg 3.6 s (gap 3.3 s)
+const CREDIT_GAP_S: number | null = null; // re-measured 2026-10-13 after the speedup (3 tokens, cache-free): paid x402 avg 2.70 s vs credit key avg 2.70 s, no measurable gap, so no speed claim
 const creditTip = () => (CREDIT_GAP_S ? `Tip: buy RugRadar credits (${PUBLIC_URL}/credits/buy?credits=N, $0.01 each) to skip the ~${CREDIT_GAP_S}s payment wait.` : `Tip: buy RugRadar credits (${PUBLIC_URL}/credits/buy?credits=N, $0.01 each) and send X-RugRadar-Key to skip payment on each check.`);
 const RUG_PATHS = new Set(["/rug-check", "/token-safety", "/honeypot-check"]);
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
@@ -931,7 +931,7 @@ async function main() {
     "GET /rug-check": {
       accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
       description:
-        `RugRadar: Solana rug check and rug pull checker for pump.fun memecoins, plus BNB rug check / BSC honeypot check (four.meme rug check), Base, Ethereum, Arbitrum via chain=. Returns a 0-100 risk score and plain reasons: mint/freeze authority, top-holder concentration, liquidity, token age, deployer launches that died, linked funder. Credits skip payment: ~3s faster per check (measured). Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
+        `RugRadar: Solana rug check and rug pull checker for pump.fun memecoins, plus BNB rug check / BSC honeypot check (four.meme rug check), Base, Ethereum, Arbitrum via chain=. Returns a 0-100 risk score and plain reasons: mint/freeze authority, top-holder concentration, liquidity, token age, deployer launches that died, linked funder. Prepaid credits: pay once, then just send a key. Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "RugRadar: Solana Rug Check & Token Safety Score",
       tags: ["rug check", "rug pull checker", "solana token safety", "pump.fun rug check", "honeypot check"],
@@ -956,7 +956,7 @@ async function main() {
     "GET /token-safety": {
       accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
       description:
-        `RugRadar token safety and honeypot check: token scam check and memecoin risk score for Solana (pump.fun), BNB (four.meme), Base, Ethereum, Arbitrum (chain=). Returns a 0-100 risk score with plain reasons: honeypot simulation (EVM), mint/freeze authority, top-holder share, liquidity, age, deployer launches that died, linked funder. Same engine as /rug-check. Credits skip payment: ~3s faster per check (measured). Heuristic, may be wrong. ${perCall(RUG_PRICE)}`,
+        `RugRadar token safety and honeypot check: token scam check and memecoin risk score for Solana (pump.fun), BNB (four.meme), Base, Ethereum, Arbitrum (chain=). Returns a 0-100 risk score with plain reasons: honeypot simulation (EVM), mint/freeze authority, top-holder share, liquidity, age, deployer launches that died, linked funder. Same engine as /rug-check. Prepaid credits: pay once, then just send a key. Heuristic, may be wrong. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "RugRadar Honeypot Check & Solana Token Safety",
       tags: ["honeypot check", "solana token safety", "token scam check", "memecoin risk", "token safety check"],
@@ -981,7 +981,7 @@ async function main() {
     "GET /honeypot-check": {
       accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
       description:
-        `Honeypot check: can I sell this token? RugRadar honeypot detector for new tokens on Base, BNB (BSC), Ethereum, Arbitrum (simulated buy and sell via GoPlus: is_honeypot, can sell, buy/sell tax, owner can pause/blacklist/mint) and Solana (freeze authority = honeypot pattern). Returns 0-100 risk score with plain reasons. Check before an agent buys. Credits skip payment: ~3s faster per check (measured). Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
+        `Honeypot check: can I sell this token? RugRadar honeypot detector for new tokens on Base, BNB (BSC), Ethereum, Arbitrum (simulated buy and sell via GoPlus: is_honeypot, can sell, buy/sell tax, owner can pause/blacklist/mint) and Solana (freeze authority = honeypot pattern). Returns 0-100 risk score with plain reasons. Check before an agent buys. Prepaid credits: pay once, then just send a key. Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "Honeypot Check (RugRadar)",
       tags: ["honeypot check", "honeypot", "can i sell this token", "bsc honeypot check", "honeypot detector"],
@@ -1012,7 +1012,7 @@ async function main() {
         maxTimeoutSeconds: 300,
       })),
       description:
-        `RugRadar prepaid credits: buy 1-1000 rug check / honeypot check credits at ${usd(RUG_PRICE)} USDC each (no discount; ?credits=N, price N x ${usd(RUG_PRICE)}). Returns a secret API key once. Send it as X-RugRadar-Key to /rug-check, /token-safety or /honeypot-check to skip the x402 payment step on each check; responses include credits_remaining. Credits skip payment: ~3s faster per check (measured). Free balance: /credits/balance. Not charged if the key cannot be issued.`,
+        `RugRadar prepaid credits: buy 1-1000 rug check / honeypot check credits at ${usd(RUG_PRICE)} USDC each (no discount; ?credits=N, price N x ${usd(RUG_PRICE)}). Returns a secret API key once. Send it as X-RugRadar-Key to /rug-check, /token-safety or /honeypot-check to skip the x402 payment step on each check; responses include credits_remaining. Prepaid credits: pay once, then just send a key. Free balance: /credits/balance. Not charged if the key cannot be issued.`,
       mimeType: "application/json",
       serviceName: "RugRadar Credits (prepaid rug checks)",
       tags: ["rugradar credits", "prepaid api credits", "rug check api key", "bulk rug check", "honeypot check credits"],
@@ -1340,7 +1340,7 @@ async function main() {
 <style>body{margin:0;background:#0A1630;color:#E8EEF8;font:16px/1.5 system-ui,sans-serif;display:flex;justify-content:center}main{max-width:720px;padding:40px 20px;text-align:center}
 h1{color:#46DC64;font-size:44px;margin:8px 0;text-shadow:0 0 18px rgba(70,220,100,.55)}img.logo{width:200px;height:200px}p.pitch{font-size:20px}
 .box{background:#12224a;border-radius:10px;padding:14px 18px;text-align:left;margin:18px 0}code{color:#F7931A;word-break:break-all}small{color:#9fb0cc}</style></head>
-<body><main><img class="logo" src="/rugradar/rug-radar-512.png" alt="RugRadar emblem"><h1>RugRadar</h1>
+<body><main><div style="background:#0f2a1a;border:2px solid #46DC64;border-radius:12px;padding:16px 18px;margin-bottom:22px;box-shadow:0 0 18px rgba(70,220,100,.35)"><div style="color:#46DC64;font-size:26px;font-weight:800">Prepaid credits: pay once, then check with just a key</div><div style="font-size:17px;margin:6px 0 12px">No wallet signing on each check. Same ${usd(RUG_PRICE)} per check, buy 1 to 1,000.</div><a href="${PUBLIC_URL}/credits/buy?credits=100" style="display:inline-block;background:#46DC64;color:#0A1630;font-weight:800;padding:10px 22px;border-radius:8px;text-decoration:none">Buy credits</a></div><img class="logo" src="/rugradar/rug-radar-512.png" alt="RugRadar emblem"><h1>RugRadar</h1>
 <p class="pitch">Check a new token before you buy: a 0-100 rug pull and honeypot risk score with plain-English reasons, in one call.</p>
 <div class="box"><b>Price:</b> ${usd(RUG_PRICE)} USDC per call (x402); failed calls are free.<br><b>Chains:</b> Solana (incl. pump.fun), BNB (four.meme), Base, Ethereum, Arbitrum.<br>
 <b>Checks:</b> mint/freeze authority, honeypot simulation (EVM), top-holder share, liquidity, token age, deployer launches that died, linked funding wallet.</div>
