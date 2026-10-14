@@ -1757,7 +1757,11 @@ async function main() {
     onchainHandler(async (req) => gasNow(qs(req.query.chain) || undefined), [GasInputError], "Public RPC nodes did not answer"),
   );
 
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    if ((err as { type?: string })?.type === "entity.parse.failed") {
+      if (req.path === "/mcp") { res.status(400).json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }); return; }
+      res.status(400).json({ error: "invalid_json", message: "Request body is not valid JSON" }); return;
+    }
     const message = err instanceof Error ? err.message : String(err);
     appendPaymentLog({ type: "error", kind: "express_error", message });
     if (!res.headersSent) res.status(502).json({ error: "payment_or_server_error", message });
