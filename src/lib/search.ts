@@ -5,6 +5,7 @@
  * parallel (short timeout) and their main text is extracted with the /read extractor. Small in-memory cache.
  * DDG answers datacenter IPs with a 202 "anomaly" captcha and Brave often 429s them, so they are fallbacks only.
  */
+import { isWinnerQuestion, extractWinner } from "./winner.js";
 import { htmlToMarkdown } from "./read.js";
 import { safeFetch, InputError } from "./net.js";
 import { execFile } from "node:child_process";
@@ -248,7 +249,8 @@ export async function webSearch(qRaw: string, nRaw?: number) {
   const source = used[0]!;
   const pages = await Promise.all(hits.map((h) => pageText(h.url)));
   const results: SearchResult[] = hits.map((h, i) => ({ rank: i + 1, title: h.title, url: h.url, domain: h.domain, snippet: h.snippet, published: pages[i]!.published ?? h.published ?? null, text: pages[i]!.text }));
-  const v = { query: q, n, count: results.length, results, source, sources_used: used, sources_tried: tried, pages_loaded: pages.filter((p) => p.text).length, fetched_at: new Date().toISOString(), latencyMs: Date.now() - started };
+  const direct_answer = isWinnerQuestion(q) ? extractWinner(q, results) : undefined;
+  const v = { query: q, ...(direct_answer ? { direct_answer } : {}), n, count: results.length, results, source, sources_used: used, sources_tried: tried, pages_loaded: pages.filter((p) => p.text).length, fetched_at: new Date().toISOString(), latencyMs: Date.now() - started };
   cache.set(key, { at: Date.now(), v });
   if (cache.size > 300) cache.delete(cache.keys().next().value!);
   return v;

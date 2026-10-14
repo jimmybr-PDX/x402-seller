@@ -13,6 +13,7 @@
 import { getJson, safeFetch, USER_AGENT } from "./net.js";
 import { htmlToMarkdown } from "./read.js";
 import { searchLinks } from "./search.js";
+import { isWinnerQuestion, extractWinner, type DirectAnswer } from "./winner.js";
 
 export type Source = {
   id: number;
@@ -813,6 +814,8 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
   const hit = briefCache.get(ck);
   if (hit && Date.now() - hit.at < BRIEF_TTL) return { ...hit.value, cached: true, latencyMs: Date.now() - started };
   const q = parseQuery(qRaw);
+  const winQ = isWinnerQuestion(qRaw) && process.env.WHO_WON !== "off";
+  const winLinks = winQ ? searchLinks(qRaw, 8, 4000) : Promise.resolve([]);
 
   // 1) discovery (parallel, each bounded)
   const [wiki, ddg, so, gh, hn, cr] = await Promise.all([
@@ -939,9 +942,16 @@ export async function researchBrief(qRaw: string, opts: { lang?: string; depth?:
   const why = `${cited.size} cited source${cited.size === 1 ? "" : "s"} from ${new Set([...cited].map((d) => publisherOf(d))).size} publisher(s)` +
     (authHosts.length ? `, incl. primary/authoritative: ${[...new Set(authHosts)].slice(0, 3).join(", ")}` : ", no primary/authoritative source found") + ".";
   const checkedAt = new Date().toISOString();
+  // "who won X": one-line winner (with date + source) from fresh web results, or an honest not-found
+  let direct_answer: DirectAnswer | undefined;
+  if (winQ) {
+    const web = [...(await winLinks), ...docs.filter((d) => d.origin === "web-search").map((d) => ({ title: d.title, url: d.url, text: d.text, published: d.publishedAt }))];
+    direct_answer = extractWinner(qRaw, web);
+  }
   const value = {
+    ...(direct_answer ? { direct_answer } : {}),
     // bot-friendly fields
-    answer: stripCites(summary),
+    answer: (direct_answer ? direct_answer.answer + "\n\n" : "") + stripCites(summary),
     answer_citations: citeIds(summary),
     key_points: bullets.map((b) => ({ text: stripCites(b), citations: citeIds(b) })),
     confidence_why: why,
