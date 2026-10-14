@@ -72,6 +72,7 @@ const RUG_PRICE = process.env.RUG_PRICE ?? "$0.002";
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
 // PNG: the Bazaar re-hosts PNG/JPEG icons; our SVG icon never showed up in listings
 const ICON_URL = `${PUBLIC_URL}/icon.png`;
+const RUG_ICON_URL = `${PUBLIC_URL}/rugradar/rug-radar-512.png`;
 
 // Accepted networks. Base stays first: most x402 clients pick the first matching accepts entry.
 // "cdp" networks settle via the Coinbase CDP facilitator (and feed the CDP Bazaar);
@@ -224,7 +225,7 @@ async function main() {
   app.use(express.json());
 
   // Interest tracker (counts only; visitor = salted hash of IP+UA, raw IPs never stored).
-  const FREE_LABELS = new Set(["/", "/health", "/stats", "/examples", "/llms.txt", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png"]);
+  const FREE_LABELS = new Set(["/", "/health", "/stats", "/examples", "/llms.txt", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png", "/favicon.ico", "/rugradar"]);
   app.use((req: Request, res: Response, next: NextFunction) => {
     const method = req.method;
     // HEAD on a paid route: answer like GET without payment (402 + PAYMENT-REQUIRED, no body) instead of
@@ -908,7 +909,7 @@ async function main() {
       mimeType: "application/json",
       serviceName: "RugRadar: Solana Rug Check & Token Safety Score",
       tags: ["rug check", "rug pull checker", "solana token safety", "pump.fun rug check", "honeypot check"],
-      iconUrl: ICON_URL,
+      iconUrl: RUG_ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
           input: { token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", chain: "solana" },
@@ -933,7 +934,7 @@ async function main() {
       mimeType: "application/json",
       serviceName: "RugRadar Honeypot Check & Solana Token Safety",
       tags: ["honeypot check", "solana token safety", "token scam check", "memecoin risk", "token safety check"],
-      iconUrl: ICON_URL,
+      iconUrl: RUG_ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
           input: { token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", chain: "solana" },
@@ -1251,6 +1252,24 @@ async function main() {
   });
 
   const ICON_PNG = (() => { try { return fs.readFileSync(path.join(__dirname, "assets", "icon.png")); } catch { return null; } })();
+  app.use("/rugradar", express.static(path.join(__dirname, "assets", "rugradar"), { maxAge: "7d", index: false }));
+  app.get("/favicon.ico", (_req, res) => res.sendFile(path.join(__dirname, "assets", "rugradar", "favicon.ico"), { maxAge: "7d" }));
+  app.get("/rugradar", (_req, res) => {
+    const ex = `${PUBLIC_URL}/rug-check?token=JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN&chain=solana`;
+    res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RugRadar: Solana rug check & token safety score</title><meta name="description" content="RugRadar: 0-100 rug pull / honeypot risk score with plain reasons for new Solana, BNB, Base, Ethereum and Arbitrum tokens. ${usd(RUG_PRICE)} USDC per call via x402.">
+<link rel="icon" href="/favicon.ico"><link rel="icon" type="image/png" sizes="32x32" href="/rugradar/rug-radar-32.png"><link rel="apple-touch-icon" href="/rugradar/rug-radar-192.png">
+<meta property="og:title" content="RugRadar"><meta property="og:image" content="${PUBLIC_URL}/rugradar/preview-label.png">
+<style>body{margin:0;background:#0A1630;color:#E8EEF8;font:16px/1.5 system-ui,sans-serif;display:flex;justify-content:center}main{max-width:720px;padding:40px 20px;text-align:center}
+h1{color:#46DC64;font-size:44px;margin:8px 0;text-shadow:0 0 18px rgba(70,220,100,.55)}img.logo{width:200px;height:200px}p.pitch{font-size:20px}
+.box{background:#12224a;border-radius:10px;padding:14px 18px;text-align:left;margin:18px 0}code{color:#F7931A;word-break:break-all}small{color:#9fb0cc}</style></head>
+<body><main><img class="logo" src="/rugradar/rug-radar-512.png" alt="RugRadar emblem"><h1>RugRadar</h1>
+<p class="pitch">Check a new token before you buy: a 0-100 rug pull and honeypot risk score with plain-English reasons, in one call.</p>
+<div class="box"><b>Price:</b> ${usd(RUG_PRICE)} USDC per call (x402); failed calls are free.<br><b>Chains:</b> Solana (incl. pump.fun), BNB (four.meme), Base, Ethereum, Arbitrum.<br>
+<b>Checks:</b> mint/freeze authority, honeypot simulation (EVM), top-holder share, liquidity, token age, deployer launches that died, linked funding wallet.</div>
+<div class="box"><b>Example request</b><br><code>GET ${ex}</code><br><small>Unpaid calls return HTTP 402 with payment instructions; pay with any x402 client. Also at /token-safety. Pass chain=bnb|base|ethereum|arbitrum for EVM tokens.</small></div>
+<p><small>Automated heuristic, may be wrong. Not financial advice. Do your own research.</small></p></main></body></html>`);
+  });
   app.get("/icon.png", (_req, res) => {
     if (!ICON_PNG) return res.redirect(302, "/icon.svg");
     res.type("image/png").set("Cache-Control", "public, max-age=86400").send(ICON_PNG);
