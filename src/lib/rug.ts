@@ -1,3 +1,4 @@
+import { solanaExtra, evmExtra, buyerSummary, type Extra } from "./rug-extra.js";
 /**
  * Solana rug check: heuristic 0-100 risk score for an SPL mint from free public data only
  * (public Solana RPC + keyless DexScreener API). Automated heuristic, may be wrong. Not financial advice.
@@ -29,7 +30,7 @@ export type Facts = {
   liquidityUsd: number | null; priceUsd: number | null; pairs: number; lpNote: string | null;
   ageHours: number | null; creator: string | null; funder: string | null;
   priorLaunches: number | null; priorDead: number | null;
-  creatorFlagged: boolean; funderFlagged: boolean; unknown: string[]; timingsMs?: Record<string, number>; marketUnknown?: boolean; holderSource?: string | null; holderCount?: number | null; launchpad?: string | null;
+  creatorFlagged: boolean; funderFlagged: boolean; unknown: string[]; timingsMs?: Record<string, number>; marketUnknown?: boolean; holderSource?: string | null; holderCount?: number | null; launchpad?: string | null; extra?: Extra | null;
 };
 export type Reason = { check: string; points: number; detail: string };
 
@@ -132,6 +133,9 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   if (!acct?.value || acct.value.data?.parsed?.type !== "mint" || !KNOWN_PROGRAM_OWNERS.has(acct.value.owner)) throw new SolanaInputError("not an SPL token mint address");
   const decimals = info.decimals ?? null; const supply = Number(info.supply) / 10 ** (decimals ?? 0);
   const jup = await jupP;
+  // DexScreener often has no pair for pump.fun bonding-curve tokens; Jupiter's liquidity covers them.
+  const liqOf = (m: { liquidityUsd: number | null; failed: boolean }) => (!m.liquidityUsd && Number(jup?.liquidity) > 0 ? Number(jup.liquidity) : m.liquidityUsd);
+  const extraP = timed("buyerSignals", marketP.then((m) => solanaExtra(mint, { jup, mintInfo: info, dsPairs: m.pairs, supply, decimals, liquidityUsd: liqOf(m) })).catch(() => null));
   const fast = !!(jup?.dev && jup.createdAt && jup.audit?.topHoldersPercentage != null);
   const [largest, market, oldest] = await Promise.all([
     fast ? null : rpc<any>("getTokenLargestAccounts", [mint], { timeoutMs: 6000 }).catch(() => null),
@@ -184,8 +188,9 @@ export async function gatherFacts(mint: string): Promise<Facts> {
       }
     } catch { unknown.push("deployer history"); }
   }
-  return { mint, decimals, supply, mintAuthority: info.mintAuthority ?? null, freezeAuthority: info.freezeAuthority ?? null, token2022: acct.value.owner !== "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-    top1Pct, top10Pct, liquidityUsd: market.liquidityUsd, priceUsd: market.priceUsd, pairs: market.pairs.length,
+  const extra = await extraP;
+  return { extra, mint, decimals, supply, mintAuthority: info.mintAuthority ?? null, freezeAuthority: info.freezeAuthority ?? null, token2022: acct.value.owner !== "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+    top1Pct, top10Pct, liquidityUsd: liqOf(market),  priceUsd: market.priceUsd, pairs: market.pairs.length,
     timingsMs: { ...timingsMs, total: Date.now() - t0 }, marketUnknown: market.failed, holderSource, holderCount: jup?.holderCount ?? null, launchpad: jup?.launchpad ?? null,
     lpNote: market.pairs.length ? `${market.pairs.length} pool(s) on ${[...new Set(market.pairs.map((p: any) => p.dexId))].join(", ")}; LP lock/burn status not verified` : null,
     ageHours, creator, funder, priorLaunches, priorDead, creatorFlagged: !!(creator && list[creator] && !(priorDead! >= 3)), funderFlagged: !!(funder && list[funder]), unknown };
@@ -257,7 +262,7 @@ async function evmCheck(addr: string, chain: string) {
   const created = dsr?.length ? Math.min(...dsr.map((p) => p.pairCreatedAt ?? Infinity)) : null;
   const age = created && isFinite(created) ? (Date.now() - created) / 3.6e6 : null;
   const price = dsr?.[0]?.priceUsd ? Number(dsr[0].priceUsd) : null;
-  return { ...scoreEvm(g, liq, age, marketUnknown), confidence: marketUnknown ? "medium" : "high", unknownSignals: marketUnknown ? ["liquidity", "age"] : [], facts: { token: g.token_symbol, creator: g.creator_address || null, owner: g.owner_address || null, holderCount: Number(g.holder_count || 0), liquidityUsd: liq, priceUsd: price, ageHours: age && +age.toFixed(1), buyTax: g.buy_tax, sellTax: g.sell_tax }, price, liq };
+  return { ...scoreEvm(g, liq, age, marketUnknown), confidence: marketUnknown ? "medium" : "high", unknownSignals: marketUnknown ? ["liquidity", "age"] : [], facts: { buyer: evmExtra(g, dsr), token: g.token_symbol, creator: g.creator_address || null, owner: g.owner_address || null, holderCount: Number(g.holder_count || 0), liquidityUsd: liq, priceUsd: price, ageHours: age && +age.toFixed(1), buyTax: g.buy_tax, sellTax: g.sell_tax }, price, liq };
 }
 export const CHAINS = ["solana", "base", "bnb", "ethereum", "arbitrum"] as const; // EVM chains: add to EVM map (GoPlus chain id + DexScreener slug)
 
@@ -284,18 +289,34 @@ async function rugCheckUncached(mintRaw: string, chainRaw = "solana") {
     if (!/^0x[0-9a-fA-F]{40}$/.test(a)) throw new SolanaInputError(`token must be a ${chain} token contract address (0x...)`);
     const b = await evmCheck(a, chain);
     if (b.level === "low") logValidation(`${chain}:${a}`, b.score, b.price, b.liq, 10 * 60_000, chain);
-    return { product: "RugRadar", chain, token: a, riskScore: b.score, riskLevel: b.level, confidence: b.confidence, unknownSignals: b.unknownSignals, verdict: verdictOf(b.level), reasons: b.reasons.map((x) => x.detail), checks: b.reasons, facts: b.facts,
+    return { product: "RugRadar", chain, token: a, riskScore: b.score, riskLevel: b.level, confidence: b.confidence, unknownSignals: b.unknownSignals, verdict: verdictOf(b.level), buyerSummary: buyerSummary(b.level, b.reasons.filter((x) => x.points > 0).map((x) => x.detail), b.confidence), signalCount: countSignals(b.facts), reasons: b.reasons.map((x) => x.detail), checks: b.reasons, facts: b.facts,
       disclaimer: DISCLAIMER, method: "keyless GoPlus token security (honeypot simulation, owner functions, holders, LP lock, creator's earlier honeypots) + keyless DexScreener (liquidity, age)", generatedAt: new Date().toISOString() };
   }
   const mint = mintRaw.trim();
   if (!B58.test(mint)) throw new SolanaInputError("mint is required (a Solana SPL token mint address)");
   const f = await gatherFacts(mint);
-  const { score, level, reasons, confidence, unknownSignals } = scoreFacts(f);
+  const base = scoreFacts(f); const ex = f.extra;
+  const reasons = [...base.reasons, ...(ex?.checks ?? [])].sort((a, b) => b.points - a.points);
+  // Established (Jupiter-verified, highly organic, $1B+ cap): issuer authorities are normal for e.g. stablecoins; keep them visible at low weight.
+  const sg = (ex?.signals ?? {}) as any;
+  if (sg.jupiterVerified && Number(sg.organicScore) >= 90 && Number(sg.marketCapUsd) >= 1e9) {
+    for (const x of reasons) if (["mint_authority", "freeze_authority"].includes(x.check) && x.points > 0) { x.points = Math.round(x.points / 4); x.detail += " (down-weighted: established, verified token)"; }
+    reasons.push({ check: "established", points: 0, detail: `Established: Jupiter-verified, $${Math.round(sg.marketCapUsd / 1e6).toLocaleString("en-US")}M market cap, organic score ${sg.organicScore}.` });
+  }
+  const score = Math.min(100, reasons.reduce((a, x) => a + x.points, 0)); const level: "low" | "medium" | "high" = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
+  const unknownSignals = [...base.unknownSignals, ...(ex ? ex.unknown : ["buyer signals"])]; const confidence = base.confidence;
+  const { extra: _x, ...factsOnly } = f;
   if (level === "low") logValidation(mint, score, f.priceUsd, f.liquidityUsd);
   return {
     product: "RugRadar", chain, token: mint, riskScore: score, riskLevel: level, confidence, unknownSignals, verdict: verdictOf(level),
+    buyerSummary: buyerSummary(level, reasons.filter((x) => x.points > 0).map((x) => x.detail), confidence), buyer: ex?.signals ?? null,
     reasons: reasons.filter((x) => x.points > 0).map((x) => x.detail), checks: reasons,
-    facts: { ...f, top1Pct: f.top1Pct && +f.top1Pct.toFixed(2), top10Pct: f.top10Pct && +f.top10Pct.toFixed(2), ageHours: f.ageHours && +f.ageHours.toFixed(1) },
-    disclaimer: DISCLAIMER, method: "public Solana RPC (mint account; creator/funder transactions) + keyless Jupiter token API (holders, dev wallet, dev launches/graduations, age) + keyless DexScreener (pools, liquidity); RPC fallbacks when Jupiter lacks data", generatedAt: new Date().toISOString(),
+    facts: { ...factsOnly, top1Pct: f.top1Pct && +f.top1Pct.toFixed(2), top10Pct: f.top10Pct && +f.top10Pct.toFixed(2), ageHours: f.ageHours && +f.ageHours.toFixed(1) },
+    disclaimer: DISCLAIMER, method: "public Solana RPC (mint account; creator/funder transactions) + keyless Jupiter token API (holders, dev wallet, dev launches/graduations, age) + keyless DexScreener (pools, liquidity, socials) + Jupiter sell quote (can you sell?) + pump.fun public trades (dev sold, snipers, launch-block bundles) + token-2022 extensions; RPC fallbacks when Jupiter lacks data", generatedAt: new Date().toISOString(),
   };
+}
+
+/** Number of populated buyer-facing data fields (nested, excluding nulls), for honest comparisons. */
+export function countSignals(o: unknown): number {
+  if (o == null) return 0; if (Array.isArray(o)) return 1; if (typeof o === "object") return Object.values(o as object).reduce((a: number, v) => a + countSignals(v), 0); return 1;
 }

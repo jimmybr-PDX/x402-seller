@@ -2,6 +2,7 @@
  * RugRadar web surface: branded landing page with a free web checker (3 free checks per visitor, limited by IP
  * and cookie), sitemap.xml, and an MCP server (streamable HTTP, JSON responses) at /mcp.
  */
+import { RUG_EDGE } from "./rug-extra.js";
 import type { Express, Request, Response } from "express";
 import { randomBytes } from "node:crypto";
 
@@ -41,6 +42,7 @@ function page(d: WebDeps) {
   const U = d.publicUrl, p = d.priceUsd;
   const sp = d.speed ? `Prepaid credits: ~${d.speed.creditS}s per check vs ~${d.speed.paidS}s pay-per-call: ${d.speed.x}x faster` : "Prepaid credits: pay once, then check with just a key";
   const faq = [
+    ["How is RugRadar different from RugCheck?", "In a side-by-side test on 5 Solana tokens RugRadar returned 28 of 30 buyer signals vs 14 for RugCheck's free report, including dev-sold %, sniper and bundle share, a live sell test, volume vs market cap and a bot-trading score, and it also covers Base, BNB, Ethereum and Arbitrum."],
     ["Is RugRadar free?", `Yes for people: ${FREE_PER_VISITOR} free web checks per visitor. After that, prepaid credits cost $${p} per check (buy 1 to 1,000). Agents pay $${p} per call via x402 or use a credit key.`],
     ["Which chains does the rug check support?", "Solana (including pump.fun tokens), BNB Chain (four.meme), Base, Ethereum and Arbitrum."],
     ["What does the honeypot check look at?", "On EVM chains a simulated buy and sell (can you sell, buy/sell tax) plus owner powers like mint, pause and blacklist. On Solana, active freeze or mint authority, holder concentration, liquidity, token age and the deployer's earlier launches."],
@@ -65,9 +67,9 @@ h1{color:#46DC64;font-size:44px;margin:4px 0;text-align:center;text-shadow:0 0 1
 input,select{font-size:16px;padding:10px;border-radius:8px;border:1px solid #2b3d6b;background:#0A1630;color:#E8EEF8}#tok{width:100%;box-sizing:border-box;margin:8px 0}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.score{font-size:48px;font-weight:800}.low{color:#46DC64}.medium{color:#F7931A}.high{color:#ff5a5a}ul{padding-left:20px}</style></head>
 <body><main>
-<div class="banner"><b>${sp}</b><div style="margin:6px 0 10px">Same $${p} per check, buy 1 to 1,000. Agents send the key as X-RugRadar-Key.</div><a class="btn" href="#credits">Buy credits</a></div>
+<div class="banner"><b>${sp}</b><div style="margin:6px 0 10px"><b>${RUG_EDGE.replace("$0.01", "$" + p)}</b><br>Same $${p} per check, buy 1 to 1,000. Agents send the key as X-RugRadar-Key.</div><a class="btn" href="#credits">Buy credits</a></div>
 <div class="c"><img class="logo" src="/rugradar/rug-radar-512.png" alt="RugRadar emblem" width="150" height="150"><h1>RugRadar</h1>
-<p style="font-size:19px">Free rug check and honeypot checker: paste a token address, get a 0-100 risk score with plain reasons.</p></div>
+<p style="font-size:19px">Free rug check and honeypot checker: paste a token address, get a 0-100 risk score with plain reasons, plus what buyers actually ask: did the dev sell, how much did snipers and bundles take, can you sell, is the volume real.</p></div>
 <section class="box" aria-label="Token checker"><form id="f"><label for="tok"><b>Token address</b> (Solana mint or 0x contract)</label>
 <input id="tok" name="token" required autocomplete="off" spellcheck="false" placeholder="e.g. JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN">
 <div class="row"><label for="chain">Chain</label><select id="chain">${CHAINS.map((c) => `<option value="${c}">${c === "bnb" ? "BNB (BSC)" : c[0]!.toUpperCase() + c.slice(1)}</option>`).join("")}</select>
@@ -75,6 +77,7 @@ input,select{font-size:16px;padding:10px;border-radius:8px;border:1px solid #2b3
 <small id="quota">${FREE_PER_VISITOR} free checks per visitor, then credits.</small></form><div id="out" aria-live="polite"></div></section>
 <h2>Free Solana rug check (incl. pump.fun)</h2><p>Mint and freeze authority, top-holder share, liquidity, token age, and the deployer wallet's earlier launches that died or never graduated, plus a funding wallet linked to earlier high-risk patterns.</p>
 <h2>Honeypot check for BNB, Base, Ethereum and Arbitrum</h2><p>A simulated buy and sell shows whether you can sell and the real buy/sell tax, plus owner powers such as mint, pause and blacklist. Established, exchange-listed tokens are weighted accordingly.</p>
+<h2>RugCheck alternative: what RugRadar shows that RugCheck doesn't</h2><div class="box">Tested on Oct 14, 2026 with the same 5 Solana tokens (a fresh pump.fun launch, a known rug, a mid-cap meme, an established token, and one with mint and freeze authority). RugCheck's free report covered 14 of our 30 buyer signals; RugRadar covered 28. Only RugRadar showed: dev sold % of what they bought, sniper share in the first 10 seconds, launch-block bundle share, a live can-you-sell quote with price impact, the creator's past launches and our bad-deployer list, market cap and liquidity vs market cap, 24h volume, buys, sells and traders, price, holder and liquidity change, a bot-trading (organic) score, social links, a plain buyer summary, a confidence rating, and 4 EVM chains. RugCheck still shows two things we don't: an insider-network graph and an "already rugged" flag.</div>
 <h2 id="credits">Prepaid credits</h2><div class="box">$${p} per check, no discount, 1 to 1,000 credits. Pay once with any x402 client: <code>GET ${U}/credits/buy?credits=100</code> ($1.00). You get a secret key once; paste it above or send it as <code>X-RugRadar-Key</code>. Free balance: <code>${U}/credits/balance</code>.</div>
 <h2>Rug pull checker API for AI agents (x402 + MCP)</h2><div class="box">HTTP: <code>GET ${U}/rug-check?token=&lt;address&gt;&amp;chain=solana</code> ($${p} via x402; also /token-safety and /honeypot-check).<br>MCP (streamable HTTP): <code>${U}/mcp</code> with tools rug_check, token_safety, honeypot_check.</div>
 <h2>FAQ</h2>${faq.map(([q, a]) => `<h3 style="font-size:17px;margin:14px 0 4px">${q}</h3><p style="margin:0">${a}</p>`).join("")}
@@ -89,6 +92,9 @@ f.addEventListener('submit',async e=>{e.preventDefault();out.textContent='Checki
  const j=await r.json().catch(()=>({}));out.textContent='';
  if(!r.ok){out.append(el('p',null,j.message||('Error '+r.status)));if(r.status===402||j.error==='free_checks_used'){const a=el('a','btn','Buy credits');a.href='#credits';out.append(a)}return}
  const s=el('div','score '+j.riskLevel,j.riskScore+'/100');out.append(s,el('p',null,(j.riskLevel||'').toUpperCase()+' risk, confidence '+(j.confidence||'n/a')+'. '+(j.verdict||'')));
+ if(j.buyerSummary)out.append(el('p',null,j.buyerSummary));
+ const B=j.buyer||(j.facts&&j.facts.buyer)||{},F=[['Dev holds %','devHoldingPct'],['Dev sold % of buys','devSoldPctOfBought'],['Snipers % (first 10s)','sniperSupplyPct10s'],['Launch-bundle %','bundledSupplyPctLaunchSlot'],['Can sell ($100 test)','sellRoute'],['Sell price impact %','sellPriceImpactPct'],['Sell tax %','sellTaxPct'],['Market cap $','marketCapUsd'],['Liquidity / mcap %','liquidityToMcapPct'],['24h volume $','volume24hUsd'],['24h buys / sells',null],['Organic trading','organicLabel'],['LP','lpStatus'],['Socials','socials']];
+ const tb=el('table');F.forEach(([n,k])=>{let v=k?B[k]:(B.buys24h!=null?B.buys24h+' / '+B.sells24h:null);if(v==null||v==='')return;if(Array.isArray(v))v=v.length?v.join(', '):'none';if(typeof v==='boolean')v=v?'yes':'NO';if(typeof v==='number'&&v>=1000)v=Math.round(v).toLocaleString();const tr=el('tr');tr.append(el('td',null,n),el('td',null,String(v)));tb.append(tr)});if(tb.childNodes.length)out.append(tb);
  const ul=el('ul');(j.reasons&&j.reasons.length?j.reasons:['No major high-risk patterns found.']).forEach(x=>ul.append(el('li',null,x)));out.append(ul);
  if(j.unknownSignals&&j.unknownSignals.length)out.append(el('p',null,'Unknown (scored neutral): '+j.unknownSignals.join(', ')));
  out.append(el('small',null,j.disclaimer||${JSON.stringify(DISCLAIMER)}));
@@ -99,9 +105,9 @@ f.addEventListener('submit',async e=>{e.preventDefault();out.textContent='Checki
 
 // ---------- MCP (streamable HTTP, JSON responses, stateless) ----------
 const TOOLS = [
-  ["rug_check", "RugRadar rug check / rug pull checker: 0-100 risk score with plain reasons for a token on Solana (incl. pump.fun), BNB, Base, Ethereum or Arbitrum."],
-  ["token_safety", "RugRadar token safety check: mint/freeze authority, holder concentration, liquidity, age, deployer history; 0-100 risk score."],
-  ["honeypot_check", "RugRadar honeypot check: can I sell this token? Simulated buy/sell and tax on EVM chains, freeze/mint authority on Solana; 0-100 risk score."],
+  ["rug_check", "RugRadar rug check / rug pull checker: 0-100 risk score with plain reasons and a buyer summary for a token on Solana (incl. pump.fun), BNB, Base, Ethereum or Arbitrum. " + RUG_EDGE],
+  ["token_safety", "RugRadar token safety check: mint/freeze authority, holder concentration, liquidity, age, deployer history, dev holding/sold, snipers, bundles, volume vs market cap, socials; 0-100 risk score. " + RUG_EDGE],
+  ["honeypot_check", "RugRadar honeypot check: can I sell this token? Simulated buy/sell and tax on EVM chains, live Jupiter sell quote plus freeze/mint authority and token-2022 transfer controls on Solana; 0-100 risk score. " + RUG_EDGE],
 ] as const;
 const ROUTE: Record<string, string> = { rug_check: "/rug-check", token_safety: "/token-safety", honeypot_check: "/honeypot-check" };
 const schema = { type: "object", properties: { token: { type: "string", description: "Solana mint or EVM 0x token contract" }, chain: { type: "string", enum: CHAINS, description: "default solana; 0x addresses default to base" }, api_key: { type: "string", description: "optional RugRadar credit key (or send header X-RugRadar-Key)" } }, required: ["token"] };

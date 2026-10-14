@@ -1,6 +1,8 @@
 # RugRadar for ElizaOS
 
 Adds three actions/tools: **rug check**, **token safety** and **honeypot check** for Solana, Base, BNB Chain, Ethereum and Arbitrum.
+**$0.01 per check: 45+ data points per token, including 16 signals RugCheck's free report doesn't show (dev-sold %, sniper and launch-bundle share, a live can-you-sell quote, the creator's past launches, volume vs market cap, bot-trading score), across 5 chains.**
+
 Each call costs $0.01 and is paid from a prepaid RugRadar credit key (sent as `X-RugRadar-Key`).
 
 > Automated heuristic, may be wrong. Not financial advice. Do your own research. Results describe high-risk patterns, not people.
