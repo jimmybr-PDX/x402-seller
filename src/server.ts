@@ -295,7 +295,7 @@ async function main() {
     try {
       const token = String(req.query.token ?? req.query.mint ?? "").trim();
       if (!token) throw new SolanaInputError("token is required");
-      const out = await rugCheck(token, String(req.query.chain ?? "").trim() || (token.startsWith("0x") ? "base" : "solana"));
+      const out = await rugCheck(token, String(req.query.chain ?? "").trim() || (token.startsWith("0x") ? "base" : "solana"), { noCache: req.query.nocache === "1" });
       res.set("X-RugRadar-Credits", String(left)).json({ ...out, paidWith: "credits", credits_remaining: left });
     } catch (err) {
       await refund(key);
@@ -1724,7 +1724,7 @@ h1{color:#46DC64;font-size:44px;margin:8px 0;text-shadow:0 0 18px rgba(70,220,10
       async (req) => {
         const token = qs(req.query.token) || qs(req.query.mint);
         if (!token) throw new SolanaInputError("token is required (Solana mint address, or Base 0x contract with chain=base)");
-        return { ...(await rugCheck(token, qs(req.query.chain) || (token.startsWith("0x") ? "base" : "solana"))), tip: creditTip() };
+        return { ...(await rugCheck(token, qs(req.query.chain) || (token.startsWith("0x") ? "base" : "solana"), { noCache: req.query.nocache === "1" })), tip: creditTip() };
       },
       [SolanaInputError],
       "Public Solana RPC / token data APIs did not answer",

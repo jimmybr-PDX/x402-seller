@@ -29,27 +29,28 @@ export type Facts = {
   liquidityUsd: number | null; priceUsd: number | null; pairs: number; lpNote: string | null;
   ageHours: number | null; creator: string | null; funder: string | null;
   priorLaunches: number | null; priorDead: number | null;
-  creatorFlagged: boolean; funderFlagged: boolean; unknown: string[]; timingsMs?: Record<string, number>; holderSource?: string | null; holderCount?: number | null; launchpad?: string | null;
+  creatorFlagged: boolean; funderFlagged: boolean; unknown: string[]; timingsMs?: Record<string, number>; marketUnknown?: boolean; holderSource?: string | null; holderCount?: number | null; launchpad?: string | null;
 };
 export type Reason = { check: string; points: number; detail: string };
 
 /** Pure scoring: points add up to a 0-100 risk score. */
-export function scoreFacts(f: Facts): { score: number; level: "low" | "medium" | "high"; reasons: Reason[] } {
+export function scoreFacts(f: Facts): { score: number; level: "low" | "medium" | "high"; reasons: Reason[]; confidence: "high" | "medium" | "low"; unknownSignals: string[] } {
   const r: Reason[] = [];
   const add = (check: string, points: number, detail: string) => r.push({ check, points, detail });
   if (f.mintAuthority) add("mint_authority", 25, "Mint authority is still active: more tokens can be created at any time (high-risk pattern).");
   else add("mint_authority", 0, "Mint authority is revoked: supply is fixed.");
   if (f.freezeAuthority) add("freeze_authority", 20, "Freeze authority is still active: holders' tokens can be frozen, a common honeypot pattern.");
   else add("freeze_authority", 0, "Freeze authority is revoked.");
-  if (f.top10Pct == null) add("holders", 5, "Top-holder concentration unavailable from public RPC.");
+  if (f.top10Pct == null) add("holders", 0, "Top-holder concentration unknown (free sources did not answer); scored neutral.");
   else if (f.top1Pct! > 30 || f.top10Pct > 70) add("holders", 20, `Top holders own ${f.top10Pct.toFixed(1)}%${f.top1Pct! > 30 ? ` (largest ~${f.top1Pct!.toFixed(1)}%)` : ""} (may include pool/curve accounts): heavy concentration.`);
   else if (f.top10Pct > 40) add("holders", 10, `Top holders own ${f.top10Pct.toFixed(1)}% (may include pool/curve accounts).`);
   else add("holders", 0, `Top holders own ${f.top10Pct.toFixed(1)}%: spread out.`);
-  if (f.liquidityUsd == null) add("liquidity", 15, "No DEX pool found: cannot sell easily (or not launched yet).");
+  if (f.marketUnknown) add("liquidity", 0, "Liquidity unknown (market data source did not answer); scored neutral.");
+  else if (f.liquidityUsd == null) add("liquidity", 15, "No DEX pool found: cannot sell easily (or not launched yet).");
   else if (f.liquidityUsd < 5000) add("liquidity", 15, `Very thin liquidity ($${Math.round(f.liquidityUsd)}).`);
   else if (f.liquidityUsd < 50000) add("liquidity", 7, `Modest liquidity ($${Math.round(f.liquidityUsd)}).`);
   else add("liquidity", 0, `Liquidity $${Math.round(f.liquidityUsd).toLocaleString("en-US")} across ${f.pairs} pool(s).`);
-  if (f.ageHours == null) add("age", 3, "Token age unknown.");
+  if (f.ageHours == null) add("age", 0, "Token age unknown; scored neutral.");
   else if (f.ageHours < 24) add("age", 10, `Very new: ${f.ageHours.toFixed(1)} hours old.`);
   else if (f.ageHours < 24 * 7) add("age", 5, `New: ${(f.ageHours / 24).toFixed(1)} days old.`);
   else add("age", 0, `${Math.round(f.ageHours / 24)} days old.`);
@@ -62,20 +63,42 @@ export function scoreFacts(f: Facts): { score: number; level: "low" | "medium" |
   if (f.creatorFlagged) add("known_pattern", 25, "Creator wallet is on our list of deployers behind earlier high-risk patterns.");
   if (f.funderFlagged) add("shared_funder", 20, "Creator was funded by a wallet on our list of deployers behind earlier high-risk patterns.");
   const score = Math.min(100, r.reduce((a, x) => a + x.points, 0));
-  return { score, level: score >= 50 ? "high" : score >= 25 ? "medium" : "low", reasons: r.sort((a, b) => b.points - a.points) };
+  const unknownSignals = [f.top10Pct == null && "holders", f.marketUnknown && "liquidity", f.ageHours == null && "age", !f.creator && "deployer_history"].filter(Boolean) as string[];
+  const confidence: "high" | "medium" | "low" = unknownSignals.length === 0 ? "high" : unknownSignals.length <= 2 ? "medium" : "low";
+  return { score, level: score >= 50 ? "high" : score >= 25 ? "medium" : "low", reasons: r.sort((a, b) => b.points - a.points), confidence, unknownSignals };
 }
 
-async function ds(mints: string[]): Promise<any[]> {
-  try { const r = await fetch(DS + mints.join(","), { signal: AbortSignal.timeout(6000) }); return r.ok ? ((await r.json()) as any[]) : []; } catch { return []; }
+// ---------- stable-fact cache (mint account, Jupiter token data, funder): 20 min; failures are never cached ----------
+const STABLE_MS = Number(process.env.RUG_STABLE_CACHE_MS ?? 20 * 60_000);
+const stable = new Map<string, { at: number; v: unknown }>();
+async function cached<T>(k: string, f: () => Promise<T>, ok: (v: T) => boolean = (v) => v != null): Promise<T> {
+  const h = stable.get(k);
+  if (!bypass && h && Date.now() - h.at < STABLE_MS) return h.v as T;
+  const v = await f();
+  if (ok(v)) { stable.set(k, { at: Date.now(), v }); if (stable.size > 3000) stable.delete(stable.keys().next().value!); }
+  return v;
 }
+/** One retry for key signals that failed or timed out. */
+async function retry<T>(f: () => Promise<T>, bad: (v: T) => boolean): Promise<T> { const v = await f().catch(() => null as T); return bad(v) ? f().catch(() => null as T) : v; }
+export function __clearRugCaches() { stable.clear(); cache.clear(); }
+
+/** DexScreener pairs, or null when the source failed (so "no pool" and "source down" are not confused). */
+async function dsOnce(mints: string[]): Promise<any[] | null> {
+  try { const r = await fetch(DS + mints.join(","), { signal: AbortSignal.timeout(4000) }); return r.ok ? ((await r.json()) as any[]) : null; } catch { return null; }
+}
+const dsRaw = (mints: string[]) => retry(() => dsOnce(mints), (v) => v == null);
+async function ds(mints: string[]): Promise<any[]> { return (await dsRaw(mints)) ?? []; }
 export async function marketOf(mint: string) {
-  const pairs = (await ds([mint])).filter((p) => p.baseToken?.address === mint || p.quoteToken?.address === mint);
+  const raw = await dsRaw([mint]);
+  if (raw == null) return { failed: true as const, pairs: [] as any[], liquidityUsd: null, priceUsd: null, createdAt: null };
+  const pairs = raw.filter((p) => p.baseToken?.address === mint || p.quoteToken?.address === mint);
   const liq = pairs.reduce((a, p) => a + (p.liquidity?.usd ?? 0), 0);
   const best = pairs.sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
-  return { pairs, liquidityUsd: pairs.length ? liq : null, priceUsd: best?.priceUsd ? Number(best.priceUsd) : null, createdAt: pairs.length ? Math.min(...pairs.map((p) => p.pairCreatedAt ?? Infinity)) : null };
+  return { failed: false as const, pairs, liquidityUsd: pairs.length ? liq : null, priceUsd: best?.priceUsd ? Number(best.priceUsd) : null, createdAt: pairs.length ? Math.min(...pairs.map((p) => p.pairCreatedAt ?? Infinity)) : null };
 }
 
-async function jupiter(mint: string): Promise<any | null> {
+async function jupiter(mint: string): Promise<any | null> { return cached(`jup:${mint}`, () => retry(() => jupiterOnce(mint), (v) => v == null)); }
+async function jupiterOnce(mint: string): Promise<any | null> {
   try { const r = await fetch(`https://lite-api.jup.ag/tokens/v2/search?query=${mint}`, { signal: AbortSignal.timeout(4000) }); const j = r.ok ? ((await r.json()) as any[]) : []; return j.find((t) => t.id === mint) ?? null; } catch { return null; }
 }
 async function oldestTx(addr: string, pages = 6): Promise<{ sig: string; time: number | null; complete: boolean } | null> {
@@ -101,7 +124,7 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   const t0 = Date.now();
   const timed = <T>(name: string, p: Promise<T>) => p.finally(() => { timingsMs[name] = Date.now() - t0; });
   // Parallel: mint account (RPC), Jupiter token data and DexScreener market start together.
-  const acctP = timed("rpcMint", rpc<any>("getAccountInfo", [mint, { encoding: "jsonParsed" }], { timeoutMs: 3500 }));
+  const acctP = timed("rpcMint", cached(`acct:${mint}`, () => retry(() => rpc<any>("getAccountInfo", [mint, { encoding: "jsonParsed" }], { timeoutMs: 3500 }), (v) => !v?.value), (v: any) => !!v?.value));
   const jupP = timed("jupiter", jupiter(mint));
   const marketP = timed("dexscreener", marketOf(mint));
   const acct = await acctP;
@@ -133,12 +156,13 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   if (creator && fast) {
     if (priorDead! >= 3 && priorDead! / Math.max(1, priorLaunches!) >= 0.5) flagDeployer(creator, priorDead!, priorLaunches!);
     // Funder lookup is the slowest public-RPC step from Render: time-box it and report unknown instead of waiting.
-    const look = (async () => {
+    const look = cached(`funder:${creator}`, async () => {
       const first = await oldestTx(creator!, 1).catch(() => null);
       if (!first?.complete) return null;
       const t = await getTx(first.sig);
-      return (t?.transaction?.message?.instructions ?? []).find((i: any) => i?.parsed?.type === "transfer" && i.parsed.info?.destination === creator)?.parsed?.info?.source ?? null;
-    })().catch(() => null);
+      if (!t) return null;
+      return { v: (t?.transaction?.message?.instructions ?? []).find((i: any) => i?.parsed?.type === "transfer" && i.parsed.info?.destination === creator)?.parsed?.info?.source ?? null };
+    }, (v) => v != null).then((x) => (x ? x.v : null)).catch(() => null);
     const FUNDER_MS = Number(process.env.RUG_FUNDER_MS ?? 1500);
     const got = await Promise.race([look, new Promise<"timeout">((r) => setTimeout(() => r("timeout"), FUNDER_MS).unref?.())]);
     if (got === "timeout") unknown.push("funding wallet (lookup over time budget)"); else funder = got as string | null;
@@ -162,7 +186,7 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   }
   return { mint, decimals, supply, mintAuthority: info.mintAuthority ?? null, freezeAuthority: info.freezeAuthority ?? null, token2022: acct.value.owner !== "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
     top1Pct, top10Pct, liquidityUsd: market.liquidityUsd, priceUsd: market.priceUsd, pairs: market.pairs.length,
-    timingsMs: { ...timingsMs, total: Date.now() - t0 }, holderSource, holderCount: jup?.holderCount ?? null, launchpad: jup?.launchpad ?? null,
+    timingsMs: { ...timingsMs, total: Date.now() - t0 }, marketUnknown: market.failed, holderSource, holderCount: jup?.holderCount ?? null, launchpad: jup?.launchpad ?? null,
     lpNote: market.pairs.length ? `${market.pairs.length} pool(s) on ${[...new Set(market.pairs.map((p: any) => p.dexId))].join(", ")}; LP lock/burn status not verified` : null,
     ageHours, creator, funder, priorLaunches, priorDead, creatorFlagged: !!(creator && list[creator] && !(priorDead! >= 3)), funderFlagged: !!(funder && list[funder]), unknown };
 }
@@ -188,7 +212,7 @@ export function validationSummary() {
 }
 
 // ---------- Base (EVM) via keyless GoPlus token security + DexScreener ----------
-export function scoreEvm(g: any, liquidityUsd: number | null, ageHours: number | null): { score: number; level: "low" | "medium" | "high"; reasons: Reason[] } {
+export function scoreEvm(g: any, liquidityUsd: number | null, ageHours: number | null, marketUnknown = false): { score: number; level: "low" | "medium" | "high"; reasons: Reason[] } {
   const r: Reason[] = []; const on = (k: string) => g?.[k] === "1";
   const add = (check: string, points: number, detail: string) => r.push({ check, points, detail });
   if (on("is_honeypot") || on("cannot_sell_all")) add("honeypot", 40, "Simulation says holders cannot sell (honeypot high-risk pattern).");
@@ -204,7 +228,8 @@ export function scoreEvm(g: any, liquidityUsd: number | null, ageHours: number |
   if (top10 > 50) add("holders", 15, `Top non-contract holders own ${top10.toFixed(1)}%.`);
   const lpLocked = (g?.lp_holders ?? []).reduce((a: number, h: any) => a + (h.is_locked === 1 || /^0x0+(dead)?$/i.test(h.address ?? "") ? Number(h.percent || 0) : 0), 0) * 100;
   if ((g?.lp_holders ?? []).length && lpLocked < 50) add("lp_unlocked", 10, `Only ${lpLocked.toFixed(0)}% of LP tokens are locked or burned.`);
-  if (liquidityUsd == null || liquidityUsd < 5000) add("liquidity", 15, liquidityUsd == null ? "No DEX pool found." : `Very thin liquidity ($${Math.round(liquidityUsd)}).`);
+  if (marketUnknown) add("liquidity", 0, "Liquidity and age unknown (market data source did not answer); scored neutral.");
+  else if (liquidityUsd == null || liquidityUsd < 5000) add("liquidity", 15, liquidityUsd == null ? "No DEX pool found." : `Very thin liquidity ($${Math.round(liquidityUsd)}).`);
   if (ageHours != null && ageHours < 24) add("age", 10, `Very new: ${ageHours.toFixed(1)} hours old.`);
   // Established tokens (CEX-listed, or $1M+ liquidity and 90+ days old): owner powers stay in the reasons at low weight;
   // admin mint/pause/proxy is common for legit tokens, and rugs rarely last that long with deep liquidity.
@@ -222,26 +247,30 @@ const ALIAS: Record<string, string> = { bsc: "bnb", eth: "ethereum", arb: "arbit
 async function evmCheck(addr: string, chain: string) {
   const c = EVM[chain]!;
   const [gj, dsr] = await Promise.all([
-    fetch(`https://api.gopluslabs.io/api/v1/token_security/${c.id}?contract_addresses=${addr}`, { signal: AbortSignal.timeout(8000) }).then((r) => r.json()).catch(() => null) as Promise<any>,
-    fetch(`https://api.dexscreener.com/tokens/v1/${c.ds}/${addr}`, { signal: AbortSignal.timeout(6000) }).then((r) => (r.ok ? r.json() : [])).catch(() => []) as Promise<any[]>,
+    cached(`goplus:${c.id}:${addr.toLowerCase()}`, () => retry(() => fetch(`https://api.gopluslabs.io/api/v1/token_security/${c.id}?contract_addresses=${addr}`, { signal: AbortSignal.timeout(6000) }).then((r) => r.json()) as Promise<any>, (v) => !v?.result?.[addr.toLowerCase()]), (v: any) => !!v?.result?.[addr.toLowerCase()]),
+    retry(() => fetch(`https://api.dexscreener.com/tokens/v1/${c.ds}/${addr}`, { signal: AbortSignal.timeout(4000) }).then((r) => (r.ok ? r.json() : null)) as Promise<any[] | null>, (v) => v == null),
   ]);
+  const marketUnknown = dsr == null;
   const g = gj?.result?.[addr.toLowerCase()];
   if (!g) throw new SolanaInputError(`token security data unavailable for this address on ${chain} (not a token, or the free GoPlus API is busy); you were not charged`);
-  const liq = dsr.length ? dsr.reduce((a, p) => a + (p.liquidity?.usd ?? 0), 0) : null;
-  const created = dsr.length ? Math.min(...dsr.map((p) => p.pairCreatedAt ?? Infinity)) : null;
+  const liq = dsr?.length ? dsr.reduce((a, p) => a + (p.liquidity?.usd ?? 0), 0) : null;
+  const created = dsr?.length ? Math.min(...dsr.map((p) => p.pairCreatedAt ?? Infinity)) : null;
   const age = created && isFinite(created) ? (Date.now() - created) / 3.6e6 : null;
-  const price = dsr[0]?.priceUsd ? Number(dsr[0].priceUsd) : null;
-  return { ...scoreEvm(g, liq, age), facts: { token: g.token_symbol, creator: g.creator_address || null, owner: g.owner_address || null, holderCount: Number(g.holder_count || 0), liquidityUsd: liq, priceUsd: price, ageHours: age && +age.toFixed(1), buyTax: g.buy_tax, sellTax: g.sell_tax }, price, liq };
+  const price = dsr?.[0]?.priceUsd ? Number(dsr[0].priceUsd) : null;
+  return { ...scoreEvm(g, liq, age, marketUnknown), confidence: marketUnknown ? "medium" : "high", unknownSignals: marketUnknown ? ["liquidity", "age"] : [], facts: { token: g.token_symbol, creator: g.creator_address || null, owner: g.owner_address || null, holderCount: Number(g.holder_count || 0), liquidityUsd: liq, priceUsd: price, ageHours: age && +age.toFixed(1), buyTax: g.buy_tax, sellTax: g.sell_tax }, price, liq };
 }
 export const CHAINS = ["solana", "base", "bnb", "ethereum", "arbitrum"] as const; // EVM chains: add to EVM map (GoPlus chain id + DexScreener slug)
 
 const verdictOf = (l: string) => (l === "high" ? "Multiple high-risk patterns found." : l === "medium" ? "Some high-risk patterns found." : "No major high-risk patterns found.");
 const CACHE_MS = 60_000;
 const cache = new Map<string, { at: number; v: any }>();
-export async function rugCheck(mintRaw: string, chainRaw = "solana") {
+let bypass = false;
+/** noCache: skip the 60 s result cache and the stable-fact cache (used by the speed test). */
+export async function rugCheck(mintRaw: string, chainRaw = "solana", opts: { noCache?: boolean } = {}) {
   const ck = `${(chainRaw || "solana").toLowerCase()}:${mintRaw.trim()}`;
   const hit = cache.get(ck);
-  if (hit && Date.now() - hit.at < CACHE_MS) return { ...hit.v, cached: true };
+  if (!opts.noCache && hit && Date.now() - hit.at < CACHE_MS) return { ...hit.v, cached: true };
+  if (opts.noCache) { bypass = true; try { const v = await rugCheckUncached(mintRaw, chainRaw); return { ...v, cached: false }; } finally { bypass = false; } }
   const v = await rugCheckUncached(mintRaw, chainRaw);
   cache.set(ck, { at: Date.now(), v });
   if (cache.size > 500) cache.delete(cache.keys().next().value!);
@@ -255,16 +284,16 @@ async function rugCheckUncached(mintRaw: string, chainRaw = "solana") {
     if (!/^0x[0-9a-fA-F]{40}$/.test(a)) throw new SolanaInputError(`token must be a ${chain} token contract address (0x...)`);
     const b = await evmCheck(a, chain);
     if (b.level === "low") logValidation(`${chain}:${a}`, b.score, b.price, b.liq, 10 * 60_000, chain);
-    return { product: "RugRadar", chain, token: a, riskScore: b.score, riskLevel: b.level, verdict: verdictOf(b.level), reasons: b.reasons.map((x) => x.detail), checks: b.reasons, facts: b.facts,
+    return { product: "RugRadar", chain, token: a, riskScore: b.score, riskLevel: b.level, confidence: b.confidence, unknownSignals: b.unknownSignals, verdict: verdictOf(b.level), reasons: b.reasons.map((x) => x.detail), checks: b.reasons, facts: b.facts,
       disclaimer: DISCLAIMER, method: "keyless GoPlus token security (honeypot simulation, owner functions, holders, LP lock, creator's earlier honeypots) + keyless DexScreener (liquidity, age)", generatedAt: new Date().toISOString() };
   }
   const mint = mintRaw.trim();
   if (!B58.test(mint)) throw new SolanaInputError("mint is required (a Solana SPL token mint address)");
   const f = await gatherFacts(mint);
-  const { score, level, reasons } = scoreFacts(f);
+  const { score, level, reasons, confidence, unknownSignals } = scoreFacts(f);
   if (level === "low") logValidation(mint, score, f.priceUsd, f.liquidityUsd);
   return {
-    product: "RugRadar", chain, token: mint, riskScore: score, riskLevel: level, verdict: verdictOf(level),
+    product: "RugRadar", chain, token: mint, riskScore: score, riskLevel: level, confidence, unknownSignals, verdict: verdictOf(level),
     reasons: reasons.filter((x) => x.points > 0).map((x) => x.detail), checks: reasons,
     facts: { ...f, top1Pct: f.top1Pct && +f.top1Pct.toFixed(2), top10Pct: f.top10Pct && +f.top10Pct.toFixed(2), ageHours: f.ageHours && +f.ageHours.toFixed(1) },
     disclaimer: DISCLAIMER, method: "public Solana RPC (mint account; creator/funder transactions) + keyless Jupiter token API (holders, dev wallet, dev launches/graduations, age) + keyless DexScreener (pools, liquidity); RPC fallbacks when Jupiter lacks data", generatedAt: new Date().toISOString(),
