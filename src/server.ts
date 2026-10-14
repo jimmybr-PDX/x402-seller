@@ -72,7 +72,7 @@ const GAS_PRICE = process.env.GAS_PRICE ?? "$0.001";
 const SEARCH_PRICE = process.env.SEARCH_PRICE ?? "$0.01";
 const RUG_PRICE = process.env.RUG_PRICE ?? "$0.01";
 // Measured end-to-end gap between a paid x402 RugRadar call and a credit-key call (seconds); null until measured.
-const CREDIT_GAP_S: number | null = null;
+const CREDIT_GAP_S: number | null = 3; // measured 2026-10-13 on Render: 3 tokens, paid x402 avg 7.0 s vs credit key avg 3.6 s (gap 3.3 s)
 const creditTip = () => (CREDIT_GAP_S ? `Tip: buy RugRadar credits (${PUBLIC_URL}/credits/buy?credits=N, $0.01 each) to skip the ~${CREDIT_GAP_S}s payment wait.` : `Tip: buy RugRadar credits (${PUBLIC_URL}/credits/buy?credits=N, $0.01 each) and send X-RugRadar-Key to skip payment on each check.`);
 const RUG_PATHS = new Set(["/rug-check", "/token-safety", "/honeypot-check"]);
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
@@ -931,7 +931,7 @@ async function main() {
     "GET /rug-check": {
       accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
       description:
-        `RugRadar: Solana rug check and rug pull checker for pump.fun memecoins, plus BNB rug check / BSC honeypot check (four.meme rug check), Base, Ethereum, Arbitrum via chain=. Returns a 0-100 risk score and plain reasons: mint/freeze authority, top-holder concentration, liquidity, token age, deployer history (prior launches that died), funder linked to earlier high-risk patterns. Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
+        `RugRadar: Solana rug check and rug pull checker for pump.fun memecoins, plus BNB rug check / BSC honeypot check (four.meme rug check), Base, Ethereum, Arbitrum via chain=. Returns a 0-100 risk score and plain reasons: mint/freeze authority, top-holder concentration, liquidity, token age, deployer launches that died, linked funder. Credits skip payment: ~3s faster per check (measured). Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "RugRadar: Solana Rug Check & Token Safety Score",
       tags: ["rug check", "rug pull checker", "solana token safety", "pump.fun rug check", "honeypot check"],
@@ -956,7 +956,7 @@ async function main() {
     "GET /token-safety": {
       accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
       description:
-        `RugRadar token safety and honeypot check: token scam check and memecoin risk score for Solana (pump.fun), BNB (four.meme), Base, Ethereum, Arbitrum (chain=). Returns a 0-100 risk score with plain reasons: honeypot simulation (EVM), mint/freeze authority, top-holder share, liquidity, age, deployer launches that died, linked funder. Same engine as /rug-check. Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
+        `RugRadar token safety and honeypot check: token scam check and memecoin risk score for Solana (pump.fun), BNB (four.meme), Base, Ethereum, Arbitrum (chain=). Returns a 0-100 risk score with plain reasons: honeypot simulation (EVM), mint/freeze authority, top-holder share, liquidity, age, deployer launches that died, linked funder. Same engine as /rug-check. Credits skip payment: ~3s faster per check (measured). Heuristic, may be wrong. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "RugRadar Honeypot Check & Solana Token Safety",
       tags: ["honeypot check", "solana token safety", "token scam check", "memecoin risk", "token safety check"],
@@ -981,7 +981,7 @@ async function main() {
     "GET /honeypot-check": {
       accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
       description:
-        `Honeypot check: can I sell this token? RugRadar honeypot detector for new tokens on Base, BNB (BSC), Ethereum, Arbitrum (simulated buy and sell via GoPlus: is_honeypot, can sell, buy/sell tax, owner can pause/blacklist/mint) and Solana (freeze authority = honeypot pattern). Returns 0-100 risk score with plain reasons. Check before an agent buys. Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
+        `Honeypot check: can I sell this token? RugRadar honeypot detector for new tokens on Base, BNB (BSC), Ethereum, Arbitrum (simulated buy and sell via GoPlus: is_honeypot, can sell, buy/sell tax, owner can pause/blacklist/mint) and Solana (freeze authority = honeypot pattern). Returns 0-100 risk score with plain reasons. Check before an agent buys. Credits skip payment: ~3s faster per check (measured). Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "Honeypot Check (RugRadar)",
       tags: ["honeypot check", "honeypot", "can i sell this token", "bsc honeypot check", "honeypot detector"],
@@ -1012,7 +1012,7 @@ async function main() {
         maxTimeoutSeconds: 300,
       })),
       description:
-        `RugRadar prepaid credits: buy 1-1000 rug check / honeypot check credits at ${usd(RUG_PRICE)} USDC each (no discount; ?credits=N, price N x ${usd(RUG_PRICE)}). Returns a secret API key once. Send it as X-RugRadar-Key to /rug-check, /token-safety or /honeypot-check to skip the x402 payment step on each check; responses include credits_remaining. Free balance: /credits/balance. Not charged if the key cannot be issued.`,
+        `RugRadar prepaid credits: buy 1-1000 rug check / honeypot check credits at ${usd(RUG_PRICE)} USDC each (no discount; ?credits=N, price N x ${usd(RUG_PRICE)}). Returns a secret API key once. Send it as X-RugRadar-Key to /rug-check, /token-safety or /honeypot-check to skip the x402 payment step on each check; responses include credits_remaining. Credits skip payment: ~3s faster per check (measured). Free balance: /credits/balance. Not charged if the key cannot be issued.`,
       mimeType: "application/json",
       serviceName: "RugRadar Credits (prepaid rug checks)",
       tags: ["rugradar credits", "prepaid api credits", "rug check api key", "bulk rug check", "honeypot check credits"],
