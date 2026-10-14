@@ -1,4 +1,4 @@
-import { RUG_EDGE } from "./lib/rug-extra.js";
+import { RUG_EDGE_SHORT } from "./lib/rug-extra.js";
 /**
  * x402 research tools for AI agents — x402 resource server (CDP + PayAI facilitators) + Express.
  * Pattern: https://docs.cdp.coinbase.com/x402/quickstart-for-sellers
@@ -140,6 +140,13 @@ const NETWORK_LABEL = NETWORK_NAMES.length > 1 ? `${NETWORK_NAMES.slice(0, -1).j
 const ON_NETWORKS = `USDC on ${NETWORK_LABEL}`;
 const ON_NETWORKS_SHORT = `USDC (${NETWORK_NAMES.join("/")})`;
 /** Short price + no-charge note for Bazaar descriptions (keeps the text about the task, not boilerplate). */
+/** CDP's facilitator rejects any payment whose resource.description is over 500 chars (generic "paymentPayload is invalid"), so cap with margin. */
+export const DESC_MAX = 480;
+export function capDescription(route: string, d?: string) {
+  if (!d || d.length <= DESC_MAX) return d;
+  console.warn(`[x402] description for ${route} is ${d.length} chars; trimmed to ${DESC_MAX} so payments still verify`);
+  const cut = d.slice(0, DESC_MAX - 1); return cut.slice(0, Math.max(cut.lastIndexOf(" "), DESC_MAX - 40)) + "…";
+}
 const perCall = (p: string) => `${usd(p)} USDC/call; failed calls are free.`;
 
 const PAID = {
@@ -934,7 +941,7 @@ async function main() {
     "GET /rug-check": {
       accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
       description:
-        `${RUG_EDGE} RugRadar: Solana rug check and rug pull checker for pump.fun memecoins, plus BNB rug check / BSC honeypot check (four.meme rug check), Base, Ethereum, Arbitrum via chain=. Returns a 0-100 risk score and plain reasons: mint/freeze authority, top-holder concentration, liquidity, token age, deployer launches that died, linked funder. Prepaid credits: ~2.3s vs ~4.0s per check (1.8x faster, measured). Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
+        `${RUG_EDGE_SHORT} RugRadar: Solana rug check / rug pull checker for pump.fun memecoins, plus BNB (four.meme), Base, Ethereum, Arbitrum via chain=. 0-100 risk score, plain reasons and a buyer summary. Heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "RugRadar: Solana Rug Check & Token Safety Score",
       tags: ["rug check", "rug pull checker", "solana token safety", "pump.fun rug check", "honeypot check"],
@@ -959,7 +966,7 @@ async function main() {
     "GET /token-safety": {
       accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
       description:
-        `${RUG_EDGE} RugRadar token safety and honeypot check: token scam check and memecoin risk score for Solana (pump.fun), BNB (four.meme), Base, Ethereum, Arbitrum (chain=). Returns a 0-100 risk score with plain reasons: honeypot simulation (EVM), mint/freeze authority, top-holder share, liquidity, age, deployer launches that died, linked funder. Same engine as /rug-check. Prepaid credits: ~2.3s vs ~4.0s per check (1.8x faster, measured). Heuristic, may be wrong. ${perCall(RUG_PRICE)}`,
+        `${RUG_EDGE_SHORT} RugRadar token safety and honeypot check: token scam check and memecoin risk score for Solana (pump.fun), BNB, Base, Ethereum, Arbitrum (chain=). 0-100 score with plain reasons. Heuristic, may be wrong. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "RugRadar Honeypot Check & Solana Token Safety",
       tags: ["honeypot check", "solana token safety", "token scam check", "memecoin risk", "token safety check"],
@@ -984,7 +991,7 @@ async function main() {
     "GET /honeypot-check": {
       accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
       description:
-        `${RUG_EDGE} Honeypot check: can I sell this token? RugRadar honeypot detector for Base, BNB (BSC), Ethereum, Arbitrum (simulated buy and sell via GoPlus: is_honeypot, can sell, buy/sell tax, owner can pause/blacklist/mint) and Solana (freeze authority = honeypot pattern). Returns 0-100 risk score with plain reasons. Check before an agent buys. Prepaid credits: ~2.3s vs ~4.0s per check (1.8x faster, measured). Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
+        `${RUG_EDGE_SHORT} Honeypot check: can I sell this token? Simulated buy/sell and tax (GoPlus) on Base, BNB, Ethereum, Arbitrum; live sell quote plus freeze authority on Solana. 0-100 score. Heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "Honeypot Check (RugRadar)",
       tags: ["honeypot check", "honeypot", "can i sell this token", "bsc honeypot check", "honeypot detector"],
@@ -1015,7 +1022,7 @@ async function main() {
         maxTimeoutSeconds: 300,
       })),
       description:
-        `${RUG_EDGE} RugRadar prepaid credits: buy 1-1000 rug check / honeypot check credits at ${usd(RUG_PRICE)} USDC each (no discount; ?credits=N, price N x ${usd(RUG_PRICE)}). Returns a secret API key once. Send it as X-RugRadar-Key to /rug-check, /token-safety or /honeypot-check to skip the x402 payment step on each check; responses include credits_remaining. Prepaid credits: ~2.3s vs ~4.0s per check (1.8x faster, measured). Free balance: /credits/balance. Not charged if the key cannot be issued.`,
+        `${RUG_EDGE_SHORT} RugRadar prepaid credits: buy 1-1000 rug check / honeypot check credits at ${usd(RUG_PRICE)} USDC each (?credits=N). Returns a secret key once; send it as X-RugRadar-Key to skip the x402 step (~1.8x faster, measured). Balance: /credits/balance.`,
       mimeType: "application/json",
       serviceName: "RugRadar Credits (prepaid rug checks)",
       tags: ["rugradar credits", "prepaid api credits", "rug check api key", "bulk rug check", "honeypot check credits"],
@@ -1186,6 +1193,7 @@ async function main() {
       k,
       {
         ...r,
+        description: capDescription(k, (r as { description?: string }).description),
         unpaidResponseBody: unpaidBodyFor(k, r),
         settlementFailedResponseBody: settleFailedBody,
         extensions: { ...builderCode, ...r.extensions }, // CDP gas-sponsoring extensions (eip2612/erc20Approval) dropped: their 402 entries started failing validation ("missing required info") on every paid route; USDC EIP-3009 payments do not need them

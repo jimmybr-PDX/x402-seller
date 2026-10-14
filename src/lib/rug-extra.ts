@@ -124,3 +124,5 @@ export function buyerSummary(level: string, top: string[], confidence: string) {
 
 /** Verified Oct 14 2026 on 5 Solana tokens vs RugCheck's free API (see docs/rugcheck-comparison.md). */
 export const RUG_EDGE = "$0.01 per check: 45+ data points per token, including 16 signals RugCheck's free report doesn't show (dev-sold %, sniper and launch-bundle share, a live can-you-sell quote, the creator's past launches, volume vs market cap, bot-trading score), across 5 chains.";
+/** Short form for x402 listings: the facilitator rejects payments whose resource.description exceeds 500 chars. */
+export const RUG_EDGE_SHORT = "$0.01/check: 45+ data points, incl. 16 RugCheck's free report lacks (dev sold %, snipers, bundles, live sell test, creator history, volume vs mcap, bot score); 5 chains.";
