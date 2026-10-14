@@ -41,6 +41,7 @@ import { SOLANA_PRICE_SYMBOLS, SolanaInputError, solanaTokenPrice } from "./lib/
 import { WalletInputError, walletBalances } from "./lib/wallet.js";
 import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
+import { startSales, salesStats } from "./lib/sales.js";
 import { classify, recordRejection, recordRequest, startTraffic, trafficStats, type Outcome } from "./lib/traffic.js";
 import { statsHtml } from "./lib/stats-page.js";
 import { answerHtml, deleteAnswer, getAnswer, newAnswerId, pinAnswer, saveAnswer } from "./lib/answers.js";
@@ -57,14 +58,14 @@ const X402_ENV = (process.env.X402_ENV ?? "development") as EnvMode;
 const DAILY_SPEND_CAP_USD = Number(process.env.DAILY_SPEND_CAP_USD ?? 50);
 
 const REPORT_PRICE = process.env.REPORT_PRICE ?? "$0.01";
-const READ_PRICE = process.env.READ_PRICE ?? "$0.005";
+const READ_PRICE = process.env.READ_PRICE ?? "$0.004";
 const CHECK_PRICE = process.env.CHECK_PRICE ?? "$0.005";
-const NEWS_PRICE = process.env.NEWS_PRICE ?? "$0.005";
-const TOKEN_PRICE = process.env.TOKEN_PRICE ?? "$0.002";
+const NEWS_PRICE = process.env.NEWS_PRICE ?? "$0.004";
+const TOKEN_PRICE = process.env.TOKEN_PRICE ?? "$0.001";
 const SOL_PRICE = process.env.SOL_PRICE ?? "$0.002";
 const BALANCE_PRICE = process.env.BALANCE_PRICE ?? "$0.003";
 const TX_PRICE = process.env.TX_PRICE ?? "$0.003";
-const GAS_PRICE = process.env.GAS_PRICE ?? "$0.002";
+const GAS_PRICE = process.env.GAS_PRICE ?? "$0.001";
 const SEARCH_PRICE = process.env.SEARCH_PRICE ?? "$0.01";
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
 // PNG: the Bazaar re-hosts PNG/JPEG icons; our SVG icon never showed up in listings
@@ -493,7 +494,7 @@ async function main() {
     "GET /report": {
       accepts: accept(REPORT_PRICE),
       description:
-        `Ask a question, get a short cited answer in one call. Returns a 1-3 sentence answer, key points tied to source ids, and the sources used (typically 1-5: title, URL, publisher, date, supporting quote), plus confidence with a reason and a free permalink. Sources: Wikipedia first, plus Stack Overflow, GitHub, Crossref papers, official docs when relevant. Best for definitions, overviews, how-it-works, history. Example: "What is the Model Context Protocol?". ${perCall(REPORT_PRICE)}`,
+        `Web research in one call: ask a question and get a short cited answer, summarize a topic or get a Wikipedia summary. Returns a 1-3 sentence answer, key points tied to source ids, and the sources used (typically 1-5: title, URL, publisher, date, supporting quote), confidence and a free permalink. Sources: Wikipedia first, plus web pages, Stack Overflow, GitHub, papers, docs. Example: "What is the Model Context Protocol?". ${perCall(REPORT_PRICE)}`,
       mimeType: "application/json",
       serviceName: "Research Brief with Citations",
       tags: ["research brief", "web research", "summarize a topic", "wikipedia summary", "answer a question with sources"],
@@ -712,7 +713,7 @@ async function main() {
       description:
         `Web search API (SERP) with page text: like a search API key, pay per call. Pass q, optional n (1-10, default 5). Returns ranked results with title, url, domain, snippet, publish date and up to 1500 chars of cleaned main text from each page, fetched live, so agents can answer without opening links. Fresh results for news, docs, products, local businesses, definitions. ${perCall(SEARCH_PRICE)}`,
       mimeType: "application/json",
-      serviceName: "Web Search + Page Text",
+      serviceName: "Web Search API + Page Text",
       tags: ["web search", "search api", "serp", "search results with page text", "google search alternative"],
       iconUrl: ICON_URL,
       extensions: {
@@ -764,7 +765,7 @@ async function main() {
       description:
         `Web search API (SERP) with page text: like a search API key, pay per call. Pass q, optional n (1-10, default 5). Returns ranked results with title, url, domain, snippet, publish date and up to 1500 chars of cleaned main text from each page, fetched live, so agents can answer without opening links. Fresh results for news, docs, products, local businesses, definitions. ${perCall(SEARCH_PRICE)}`,
       mimeType: "application/json",
-      serviceName: "Web Search + Page Text",
+      serviceName: "Web Search API + Page Text",
       tags: ["web search", "search api", "serp", "search results with page text", "google search alternative"],
       iconUrl: ICON_URL,
       extensions: {
@@ -896,9 +897,9 @@ async function main() {
     "GET /balance": {
       accepts: accept(BALANCE_PRICE),
       description:
-        `Wallet balance: token balances and USD portfolio value for any wallet, read live onchain. EVM (Ethereum, Base, Arbitrum, Polygon in one call; ENS names work) or Solana (SOL + SPL tokens). Use to check a wallet before paying, trading or airdrops. Pass address, optional chain and tokens. Returns per-chain native + ERC-20/SPL balances, prices and total USD. ${perCall(BALANCE_PRICE)}`,
+        `Wallet balance and token balances (ERC20 balance, SPL): token balances and USD portfolio value for any wallet, read live onchain. EVM (Ethereum, Base, Arbitrum, Polygon in one call; ENS names work) or Solana (SOL + SPL tokens). Use to check a wallet before paying, trading or airdrops. Pass address, optional chain and tokens. Returns per-chain native + ERC-20/SPL balances, prices and total USD. ${perCall(BALANCE_PRICE)}`,
       mimeType: "application/json",
-      serviceName: "Wallet Balance",
+      serviceName: "Wallet & Token Balances (ERC20, SPL)",
       tags: ["wallet balance", "erc20 balance", "token balances", "portfolio value", "solana wallet"],
       iconUrl: ICON_URL,
       extensions: {
@@ -931,9 +932,9 @@ async function main() {
     "GET /tx": {
       accepts: accept(TX_PRICE),
       description:
-        `Decode transaction: status, receipt and decoded token transfers for any tx hash or Solana signature, read onchain. EVM (auto-detects Ethereum, Base, Arbitrum, Polygon): success/reverted, block time, confirmations, from/to, method, fee in USD, every ERC-20/NFT transfer; flags x402 USDC payments. Solana: status, fee, SOL + token balance changes. Use to verify a payment landed. ${perCall(TX_PRICE)}`,
+        `Transaction receipt and tx status decoder: status, receipt and decoded token transfers for any tx hash or Solana signature, read onchain. EVM (auto-detects Ethereum, Base, Arbitrum, Polygon): success/reverted, block time, confirmations, from/to, method, fee in USD, every ERC-20/NFT transfer; flags x402 USDC payments. Solana: status, fee, SOL + token balance changes. Use to verify a payment landed. ${perCall(TX_PRICE)}`,
       mimeType: "application/json",
-      serviceName: "Decode Transaction Receipt",
+      serviceName: "Transaction Receipt & Tx Status Decoder",
       tags: ["transaction receipt", "decode transaction", "tx status", "verify payment", "token transfers"],
       iconUrl: ICON_URL,
       extensions: {
@@ -1133,7 +1134,7 @@ async function main() {
   });
 
   app.get("/stats", (req, res) => {
-    const data = { service: SERVICE_NAME, generatedAt: new Date().toISOString(), ...trafficStats(Object.keys(PAID), true) };
+    const data = { service: SERVICE_NAME, generatedAt: new Date().toISOString(), ...trafficStats(Object.keys(PAID), true), sales: salesStats() };
     res.set("Cache-Control", "no-store").vary("Accept");
     const wantsHtml = req.query.view === "simple" || (req.query.format !== "json" && req.accepts(["json", "html"]) === "html");
     if (wantsHtml) res.type("html").send(statsHtml(data as Parameters<typeof statsHtml>[0], Object.keys(PAID)));
@@ -1593,6 +1594,7 @@ async function main() {
 
   app.listen(PORT, "0.0.0.0", () => {
     startTraffic();
+    startSales(PAY_TO_EVM, PUBLIC_URL);
     warmNews();
     console.log(`x402 seller listening on http://localhost:${PORT}  env=${X402_ENV} networks=${NETWORKS.join(",")} (${NETWORK_LABEL})`);
     console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}, /news ${NEWS_PRICE}, /price ${TOKEN_PRICE}, /solana-price ${SOL_PRICE}, /balance ${BALANCE_PRICE}, /tx ${TX_PRICE}, /gas ${GAS_PRICE}, /search ${SEARCH_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}${Object.keys(builderCode).length ? ` builderCode=${BUILDER_CODE_RAW}` : ""}`);
