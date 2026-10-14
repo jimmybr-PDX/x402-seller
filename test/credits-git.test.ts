@@ -1,0 +1,25 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs"; import os from "node:os"; import path from "node:path";
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "crg-"));
+const bare = path.join(root, "store.git"), seed = path.join(root, "seed");
+execFileSync("git", ["init", "-q", "--bare", bare]);
+execFileSync("git", ["clone", "-q", bare, seed]);
+fs.writeFileSync(path.join(seed, "credits.json"), '{"v":1,"keys":{},"purchases":{}}\n');
+const gi = ["-c", "user.name=t", "-c", "user.email=t@t"];
+execFileSync("git", ["-C", seed, ...gi, "add", "."]); execFileSync("git", ["-C", seed, ...gi, "commit", "-qm", "init"]); execFileSync("git", ["-C", seed, "push", "-q", "origin", "HEAD"]);
+delete process.env.CREDITS_FILE;
+process.env.RUGRADAR_STORE_REPO = bare; process.env.RUGRADAR_STORE_SSH_KEY_B64 = Buffer.from("not-used-for-local").toString("base64");
+const c = await import("../src/lib/credits.js");
+test("git store: purchase is pushed before the key is returned (survives restart)", async () => {
+  const { key } = await c.issueKey(5, "g1");
+  assert.equal(c.creditsStatus().store, "github");
+  const check = path.join(root, "check"); execFileSync("git", ["clone", "-q", bare, check]);
+  const d = JSON.parse(fs.readFileSync(path.join(check, "credits.json"), "utf8"));
+  assert.equal(d.keys[c.hashKey(key)].credits, 5);
+  assert.ok(!JSON.stringify(d).includes(key));
+  assert.equal(await c.spend(key), 4); await c.flushCredits();
+  execFileSync("git", ["-C", check, "pull", "-q"]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(check, "credits.json"), "utf8")).keys[c.hashKey(key)].credits, 4);
+});

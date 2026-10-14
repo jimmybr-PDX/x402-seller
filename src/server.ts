@@ -29,6 +29,7 @@ import { BUILDER_CODE, declareBuilderCodeExtension } from "@x402/extensions/buil
 import express, { type Request, type Response, type NextFunction } from "express";
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { InputError, PUBLIC_URL } from "./lib/net.js";
 import { researchBrief } from "./lib/research.js";
@@ -42,6 +43,7 @@ import { WalletInputError, walletBalances } from "./lib/wallet.js";
 import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
 import { rugCheck, DISCLAIMER as RUG_DISCLAIMER } from "./lib/rug.js";
+import { initCredits, issueKey, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell } from "./lib/credits.js";
 import { startSales, salesStats } from "./lib/sales.js";
 import { classify, recordRejection, recordRequest, startTraffic, trafficStats, type Outcome } from "./lib/traffic.js";
 import { statsHtml } from "./lib/stats-page.js";
@@ -69,6 +71,10 @@ const TX_PRICE = process.env.TX_PRICE ?? "$0.003";
 const GAS_PRICE = process.env.GAS_PRICE ?? "$0.001";
 const SEARCH_PRICE = process.env.SEARCH_PRICE ?? "$0.01";
 const RUG_PRICE = process.env.RUG_PRICE ?? "$0.01";
+// Measured end-to-end gap between a paid x402 RugRadar call and a credit-key call (seconds); null until measured.
+const CREDIT_GAP_S: number | null = null;
+const creditTip = () => (CREDIT_GAP_S ? `Tip: buy RugRadar credits (${PUBLIC_URL}/credits/buy?credits=N, $0.01 each) to skip the ~${CREDIT_GAP_S}s payment wait.` : `Tip: buy RugRadar credits (${PUBLIC_URL}/credits/buy?credits=N, $0.01 each) and send X-RugRadar-Key to skip payment on each check.`);
+const RUG_PATHS = new Set(["/rug-check", "/token-safety", "/honeypot-check"]);
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
 // PNG: the Bazaar re-hosts PNG/JPEG icons; our SVG icon never showed up in listings
 const ICON_URL = `${PUBLIC_URL}/icon.png`;
@@ -147,6 +153,7 @@ const PAID = {
   "/rug-check": RUG_PRICE,
   "/token-safety": RUG_PRICE,
   "/honeypot-check": RUG_PRICE,
+  "/credits/buy": RUG_PRICE,
 } as const;
 /** Paid paths that also accept POST (JSON body). */
 const POST_OK = new Set<string>(["/search"]);
@@ -226,7 +233,7 @@ async function main() {
   app.use(express.json());
 
   // Interest tracker (counts only; visitor = salted hash of IP+UA, raw IPs never stored).
-  const FREE_LABELS = new Set(["/", "/health", "/stats", "/examples", "/llms.txt", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png", "/favicon.ico", "/rugradar"]);
+  const FREE_LABELS = new Set(["/", "/health", "/stats", "/examples", "/llms.txt", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png", "/favicon.ico", "/rugradar", "/credits/balance"]);
   app.use((req: Request, res: Response, next: NextFunction) => {
     const method = req.method;
     // HEAD on a paid route: answer like GET without payment (402 + PAYMENT-REQUIRED, no body) instead of
@@ -278,6 +285,24 @@ async function main() {
     next();
   });
 
+
+  // RugRadar credit keys: spend one prepaid credit instead of an x402 payment (runs before payment middleware).
+  app.use(async (req: Request, res: Response, next: NextFunction) => {
+    const key = req.header("x-rugradar-key");
+    if (!key || req.method !== "GET" || !RUG_PATHS.has(req.path)) return next();
+    const left = await spend(key).catch(() => null);
+    if (left == null) { res.set("X-RugRadar-Credits", "0"); return next(); } // empty/unknown key: normal x402 402
+    try {
+      const token = String(req.query.token ?? req.query.mint ?? "").trim();
+      if (!token) throw new SolanaInputError("token is required");
+      const out = await rugCheck(token, String(req.query.chain ?? "").trim() || (token.startsWith("0x") ? "base" : "solana"));
+      res.set("X-RugRadar-Credits", String(left)).json({ ...out, paidWith: "credits", credits_remaining: left });
+    } catch (err) {
+      await refund(key);
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(err instanceof SolanaInputError ? 400 : 503).json({ error: err instanceof SolanaInputError ? "invalid_input" : "unavailable", message: `${msg}. Your credit was refunded.`, credits_remaining: left + 1 });
+    }
+  });
 
   // Guard rails + accurate settlement logging (runs before payment middleware).
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -978,6 +1003,31 @@ async function main() {
         }),
       },
     },
+    "GET /credits/buy": {
+      accepts: NETWORKS.map((network) => ({
+        scheme: "exact",
+        price: (ctx: any) => { const n = Math.floor(Number(ctx?.adapter?.getQueryParam?.("credits") ?? 1)); return `$${((Number.isFinite(n) && n >= 1 && n <= 1000 ? n : 1) * Number(usd(RUG_PRICE))).toFixed(2)}`; },
+        network,
+        payTo: NETWORK_INFO[network]!.family === "svm" ? RUG_PAY_TO_SVM : RUG_PAY_TO_EVM,
+        maxTimeoutSeconds: 300,
+      })),
+      description:
+        `RugRadar prepaid credits: buy 1-1000 rug check / honeypot check credits at ${usd(RUG_PRICE)} USDC each (no discount; ?credits=N, price N x ${usd(RUG_PRICE)}). Returns a secret API key once. Send it as X-RugRadar-Key to /rug-check, /token-safety or /honeypot-check to skip the x402 payment step on each check; responses include credits_remaining. Free balance: /credits/balance. Not charged if the key cannot be issued.`,
+      mimeType: "application/json",
+      serviceName: "RugRadar Credits (prepaid rug checks)",
+      tags: ["rugradar credits", "prepaid api credits", "rug check api key", "bulk rug check", "honeypot check credits"],
+      iconUrl: RUG_ICON_URL,
+      extensions: {
+        ...declareDiscoveryExtension({
+          input: { credits: "100" },
+          inputSchema: { properties: { credits: { type: "string", pattern: "^[0-9]{1,4}$", description: "number of credits, 1-1000 (default 1)" } }, required: [] },
+          output: {
+            example: { product: "RugRadar", key: "rr_example_secret_returned_once", credits: 100, priceUsd: 1, use: "send header X-RugRadar-Key: <key>", balance: `${PUBLIC_URL}/credits/balance` },
+            schema: { properties: { product: { type: "string" }, key: { type: "string" }, credits: { type: "integer" }, priceUsd: { type: "number" }, use: { type: "string" }, balance: { type: "string" } }, required: ["key", "credits"] },
+          },
+        }),
+      },
+    },
     "GET /balance": {
       accepts: accept(BALANCE_PRICE),
       description:
@@ -1113,6 +1163,7 @@ async function main() {
       howToPay: `x402 v2: decode the base64 JSON in this response's PAYMENT-REQUIRED header (one accepts entry per network: ${NETWORK_NAMES.join(", ")}; USDC), sign with any x402 client (e.g. @x402/fetch wrapFetchWithPayment), then retry the same request with the PAYMENT-SIGNATURE header.`,
       exampleInput: info.input?.queryParams ?? info.input?.body ?? null,
       exampleOutput: info.output?.example ?? null,
+      ...(RUG_PATHS.has(path) ? { credits: creditTip() } : {}),
       more: { examples: `${PUBLIC_URL}/examples`, llms: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json` },
     };
     return () => ({ contentType: "application/json", body });
@@ -1293,6 +1344,7 @@ h1{color:#46DC64;font-size:44px;margin:8px 0;text-shadow:0 0 18px rgba(70,220,10
 <p class="pitch">Check a new token before you buy: a 0-100 rug pull and honeypot risk score with plain-English reasons, in one call.</p>
 <div class="box"><b>Price:</b> ${usd(RUG_PRICE)} USDC per call (x402); failed calls are free.<br><b>Chains:</b> Solana (incl. pump.fun), BNB (four.meme), Base, Ethereum, Arbitrum.<br>
 <b>Checks:</b> mint/freeze authority, honeypot simulation (EVM), top-holder share, liquidity, token age, deployer launches that died, linked funding wallet.</div>
+<div class="box"><b>Prepaid credits</b> (same ${usd(RUG_PRICE)} per check, no discount): <code>GET ${PUBLIC_URL}/credits/buy?credits=100</code> pays $1.00 once via x402 and returns a secret key. Send it as <code>X-RugRadar-Key</code> to skip the payment step on every check. ${CREDIT_GAP_S ? `Credits skip payment: about ${CREDIT_GAP_S} seconds faster per check (measured).` : ""} Balance (free): <code>${PUBLIC_URL}/credits/balance</code>.</div>
 <div class="box"><b>Example request</b><br><code>GET ${ex}</code><br><small>Unpaid calls return HTTP 402 with payment instructions; pay with any x402 client. Also at /token-safety. Pass chain=bnb|base|ethereum|arbitrum for EVM tokens.</small></div>
 <p><small>Automated heuristic, may be wrong. Not financial advice. Do your own research.</small></p></main></body></html>`);
   });
@@ -1648,13 +1700,31 @@ h1{color:#46DC64;font-size:44px;margin:8px 0;text-shadow:0 0 18px rgba(70,220,10
     };
   const qs = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 
+  app.get("/credits/buy", async (req, res) => {
+    res.locals.paidHandlerRan = true;
+    const n = Math.floor(Number(req.query.credits ?? 1));
+    if (!Number.isFinite(n) || n < 1 || n > 1000) { res.status(400).json({ error: "invalid_input", message: "credits must be 1-1000. You were not charged." }); return; }
+    try {
+      const ref = `${new Date().toISOString()}:${randomUUID()}`;
+      const { key, credits } = await issueKey(n, ref);
+      res.on("finish", () => { const pr = decodeB64Json(res.getHeader("payment-response")); if (!pr?.success) revokeKey(key).catch(() => {}); });
+      res.set("Cache-Control", "no-store").json({ product: "RugRadar", key, credits, priceUsd: +(n * Number(usd(RUG_PRICE))).toFixed(2), use: "Send header X-RugRadar-Key: <key> to /rug-check, /token-safety or /honeypot-check. Keep the key secret; it is shown only once and cannot be recovered.", balance: `${PUBLIC_URL}/credits/balance (send the same header)`, store: creditsStatus().store });
+    } catch (e) { res.status(503).json({ error: "credits_unavailable", message: "Credit store is temporarily unavailable. You were not charged." }); }
+  });
+  app.get("/credits/balance", async (req, res) => {
+    const key = req.header("x-rugradar-key");
+    res.set("Cache-Control", "no-store");
+    if (!key) { res.status(400).json({ error: "missing_key", message: "Send your key in the X-RugRadar-Key header.", ...creditsStatus(), selling: canSell() }); return; }
+    const c = await creditBalance(key);
+    res.json({ product: "RugRadar", credits: c ?? 0, known: c != null, ...creditsStatus() });
+  });
   app.get(
     ["/rug-check", "/token-safety", "/honeypot-check"],
     onchainHandler(
       async (req) => {
         const token = qs(req.query.token) || qs(req.query.mint);
         if (!token) throw new SolanaInputError("token is required (Solana mint address, or Base 0x contract with chain=base)");
-        return rugCheck(token, qs(req.query.chain) || (token.startsWith("0x") ? "base" : "solana"));
+        return { ...(await rugCheck(token, qs(req.query.chain) || (token.startsWith("0x") ? "base" : "solana"))), tip: creditTip() };
       },
       [SolanaInputError],
       "Public Solana RPC / token data APIs did not answer",
@@ -1709,6 +1779,7 @@ h1{color:#46DC64;font-size:44px;margin:8px 0;text-shadow:0 0 18px rgba(70,220,10
 
   app.listen(PORT, "0.0.0.0", () => {
     startTraffic();
+    initCredits().catch(() => {});
     startSales(PAY_TO_EVM, PUBLIC_URL);
     warmNews();
     console.log(`x402 seller listening on http://localhost:${PORT}  env=${X402_ENV} networks=${NETWORKS.join(",")} (${NETWORK_LABEL})`);
