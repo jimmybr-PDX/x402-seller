@@ -144,6 +144,7 @@ const PAID = {
   "/gas": GAS_PRICE,
   "/search": SEARCH_PRICE,
   "/rug-check": RUG_PRICE,
+  "/token-safety": RUG_PRICE,
 } as const;
 /** Paid paths that also accept POST (JSON body). */
 const POST_OK = new Set<string>(["/search"]);
@@ -925,6 +926,31 @@ async function main() {
         }),
       },
     },
+    "GET /token-safety": {
+      accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
+      description:
+        `RugRadar token safety and honeypot check: token scam check and memecoin risk score for Solana (pump.fun), BNB (four.meme), Base, Ethereum, Arbitrum (chain=). Returns a 0-100 risk score with plain reasons: honeypot simulation (EVM), mint/freeze authority, top-holder share, liquidity, age, deployer launches that died, linked funder. Same engine as /rug-check. Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
+      mimeType: "application/json",
+      serviceName: "RugRadar Honeypot Check & Solana Token Safety",
+      tags: ["honeypot check", "solana token safety", "token scam check", "memecoin risk", "token safety check"],
+      iconUrl: ICON_URL,
+      extensions: {
+        ...declareDiscoveryExtension({
+          input: { token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", chain: "solana" },
+          inputSchema: {
+            properties: { token: { type: "string", minLength: 32, maxLength: 44, description: "Solana SPL mint address (incl. pump.fun) or EVM token contract (0x...) on base/bnb/ethereum/arbitrum" }, chain: { type: "string", enum: ["solana", "base", "bnb", "ethereum", "arbitrum"], description: "default solana; 0x addresses default to base" } },
+            required: ["token"],
+          },
+          output: {
+            example: { product: "RugRadar", chain: "solana", token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", riskScore: 5, riskLevel: "low", verdict: "No major high-risk patterns found.", reasons: ["Top-holder concentration unavailable from public RPC."], disclaimer: "Automated heuristic, may be wrong. Not financial advice. Do your own research." },
+            schema: {
+              properties: { product: { type: "string" }, chain: { type: "string" }, token: { type: "string" }, riskScore: { type: "integer", minimum: 0, maximum: 100 }, riskLevel: { type: "string", enum: ["low", "medium", "high"] }, verdict: { type: "string" }, reasons: { type: "array", items: { type: "string" } }, checks: { type: "array", items: { type: "object" } }, facts: { type: "object" }, disclaimer: { type: "string" } },
+              required: ["riskScore", "riskLevel", "reasons", "disclaimer"],
+            },
+          },
+        }),
+      },
+    },
     "GET /balance": {
       accepts: accept(BALANCE_PRICE),
       description:
@@ -1221,7 +1247,7 @@ async function main() {
   app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt()));
 
   app.get("/robots.txt", (_req, res) => {
-    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", "Disallow: /solana-price", "Disallow: /balance", "Disallow: /tx", "Disallow: /gas", "Disallow: /search", "Disallow: /rug-check", `Sitemap: ${PUBLIC_URL}/openapi.json`, ""].join("\n"));
+    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", "Disallow: /solana-price", "Disallow: /balance", "Disallow: /tx", "Disallow: /gas", "Disallow: /search", "Disallow: /rug-check", "Disallow: /token-safety", `Sitemap: ${PUBLIC_URL}/openapi.json`, ""].join("\n"));
   });
 
   const ICON_PNG = (() => { try { return fs.readFileSync(path.join(__dirname, "assets", "icon.png")); } catch { return null; } })();
@@ -1578,7 +1604,7 @@ async function main() {
   const qs = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 
   app.get(
-    "/rug-check",
+    ["/rug-check", "/token-safety"],
     onchainHandler(
       async (req) => {
         const token = qs(req.query.token) || qs(req.query.mint);
