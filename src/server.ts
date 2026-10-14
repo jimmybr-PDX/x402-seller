@@ -68,7 +68,7 @@ const BALANCE_PRICE = process.env.BALANCE_PRICE ?? "$0.003";
 const TX_PRICE = process.env.TX_PRICE ?? "$0.003";
 const GAS_PRICE = process.env.GAS_PRICE ?? "$0.001";
 const SEARCH_PRICE = process.env.SEARCH_PRICE ?? "$0.01";
-const RUG_PRICE = process.env.RUG_PRICE ?? "$0.002";
+const RUG_PRICE = process.env.RUG_PRICE ?? "$0.01";
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
 // PNG: the Bazaar re-hosts PNG/JPEG icons; our SVG icon never showed up in listings
 const ICON_URL = `${PUBLIC_URL}/icon.png`;

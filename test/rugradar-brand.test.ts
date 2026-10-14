@@ -11,3 +11,4 @@ test("RugRadar icons exist and both RugRadar listings use the RugRadar icon", ()
   }
   assert.match(src, /Automated heuristic, may be wrong\. Not financial advice\. Do your own research\./);
 });
+test("RugRadar price is $0.01", () => { assert.match(src, /const RUG_PRICE = process\.env\.RUG_PRICE \?\? "\$0\.01";/); });
