@@ -95,6 +95,8 @@ const NETWORK_INFO: Record<string, { name: string; usdc: string; facilitator: Fa
 // Public receiving addresses (not secrets). Env overrides win.
 const PAY_TO_EVM = process.env.X402_PAY_TO?.trim() || "0x079471E6F43b6feeF80895E19cBFcBB496904852";
 const PAY_TO_SVM = process.env.X402_SOLANA_PAY_TO?.trim() || "787RZwDGpjmRsG5wgnyBeWQHBuARax8Qo6P7dmDuqKeW";
+// RugRadar (/rug-check) only: dedicated Solana payout wallet (EVM payTo unchanged)
+const RUG_PAY_TO_SVM = process.env.RUG_SOLANA_PAY_TO?.trim() || "3a9DUWEA34ejDaMbWo96gFfuqN2TvojJewUBCA14Dg75";
 const PAYAI_FACILITATOR_URL = process.env.PAYAI_FACILITATOR_URL?.trim() || "https://facilitator.payai.network";
 // Base Builder Code (ERC-8021 attribution). Declared via the x402 "builder-code" extension; the CDP facilitator
 // appends it to EVM settlement calldata (docs.x402.org/extensions/builder-code, docs.cdp.coinbase.com/x402/seller/facilitator).
@@ -326,12 +328,12 @@ async function main() {
   });
 
   // One accepts entry per network; CDP resolves "$0.01" to each chain's native USDC.
-  const accept = (price: string) =>
+  const accept = (price: string, svmPayTo?: string) =>
     NETWORKS.map((network) => ({
       scheme: "exact",
       price,
       network,
-      payTo: payToFor(network),
+      payTo: svmPayTo && NETWORK_INFO[network]!.family === "svm" ? svmPayTo : payToFor(network),
       maxTimeoutSeconds: 300,
     }));
 
@@ -898,7 +900,7 @@ async function main() {
       },
     },
     "GET /rug-check": {
-      accepts: accept(RUG_PRICE),
+      accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM),
       description:
         `RugRadar: Solana rug check and rug pull checker for new tokens and pump.fun memecoins (Base too: chain=base, with honeypot check). Pass a mint/contract. Returns a 0-100 risk score and plain reasons: mint/freeze authority, top-holder concentration, liquidity, token age, deployer history (prior launches that died), funding wallet linked to earlier high-risk patterns. Automated heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
