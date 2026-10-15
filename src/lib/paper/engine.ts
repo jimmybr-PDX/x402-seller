@@ -32,7 +32,7 @@ export const CFG: Record<Base, Cfg> = {
   edge: { prio: 300_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 1800 },
 };
 type Pos = { id: string; strat: Strat; mint: string; symbol: string; entryAt: number; entryAgeS: number; latencyMs: number; costLamports: number; tokens: string; entryPriceSol: number;
-  forceExit?: string; sizeSol?: number; sizeMult?: number; family?: Family | null; peakAt?: number; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
+  forceExit?: string; buyDriftLamports?: number; sellDriftLamports?: number; buyFeeLamports?: number; sizeSol?: number; sizeMult?: number; family?: Family | null; peakAt?: number; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
 type State = { v: 1; open: Pos[]; counters: Record<string, number>; startedAt: string };
 let state: State = { v: 1, open: [], counters: {}, startedAt: new Date().toISOString() };
 let closed: any[] = [];
@@ -139,7 +139,7 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
   }
   const latencyMs = Date.now() - tDecide;
   const pos: Pos = { id, strat, mint: c.mint, symbol: c.symbol, entryAt: Date.now(), entryAgeS: Math.round((Date.now() - c.createdMs) / 1000), latencyMs,
-    costLamports: Math.round(SIZE * LAMPORTS) + fees + ATA_RENT, tokens: fill.toString(), entryPriceSol: SIZE / (Number(fill) / 1e6), sizeSol: SIZE, sizeMult: mult,
+    costLamports: Math.round(SIZE * LAMPORTS) + fees + ATA_RENT, tokens: fill.toString(), entryPriceSol: SIZE / (Number(fill) / 1e6), sizeSol: SIZE, sizeMult: mult, buyFeeLamports: fees, buyDriftLamports: q1.out > 0n ? Math.round(Number(q1.out - fill) / Number(q1.out) * SIZE * LAMPORTS) : 0,
     peakRoi: 0, lastMarkRoi: 0, sellFails: 0, noRouteSince: null, rug: null, signals: { ...signals, impactPct: q2?.impact ?? q1.impact } };
   state.open.push(pos); bump(`${strat}.entries`); dirty = true;
   // Private creator-family trace: async for the sniper (never on its critical path); copy/edge wait up to 1 s, else it fills in later.
@@ -191,6 +191,7 @@ async function manage(p: Pos) {
   await sleep(execLatencyMs());
   const q2 = await quote(p.mint, SOL, p.tokens);
   const out = q2 && q2.out < q.out ? q2.out : q.out;
+  p.sellDriftLamports = Number(q.out - out);
   close(p, reason, out, fees);
 }
 let creatorMints: Record<string, [string, number][]> = {};
@@ -222,10 +223,18 @@ async function close(p: Pos, reason: string, outLamports: bigint, fees: number) 
   if (pr) await Promise.race([pr, sleep(90_000)]);
   const proceeds = Number(outLamports) - fees - BASE_FEE + ATA_RENT; // sell tx + close-account tx refunds rent
   const pnl = (proceeds - p.costLamports) / LAMPORTS;
+  // Fee breakdown (SOL). pump.fun's ~1.25% per side is already inside Jupiter's quotes; shown here as an estimate.
+  const size = p.sizeSol ?? SIZE_SOL, PUMP = 0.0125;
+  const net = ((p.buyFeeLamports ?? 0) + fees + BASE_FEE) / LAMPORTS; // buy tx + sell tx (+ tip) + close-account tx
+  const pumpFee = size * PUMP + (Number(outLamports) / LAMPORTS) * PUMP / (1 - PUMP);
+  const slip = ((p.buyDriftLamports ?? 0) + (p.sellDriftLamports ?? 0)) / LAMPORTS;
+  const fixed = net + (p.costLamports - Math.round(size * LAMPORTS) - ATA_RENT - (p.buyFeeLamports ?? 0)) / LAMPORTS; // + failed-sell fees
+  const feesPaid = { pumpFunSol: +pumpFee.toFixed(6), networkAndPrioritySol: +fixed.toFixed(6), slippageSol: +slip.toFixed(6), totalSol: +(pumpFee + fixed + slip).toFixed(6) };
+  const breakEvenPct = +(((fixed + slip) / size + PUMP * 2 + PUMP * PUMP) * 100).toFixed(2);
   const t = { id: p.id, strat: p.strat, mint: p.mint, symbol: p.symbol, result: pnl > 0 ? "win" : "loss", exitReason: reason,
     entryAt: new Date(p.entryAt).toISOString(), exitAt: new Date().toISOString(), holdS: Math.round((Date.now() - p.entryAt) / 1000), entryAgeS: p.entryAgeS, latencyMs: p.latencyMs,
     sizeSol: p.sizeSol ?? SIZE_SOL, sizeMult: p.sizeMult ?? 1, costSol: +(p.costLamports / LAMPORTS).toFixed(6), proceedsSol: +(proceeds / LAMPORTS).toFixed(6), pnlSol: +pnl.toFixed(6), roi: +(pnl / (p.sizeSol ?? SIZE_SOL)).toFixed(4),
-    entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, trust: trustFor(p.mint, p.family) };
+    entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, trust: trustFor(p.mint, p.family), feesPaid, breakEvenPct };
   state.open = state.open.filter((x) => x !== p); closed.push(t); appendTrade(t); dirty = true; bump(`${p.strat}.exits`);
 }
 
@@ -336,6 +345,8 @@ export function paperSummary() {
     recent: closed.slice(-40).reverse().map(({ signals, rug, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, precheckMs: signals?.precheck?.ms ?? null, rugMax: signals?.rugMax ?? null, rugLevel: rug?.riskLevel ?? null })) };
 }
 export const paperTrades = () => closed;
+/** Smallest buy where fixed network + priority fees stay under ~5% of the trade, given pump.fun's ~2.5% round-trip fee (slippage excluded; it grows with size). */
+export const minSizes = () => Object.fromEntries((Object.keys(CFG) as Base[]).map((k) => { const c = CFG[k]; const F = (2 * (BASE_FEE + c.prio + c.tip) + BASE_FEE) / LAMPORTS; return [k, { roundTripFixedFeesSol: +F.toFixed(6), minSizeSol: +(F / 0.025).toFixed(3) }]; }));
 
 // ---------------- RugRadar scorecard: every coin RugRadar checked, re-checked at +10 min, +1 h, +24 h ----------------
 type After = { at: number; changePct: number | null; priceSol: number | null; liqUsd: number | null; sellable: boolean | null; graduated: boolean; late: boolean };
