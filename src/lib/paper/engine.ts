@@ -22,14 +22,14 @@ type Base = "copy" | "sniper" | "edge";
 export const RUG_VARIANTS: Record<"copy" | "edge", number[]> = { copy: [25, 40, 60], edge: [15, 25, 40] }; // max RugRadar score allowed
 export const STRATS: Strat[] = ["sniper", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
 const baseOf = (s: Strat) => s.split(/[_@]/)[0] as Base;
-type Cfg = { prio: number; tip: number; buyFail: number; sellFail: number; maxOpen: number; tp: number; trailArm: number; trail: number; sl: number; maxHoldS: number };
+type Cfg = { size: number; prio: number; tip: number; buyFail: number; sellFail: number; maxOpen: number; tp: number; trailArm: number; trail: number; sl: number; maxHoldS: number };
 export const CFG: Record<Base, Cfg> = {
   // sniper: contested launch block via public RPC, no Jito bundle -> high buy-failure rate, quick exits (snipers hold seconds-minutes)
-  sniper: { prio: 3_000_000, tip: 2_000_000, buyFail: 0.25, sellFail: 0.05, maxOpen: 3, tp: 0.4, trailArm: 0.2, trail: 0.15, sl: -0.25, maxHoldS: 120 },
+  sniper: { size: 0.1, prio: 3_000_000, tip: 2_000_000, buyFail: 0.25, sellFail: 0.05, maxOpen: 3, tp: 0.4, trailArm: 0.2, trail: 0.15, sl: -0.25, maxHoldS: 120 },
   // copy: rules inferred from profitable early wallets (enter ~20-180 s, ~0.5 SOL, hold ~5-20 min, take profit / trail)
-  copy: { prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.3, maxHoldS: 1200 },
+  copy: { size: 0.2, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.3, maxHoldS: 1200 },
   // edge: momentum + RugRadar low risk only
-  edge: { prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 1800 },
+  edge: { size: 0.1, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 1800 },
 };
 type Pos = { id: string; strat: Strat; mint: string; symbol: string; entryAt: number; entryAgeS: number; latencyMs: number; costLamports: number; tokens: string; entryPriceSol: number;
   forceExit?: string; buyDriftLamports?: number; sellDriftLamports?: number; buyFeeLamports?: number; sizeSol?: number; sizeMult?: number; family?: Family | null; peakAt?: number; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
@@ -114,7 +114,7 @@ function flow(tr: any[], creator: string) {
 
 export const GOOD_DEV_MULTS = [1.5, 2, 3]; // extra test positions on "Known good dev" coins
 async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs: number }, signals: any, mult = 1) {
-  const SIZE = SIZE_SOL * mult;
+  const SIZE = +(CFG[baseOf(strat)].size * mult).toFixed(4); // copy 0.2 SOL, sniper/edge 0.1 SOL; trusted-dev multipliers on top
   if (mult === 1) { // trusted-dev coin: also open bigger test positions, tracked as their own variants ("<strategy>@2x")
     const fam = await Promise.race([familyFor(c.mint) ?? Promise.resolve(null), sleep(baseOf(strat) === "sniper" ? 0 : 1000).then(() => null)]).catch(() => null);
     const tr = trustFor(c.mint, fam as any);
@@ -339,7 +339,7 @@ export function paperSummary() {
       totalPnlSol: +pnl.toFixed(4), avgRoi: done.length ? +(done.reduce((a, t) => a + t.roi, 0) / done.length).toFixed(4) : null,
       open: state.open.filter((p) => p.strat === s).map((p) => ({ symbol: p.symbol, mint: p.mint, ageS: Math.round((Date.now() - p.entryAt) / 1000), markRoi: +p.lastMarkRoi.toFixed(3) })) };
   }
-  return { paperOnly: true, sizeSolPerTrade: SIZE_SOL, startedAt: state.startedAt, strategies: by,
+  return { paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL, sniper and edge-finder 0.1 SOL", startedAt: state.startedAt, strategies: by,
     latency: { sniperPrecheckMedianMs: med(preMs), sniperPrecheckP90Ms: preMs.length ? [...preMs].sort((a, b) => a - b)[Math.floor(preMs.length * 0.9)] : 0, medianDetectMs: med(lat.detectMs), detectNote: "websocket launches have no on-chain timestamp in the feed; counted as 1000 ms (conservative floor). Poll-detected launches are measured.", medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
     counters: state.counters, store: storeStatus(), websocket: !!ws, winnersTracked: winners.size, lastError: lastErr,
     recent: closed.slice(-40).reverse().map(({ signals, rug, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, precheckMs: signals?.precheck?.ms ?? null, rugMax: signals?.rugMax ?? null, rugLevel: rug?.riskLevel ?? null })) };
