@@ -45,7 +45,7 @@ import { SOLANA_PRICE_SYMBOLS, SolanaInputError, solanaTokenPrice } from "./lib/
 import { WalletInputError, walletBalances } from "./lib/wallet.js";
 import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
-import { rugCheck, DISCLAIMER as RUG_DISCLAIMER } from "./lib/rug.js";
+import { rugCheck, flaggedWallets, DISCLAIMER as RUG_DISCLAIMER } from "./lib/rug.js";
 import { registerRugradarWeb } from "./lib/rugradar-web.js";
 import { initCredits, issueKey, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell } from "./lib/credits.js";
 import { startSales, salesStats } from "./lib/sales.js";
@@ -1782,7 +1782,7 @@ async function main() {
   app.listen(PORT, "0.0.0.0", () => {
     startTraffic();
     initCredits().catch(() => {});
-    setTimeout(() => startPaper({ rugCheck: (m) => rugCheck(m, "solana") }).catch(() => {}), 20_000);
+    setTimeout(() => startPaper({ rugCheck: (m) => rugCheck(m, "solana"), flagged: flaggedWallets }).catch(() => {}), 20_000);
     startSales(PAY_TO_EVM, PUBLIC_URL);
     warmNews();
     console.log(`x402 seller listening on http://localhost:${PORT}  env=${X402_ENV} networks=${NETWORKS.join(",")} (${NETWORK_LABEL})`);

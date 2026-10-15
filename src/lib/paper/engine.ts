@@ -16,9 +16,13 @@ const LAMPORTS = 1e9;
 const SIZE_SOL = Number(process.env.PAPER_SIZE_SOL ?? 0.5);
 const RPC = process.env.SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 const BASE_FEE = 5000, ATA_RENT = 2039280;
-export type Strat = "copy" | "sniper" | "edge";
+export type Strat = string; // "sniper", or "<copy|edge>_r<maxRugScore>" threshold variants
+type Base = "copy" | "sniper" | "edge";
+export const RUG_VARIANTS: Record<"copy" | "edge", number[]> = { copy: [25, 40, 60], edge: [15, 25, 40] }; // max RugRadar score allowed
+export const STRATS: Strat[] = ["sniper", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
+const baseOf = (s: Strat) => s.split("_")[0] as Base;
 type Cfg = { prio: number; tip: number; buyFail: number; sellFail: number; maxOpen: number; tp: number; trailArm: number; trail: number; sl: number; maxHoldS: number };
-export const CFG: Record<Strat, Cfg> = {
+export const CFG: Record<Base, Cfg> = {
   // sniper: contested launch block via public RPC, no Jito bundle -> high buy-failure rate, quick exits (snipers hold seconds-minutes)
   sniper: { prio: 1_000_000, tip: 1_000_000, buyFail: 0.25, sellFail: 0.05, maxOpen: 3, tp: 0.4, trailArm: 0.2, trail: 0.15, sl: -0.25, maxHoldS: 120 },
   // copy: rules inferred from profitable early wallets (enter ~20-180 s, ~0.5 SOL, hold ~5-20 min, take profit / trail)
@@ -27,11 +31,14 @@ export const CFG: Record<Strat, Cfg> = {
   edge: { prio: 300_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 1800 },
 };
 type Pos = { id: string; strat: Strat; mint: string; symbol: string; entryAt: number; entryAgeS: number; latencyMs: number; costLamports: number; tokens: string; entryPriceSol: number;
-  peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
+  forceExit?: string; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
 type State = { v: 1; open: Pos[]; counters: Record<string, number>; startedAt: string };
 let state: State = { v: 1, open: [], counters: {}, startedAt: new Date().toISOString() };
 let closed: any[] = [];
-const seen = new Map<string, { mint: string; symbol: string; creator: string; createdMs: number; seenMs: number; checked: Set<Strat> }>();
+const seen = new Map<string, { mint: string; symbol: string; creator: string; createdMs: number; seenMs: number; checked: Set<string>; devBuyPct: number | null }>();
+const creatorLaunches = new Map<string, number[]>(); // in-session creator history (launch times)
+const preMs: number[] = [];
+let flagged: () => Record<string, any> = () => ({});
 const lat = { detectMs: [] as number[], rpcMs: [] as number[] };
 let winners = new Set<string>();
 let rugCheckFn: ((m: string) => Promise<any>) | null = null;
@@ -64,6 +71,23 @@ async function curveSell(mint: string, tokens: bigint): Promise<bigint | null> {
     return (vsol * tokens / (vtok + tokens)) * 9875n / 10000n;
   } catch { return null; }
 }
+/** Sniper fast pre-check (instant signals only, 250 ms budget): mint/freeze authority (one RPC read),
+ * RugRadar's flagged-deployer list + in-session creator launch count (memory), creator's launch buy (from the launch event). */
+async function preCheck(mint: string, creator: string, devBuyPct: number | null) {
+  const t0 = Date.now(); const red: string[] = [];
+  if (creator && flagged()[creator]) red.push("flagged_deployer");
+  const launches1h = creatorLaunches.get(creator)?.length ?? 0;
+  if (launches1h >= 3) red.push(`creator_${launches1h}_launches_1h`);
+  if (devBuyPct != null && devBuyPct > 15) red.push(`creator_bought_${devBuyPct.toFixed(0)}pct`);
+  let authority: string = "unknown";
+  try {
+    const r: any = await (await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [mint, { encoding: "jsonParsed", commitment: "processed" }] }), signal: AbortSignal.timeout(250) })).json();
+    const info = r?.result?.value?.data?.parsed?.info;
+    if (info) { authority = "ok"; if (info.mintAuthority) red.push("mint_authority"); if (info.freezeAuthority) red.push("freeze_authority"); }
+  } catch { authority = "timeout"; } // over budget: proceed on the memory-only signals (logged)
+  const ms = Date.now() - t0; push(preMs, ms);
+  return { ms, red, authority, devBuyPct, creatorLaunches1h: launches1h };
+}
 async function rpcPing(): Promise<number> {
   const t = Date.now();
   await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getLatestBlockhash", params: [{ commitment: "processed" }] }), signal: AbortSignal.timeout(5000) }).catch(() => null);
@@ -85,7 +109,7 @@ function flow(tr: any[], creator: string) {
 }
 
 async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs: number }, signals: any) {
-  const cfg = CFG[strat];
+  const cfg = CFG[baseOf(strat)];
   if (state.open.filter((p) => p.strat === strat).length >= cfg.maxOpen) { bump(`${strat}.skipFull`); return; }
   if (state.open.some((p) => p.strat === strat && p.mint === c.mint)) return;
   const tDecide = Date.now();
@@ -107,7 +131,7 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
     peakRoi: 0, lastMarkRoi: 0, sellFails: 0, noRouteSince: null, rug: null, signals: { ...signals, impactPct: q2?.impact ?? q1.impact } };
   state.open.push(pos); bump(`${strat}.entries`); dirty = true;
   // Record RugRadar's full signals at the moment of the buy, for every strategy (sniper: right after, never delays entry).
-  if (!signals.rug) pendingRug.set(pos.id, rugSnapshot(c.mint).then((r) => { pos.rug = r; dirty = true; pendingRug.delete(pos.id); return r; }));
+  if (!signals.rug) pendingRug.set(pos.id, rugSnapshot(c.mint).then((r) => { pos.rug = r; dirty = true; pendingRug.delete(pos.id); if (strat === "sniper" && r?.riskLevel === "high") pos.forceExit = "rugradar_high_risk_after_entry"; return r; }));
   else pos.rug = signals.rug;
 }
 const pendingRug = new Map<string, Promise<any>>();
@@ -124,14 +148,15 @@ async function rugSnapshotNow(mint: string) {
 }
 
 async function manage(p: Pos) {
-  const cfg = CFG[p.strat];
+  const cfg = CFG[baseOf(p.strat)];
   const tr = await trades(p.mint, 5);
   const price = tr?.[0] ? Number(tr[0].priceSol) : null;
   const holdS = (Date.now() - p.entryAt) / 1000;
   if (price) { p.lastMarkRoi = (price / p.entryPriceSol) - 1; p.peakRoi = Math.max(p.peakRoi, p.lastMarkRoi); }
   const r = p.lastMarkRoi;
-  let reason: string | null = null;
-  if (r >= cfg.tp) reason = "take_profit";
+  let reason: string | null = p.forceExit ?? null;
+  if (reason) {}
+  else if (r >= cfg.tp) reason = "take_profit";
   else if (p.peakRoi >= cfg.trailArm && r <= p.peakRoi - cfg.trail) reason = "trailing_stop";
   else if (r <= cfg.sl) reason = "stop_loss";
   else if (holdS >= cfg.maxHoldS) reason = "time_stop";
@@ -170,14 +195,20 @@ function onNewCoin(c: any, via: string) {
   const mint = c.mint; if (!mint || seen.has(mint)) return;
   const createdMs = Number(c.created_timestamp ?? Date.now());
   const now = Date.now();
-  seen.set(mint, { mint, symbol: String(c.symbol ?? "").slice(0, 16), creator: c.creator ?? c.traderPublicKey ?? "", createdMs, seenMs: now, checked: new Set() });
+  const creator = c.creator ?? c.traderPublicKey ?? "";
+  seen.set(mint, { mint, symbol: String(c.symbol ?? "").slice(0, 16), creator, createdMs, seenMs: now, checked: new Set(), devBuyPct: c.devBuyPct ?? null });
+  if (creator) { const xs = (creatorLaunches.get(creator) ?? []).filter((t) => now - t < 3_600_000); xs.push(now); creatorLaunches.set(creator, xs); if (creatorLaunches.size > 5000) creatorLaunches.delete(creatorLaunches.keys().next().value!); }
   if (seen.size > 3000) seen.delete(seen.keys().next().value!);
   if (createdMs < now) push(lat.detectMs, now - createdMs);
   bump(`seen.${via}`);
   // SNIPER: earliest realistic entry = the moment we detect it (+ measured exec latency inside enter()). One sniper buy per 60 s max (leaves RugRadar snapshot queue room for every trade).
   if (now - createdMs < 30_000 && now - (state.counters.lastSnipeMs ?? 0) > 60_000) {
     state.counters.lastSnipeMs = now;
-    enter("sniper", { mint, symbol: String(c.symbol ?? ""), createdMs }, { detectLatencyMs: now - createdMs, via }).catch((e) => { lastErr = String(e).slice(0, 120); });
+    (async () => {
+      const pre = await preCheck(mint, creator, c.devBuyPct ?? null);
+      if (pre.red.length) { bump("sniper.skippedByPrecheck"); return; }
+      await enter("sniper", { mint, symbol: String(c.symbol ?? ""), createdMs }, { detectLatencyMs: now - createdMs, via, precheck: pre });
+    })().catch((e) => { lastErr = String(e).slice(0, 120); });
   }
 }
 async function pollNew() {
@@ -190,7 +221,7 @@ function startWs() {
   try {
     ws = new W("wss://pumpportal.fun/api/data");
     ws.onopen = () => ws.send(JSON.stringify({ method: "subscribeNewToken" }));
-    ws.onmessage = (ev: any) => { try { const m = JSON.parse(String(ev.data)); if (m.mint && m.txType === "create") onNewCoin({ mint: m.mint, symbol: m.symbol, creator: m.traderPublicKey, created_timestamp: Date.now() - 1000 }, "ws"); } catch {} };
+    ws.onmessage = (ev: any) => { try { const m = JSON.parse(String(ev.data)); if (m.mint && m.txType === "create") onNewCoin({ mint: m.mint, symbol: m.symbol, creator: m.traderPublicKey, created_timestamp: Date.now() - 1000, devBuyPct: m.initialBuy != null ? Number(m.initialBuy) / 1e7 : null }, "ws"); } catch {} };
     ws.onclose = () => { ws = null; setTimeout(startWs, 30_000).unref?.(); };
     ws.onerror = () => {};
   } catch { ws = null; }
@@ -210,7 +241,10 @@ async function scanCandidates() {
     const edgeFlow = f.uniqueBuyers >= 20 && f.buySol >= f.sellSol && !f.devSold && (f.mcapUsd ?? 0) >= 7000 && (f.mcapUsd ?? 0) <= 80000;
     const momentum = f.uniqueBuyers >= 15 && f.buySol >= 1.5 * Math.max(0.5, f.sellSol) && !f.devSold && (f.mcapUsd ?? 0) >= 6000 && (f.mcapUsd ?? 0) <= 60000;
     if (wantCopy) {
-      if (momentum || f.winnerBuyers.length >= 1 && !f.devSold) { c.checked.add("copy"); await enter("copy", c, { ...f, ageS: Math.round(age), rule: f.winnerBuyers.length ? "winner_wallet_bought" : "momentum" }); }
+      if (momentum || f.winnerBuyers.length >= 1 && !f.devSold) {
+        c.checked.add("copy"); const rug = await rugSnapshot(c.mint); bump("copy.rugChecks");
+        for (const t of RUG_VARIANTS.copy) { if (rug?.riskScore != null && rug.riskScore <= t) await enter(`copy_r${t}`, c, { ...f, ageS: Math.round(age), rule: f.winnerBuyers.length ? "winner_wallet_bought" : "momentum", rug, rugMax: t }); else bump(`copy_r${t}.rejectedByRugRadar`); }
+      }
       else if (age > 150) c.checked.add("copy");
     }
     if (wantEdge) {
@@ -219,8 +253,7 @@ async function scanCandidates() {
       lastRugAt = now; c.checked.add("edge");
       const rug = await rugSnapshot(c.mint);
       bump("edge.rugChecks");
-      if (rug?.riskLevel === "low" && rug.confidence !== "low") await enter("edge", c, { ...f, ageS: Math.round(age), rug });
-      else bump("edge.rejectedByRugRadar");
+      for (const t of RUG_VARIANTS.edge) { if (rug?.riskScore != null && rug.riskScore <= t && rug.confidence !== "low") await enter(`edge_r${t}`, c, { ...f, ageS: Math.round(age), rug, rugMax: t }); else bump(`edge_r${t}.rejectedByRugRadar`); }
     }
   }
 }
@@ -228,9 +261,9 @@ async function loadWinners() {
   try { const d = JSON.parse(fs.readFileSync(new URL("./winners.json", import.meta.url), "utf8")); winners = new Set((d.top ?? []).map((w: any) => w.wallet)); } catch {}
 }
 
-export async function startPaper(opts: { rugCheck: (m: string) => Promise<any> }) {
+export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; flagged?: () => Record<string, any> }) {
   if (started || process.env.PAPER_ENABLED === "0") return; started = true;
-  rugCheckFn = opts.rugCheck;
+  rugCheckFn = opts.rugCheck; if (opts.flagged) flagged = opts.flagged;
   await initStore();
   state = loadState<State>(state); state.open ??= []; state.counters ??= {}; state.startedAt ??= new Date().toISOString();
   closed = loadTrades().slice(-5000);
@@ -245,7 +278,7 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any> }
 
 export function paperSummary() {
   const by: Record<string, any> = {};
-  for (const s of ["copy", "sniper", "edge"] as Strat[]) {
+  for (const s of [...new Set([...STRATS, ...closed.map((t) => t.strat)])]) {
     const xs = closed.filter((t) => t.strat === s);
     const done = xs.filter((t) => t.result !== "buy_failed");
     const pnl = xs.reduce((a, t) => a + t.pnlSol, 0);
@@ -255,8 +288,8 @@ export function paperSummary() {
       open: state.open.filter((p) => p.strat === s).map((p) => ({ symbol: p.symbol, mint: p.mint, ageS: Math.round((Date.now() - p.entryAt) / 1000), markRoi: +p.lastMarkRoi.toFixed(3) })) };
   }
   return { paperOnly: true, sizeSolPerTrade: SIZE_SOL, startedAt: state.startedAt, strategies: by,
-    latency: { medianDetectMs: med(lat.detectMs), detectNote: "websocket launches have no on-chain timestamp in the feed; counted as 1000 ms (conservative floor). Poll-detected launches are measured.", medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
+    latency: { sniperPrecheckMedianMs: med(preMs), sniperPrecheckP90Ms: preMs.length ? [...preMs].sort((a, b) => a - b)[Math.floor(preMs.length * 0.9)] : 0, medianDetectMs: med(lat.detectMs), detectNote: "websocket launches have no on-chain timestamp in the feed; counted as 1000 ms (conservative floor). Poll-detected launches are measured.", medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
     counters: state.counters, store: storeStatus(), websocket: !!ws, winnersTracked: winners.size, lastError: lastErr,
-    recent: closed.slice(-40).reverse().map(({ signals, rug, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, rugLevel: rug?.riskLevel ?? null })) };
+    recent: closed.slice(-40).reverse().map(({ signals, rug, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, precheckMs: signals?.precheck?.ms ?? null, rugMax: signals?.rugMax ?? null, rugLevel: rug?.riskLevel ?? null })) };
 }
 export const paperTrades = () => closed;
