@@ -95,9 +95,10 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
     peakRoi: 0, lastMarkRoi: 0, sellFails: 0, noRouteSince: null, rug: null, signals: { ...signals, impactPct: q2?.impact ?? q1.impact } };
   state.open.push(pos); bump(`${strat}.entries`); dirty = true;
   // Record RugRadar's full signals at the moment of the buy, for every strategy (sniper: right after, never delays entry).
-  if (!signals.rug) rugSnapshot(c.mint).then((r) => { pos.rug = r; dirty = true; });
+  if (!signals.rug) pendingRug.set(pos.id, rugSnapshot(c.mint).then((r) => { pos.rug = r; dirty = true; pendingRug.delete(pos.id); return r; }));
   else pos.rug = signals.rug;
 }
+const pendingRug = new Map<string, Promise<any>>();
 let rugChain: Promise<unknown> = Promise.resolve();
 /** RugRadar's own internal check, strictly one at a time and >= 15 s apart, so live RugRadar traffic keeps priority. */
 function rugSnapshot(mint: string): Promise<any> {
@@ -138,7 +139,10 @@ async function manage(p: Pos) {
   const out = q2 && q2.out < q.out ? q2.out : q.out;
   close(p, reason, out, fees);
 }
-function close(p: Pos, reason: string, outLamports: bigint, fees: number) {
+async function close(p: Pos, reason: string, outLamports: bigint, fees: number) {
+  state.open = state.open.filter((x) => x !== p);
+  const pr = pendingRug.get(p.id); // trade log must carry RugRadar's snapshot taken at buy time
+  if (pr) await Promise.race([pr, sleep(90_000)]);
   const proceeds = Number(outLamports) - fees - BASE_FEE + ATA_RENT; // sell tx + close-account tx refunds rent
   const pnl = (proceeds - p.costLamports) / LAMPORTS;
   const t = { id: p.id, strat: p.strat, mint: p.mint, symbol: p.symbol, result: pnl > 0 ? "win" : "loss", exitReason: reason,
@@ -179,7 +183,8 @@ function startWs() {
 }
 async function scanCandidates() {
   const now = Date.now();
-  const cands = [...seen.values()].filter((c) => now - c.createdMs > 20_000 && now - c.createdMs < 600_000).slice(-25);
+  // Only coins still needing a decision (the old slice(-25) of all seen coins dropped everything older than ~2 min, so edge never ran).
+  const cands = [...seen.values()].filter((c) => now - c.createdMs > 20_000 && now - c.createdMs < 600_000 && !(c.checked.has("copy") && c.checked.has("edge"))).slice(-40);
   for (const c of cands) {
     const age = (now - c.createdMs) / 1000;
     const wantCopy = age <= 180 && !c.checked.has("copy");
@@ -216,6 +221,7 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any> }
   await loadWinners();
   startWs();
   const loop = async (fn: () => Promise<unknown>, ms: number) => { for (;;) { try { await fn(); } catch (e) { lastErr = String((e as Error).message ?? e).slice(0, 160); } await sleep(ms); } };
+  process.once("SIGTERM", () => { saveState(state, "paper: flush on shutdown").catch(() => {}); });
   loop(pollNew, 6000); loop(rpcPing, 60_000); loop(scanCandidates, 8000);
   loop(async () => { for (const p of [...state.open]) await manage(p); }, 10_000);
   loop(async () => { if (dirty) { dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
@@ -233,7 +239,7 @@ export function paperSummary() {
       open: state.open.filter((p) => p.strat === s).map((p) => ({ symbol: p.symbol, mint: p.mint, ageS: Math.round((Date.now() - p.entryAt) / 1000), markRoi: +p.lastMarkRoi.toFixed(3) })) };
   }
   return { paperOnly: true, sizeSolPerTrade: SIZE_SOL, startedAt: state.startedAt, strategies: by,
-    latency: { medianDetectMs: med(lat.detectMs), medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
+    latency: { medianDetectMs: med(lat.detectMs), detectNote: "websocket launches have no on-chain timestamp in the feed; counted as 1000 ms (conservative floor). Poll-detected launches are measured.", medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
     counters: state.counters, store: storeStatus(), websocket: !!ws, winnersTracked: winners.size, lastError: lastErr,
     recent: closed.slice(-40).reverse().map(({ signals, rug, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, rugLevel: rug?.riskLevel ?? null })) };
 }
