@@ -22,6 +22,8 @@ import { RUG_EDGE_SHORT } from "./lib/rug-extra.js";
  * with the real tx hash and payer. No invented hashes.
  */
 
+import { startPaper } from "./lib/paper/engine.js";
+import { registerPaper } from "./lib/paper/page.js";
 import { createCdpFacilitatorClient, getCdpDefaultSchemes, getCdpExtensionRegistrations } from "@coinbase/cdp-sdk/x402";
 import { HTTPFacilitatorClient, x402HTTPResourceServer, x402ResourceServer } from "@x402/core/server";
 import { paymentMiddlewareFromHTTPServer } from "@x402/express";
@@ -1342,6 +1344,7 @@ async function main() {
   const ICON_PNG = (() => { try { return fs.readFileSync(path.join(__dirname, "assets", "icon.png")); } catch { return null; } })();
   app.use("/rugradar", express.static(path.join(__dirname, "assets", "rugradar"), { maxAge: "7d", index: false, redirect: false }));
   app.get("/favicon.ico", (_req, res) => res.sendFile(path.join(__dirname, "assets", "rugradar", "favicon.ico"), { maxAge: "7d" }));
+  registerPaper(app);
   registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), spend, refund });
   app.get("/icon.png", (_req, res) => {
     if (!ICON_PNG) return res.redirect(302, "/icon.svg");
@@ -1779,6 +1782,7 @@ async function main() {
   app.listen(PORT, "0.0.0.0", () => {
     startTraffic();
     initCredits().catch(() => {});
+    setTimeout(() => startPaper({ rugCheck: (m) => rugCheck(m, "solana") }).catch(() => {}), 20_000);
     startSales(PAY_TO_EVM, PUBLIC_URL);
     warmNews();
     console.log(`x402 seller listening on http://localhost:${PORT}  env=${X402_ENV} networks=${NETWORKS.join(",")} (${NETWORK_LABEL})`);

@@ -1,0 +1,257 @@
+{
+ "generatedAt": "2026-10-15T06:32:05Z",
+ "coinsAnalyzed": 14,
+ "walletsWith4plus": 43,
+ "top": [
+  {
+   "wallet": "ARu4n5mFdZogZAravu7CcizaojWnS6oqka37gdLT5SZn",
+   "coins": 7,
+   "winRate": 1.0,
+   "pnlSol": 12.52,
+   "medEntrySec": 90.0,
+   "medHoldSec": 2239.0,
+   "medSizeSol": 1.444,
+   "medRoi": 0.537
+  },
+  {
+   "wallet": "BUkpShoEWRiPckdFs3kzYGjBPfUhL6G39ufo84QeogPP",
+   "coins": 8,
+   "winRate": 0.75,
+   "pnlSol": 3.72,
+   "medEntrySec": 24.0,
+   "medHoldSec": 1994.5,
+   "medSizeSol": 4.802,
+   "medRoi": 0.106
+  },
+  {
+   "wallet": "sssssDdMNAWKingjpEojkTNdVuZrBe7FsJLaGtexe7d",
+   "coins": 4,
+   "winRate": 0.75,
+   "pnlSol": 3.04,
+   "medEntrySec": 22.5,
+   "medHoldSec": 3043.5,
+   "medSizeSol": 8.289,
+   "medRoi": 0.069
+  },
+  {
+   "wallet": "CaAEN3Mbmd6i3h79FiMHfFYHeqrNZbKgaMZAYUgNrmGJ",
+   "coins": 9,
+   "winRate": 0.67,
+   "pnlSol": 2.88,
+   "medEntrySec": 315.0,
+   "medHoldSec": 2471.0,
+   "medSizeSol": 12.406,
+   "medRoi": 0.01
+  },
+  {
+   "wallet": "DYXDDrZCLZVeak72eoPg7DgjYz1sW7tMaLY8PusDymQw",
+   "coins": 9,
+   "winRate": 1.0,
+   "pnlSol": 2.5,
+   "medEntrySec": 107.0,
+   "medHoldSec": 1494.0,
+   "medSizeSol": 6.155,
+   "medRoi": 0.063
+  },
+  {
+   "wallet": "AjwfW8BuPWwYVJFBfecanPZLzmoxfKssQfreemw9gW2u",
+   "coins": 5,
+   "winRate": 1.0,
+   "pnlSol": 1.47,
+   "medEntrySec": 11.0,
+   "medHoldSec": 300.0,
+   "medSizeSol": 0.988,
+   "medRoi": 0.202
+  },
+  {
+   "wallet": "Gf7KemevkbHcqj3rwHB3SggzyEycZKCMAncDoXYNLWqT",
+   "coins": 4,
+   "winRate": 1.0,
+   "pnlSol": 0.65,
+   "medEntrySec": 42.5,
+   "medHoldSec": 304.5,
+   "medSizeSol": 1.235,
+   "medRoi": 0.057
+  },
+  {
+   "wallet": "BMKvvgLhG6jse8Jo7nrpi1ZHocABq4sBgWBbAJBsLv4C",
+   "coins": 4,
+   "winRate": 1.0,
+   "pnlSol": 0.62,
+   "medEntrySec": 583.0,
+   "medHoldSec": 900.0,
+   "medSizeSol": 0.198,
+   "medRoi": 0.711
+  },
+  {
+   "wallet": "8jmHweJ8NwsUC9insrcKu5cDh8eLMZ2rqztvbzBU2LHX",
+   "coins": 8,
+   "winRate": 0.88,
+   "pnlSol": 0.42,
+   "medEntrySec": 546.5,
+   "medHoldSec": 2846.5,
+   "medSizeSol": 0.519,
+   "medRoi": 0.025
+  },
+  {
+   "wallet": "CYWSUxPu1tEZnkH5qpmdStxXRYyf4qRDXTPkFBSKy1Ei",
+   "coins": 4,
+   "winRate": 0.75,
+   "pnlSol": 0.28,
+   "medEntrySec": 4.5,
+   "medHoldSec": 63.5,
+   "medSizeSol": 0.296,
+   "medRoi": 0.186
+  },
+  {
+   "wallet": "8d1YSS1uVDWg6SdpGudUAMzHzp569ksrYFtvFzixMwgL",
+   "coins": 4,
+   "winRate": 0.75,
+   "pnlSol": 0.27,
+   "medEntrySec": 142.0,
+   "medHoldSec": 758.5,
+   "medSizeSol": 0.198,
+   "medRoi": 0.515
+  },
+  {
+   "wallet": "HFqqybUhYGYjtv1TCvSkasjdVhfRUHCYgYdN2s25mfL9",
+   "coins": 6,
+   "winRate": 0.67,
+   "pnlSol": 0.26,
+   "medEntrySec": 1923.5,
+   "medHoldSec": 1117.0,
+   "medSizeSol": 0.323,
+   "medRoi": 0.074
+  },
+  {
+   "wallet": "2DqAtaywzksV45pPsuhUjHuwnb8N9RDAUci9C4kUYgRZ",
+   "coins": 5,
+   "winRate": 0.8,
+   "pnlSol": 0.24,
+   "medEntrySec": 430.0,
+   "medHoldSec": 833.0,
+   "medSizeSol": 0.3,
+   "medRoi": 0.057
+  },
+  {
+   "wallet": "HkQ7hMjyoJeaAE1u9dbXMTkqrpXuZPpmtkc2g7QkNExQ",
+   "coins": 5,
+   "winRate": 1.0,
+   "pnlSol": 0.24,
+   "medEntrySec": 986.0,
+   "medHoldSec": 1368.0,
+   "medSizeSol": 1.2,
+   "medRoi": 0.036
+  },
+  {
+   "wallet": "1mGRiNd5QgddUpASfGRftpQRKMB2peE5hj1gMF6f5Hp",
+   "coins": 7,
+   "winRate": 0.86,
+   "pnlSol": 0.21,
+   "medEntrySec": 21.0,
+   "medHoldSec": 2176.0,
+   "medSizeSol": 0.401,
+   "medRoi": 0.055
+  },
+  {
+   "wallet": "4FpuSLX6TLffEk9U9jQ9pwbwd4Aw2NCRBFZYQdf4X4Uk",
+   "coins": 6,
+   "winRate": 0.67,
+   "pnlSol": 0.16,
+   "medEntrySec": 291.5,
+   "medHoldSec": 3171.0,
+   "medSizeSol": 0.484,
+   "medRoi": 0.037
+  },
+  {
+   "wallet": "haqqiUUXB5gp7gDbSjpEkw3phAjQb25r86uXJsZQgWq",
+   "coins": 4,
+   "winRate": 1.0,
+   "pnlSol": 0.15,
+   "medEntrySec": 0.5,
+   "medHoldSec": 185.5,
+   "medSizeSol": 0.237,
+   "medRoi": 0.133
+  },
+  {
+   "wallet": "2Dd3TRSdNwVzPQHR7tKSxq3ABg9QiQsF1EL4Zqi5aegn",
+   "coins": 5,
+   "winRate": 0.8,
+   "pnlSol": 0.11,
+   "medEntrySec": 27.0,
+   "medHoldSec": 659.0,
+   "medSizeSol": 0.478,
+   "medRoi": 0.143
+  },
+  {
+   "wallet": "72NWWbchKdRJKvhG6U4f9363psUttkeEkE4yk15imy8u",
+   "coins": 5,
+   "winRate": 0.6,
+   "pnlSol": 0.1,
+   "medEntrySec": 87.0,
+   "medHoldSec": 394.0,
+   "medSizeSol": 1.239,
+   "medRoi": 0.026
+  },
+  {
+   "wallet": "6isWGQL4i1tXfXVNvrrJn9TQXJSNPiKt7ZiU28tAK762",
+   "coins": 4,
+   "winRate": 0.75,
+   "pnlSol": 0.1,
+   "medEntrySec": 379.0,
+   "medHoldSec": 16299.5,
+   "medSizeSol": 0.173,
+   "medRoi": 0.051
+  },
+  {
+   "wallet": "3JZyEirKCesVY6q9ouH8zaP11Xb6eHNDkSsQUebjQo5M",
+   "coins": 4,
+   "winRate": 0.75,
+   "pnlSol": 0.1,
+   "medEntrySec": 379.0,
+   "medHoldSec": 16299.5,
+   "medSizeSol": 0.173,
+   "medRoi": 0.063
+  },
+  {
+   "wallet": "Bpv3GFKY93Q5c5b2q6X2zCKayRYi3aKpqZteWonxnixD",
+   "coins": 6,
+   "winRate": 0.67,
+   "pnlSol": 0.08,
+   "medEntrySec": 4.0,
+   "medHoldSec": 2499.0,
+   "medSizeSol": 2.963,
+   "medRoi": 0.013
+  },
+  {
+   "wallet": "Eh4Vq9N1eK9E2fDZ4dup1WzfRChevckN2BscVmLVNL6Z",
+   "coins": 4,
+   "winRate": 0.75,
+   "pnlSol": 0.06,
+   "medEntrySec": 2.5,
+   "medHoldSec": 9.0,
+   "medSizeSol": 0.354,
+   "medRoi": 0.147
+  },
+  {
+   "wallet": "BxjRD8SZct79Wj6gr9EeGB6cZYSW8DSLHshmsU7mYuw9",
+   "coins": 5,
+   "winRate": 0.8,
+   "pnlSol": 0.06,
+   "medEntrySec": 3803.0,
+   "medHoldSec": 140.0,
+   "medSizeSol": 0.099,
+   "medRoi": 0.115
+  },
+  {
+   "wallet": "62BwdiaYquktr4FGNnWggti626hH7spAwjBGPZjyYwo5",
+   "coins": 4,
+   "winRate": 0.75,
+   "pnlSol": 0.01,
+   "medEntrySec": 2.5,
+   "medHoldSec": 9.0,
+   "medSizeSol": 0.247,
+   "medRoi": 0.097
+  }
+ ]
+}
