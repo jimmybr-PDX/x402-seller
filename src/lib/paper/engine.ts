@@ -42,8 +42,13 @@ const rng = (seed: string) => parseInt(createHash("sha256").update(seed).digest(
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const getJ = (u: string, ms = 5000) => fetch(u, { headers: UA, signal: AbortSignal.timeout(ms) }).then((r) => (r.ok ? r.json() : null)).catch(() => null) as Promise<any>;
 
+let noRouteFlag = false;
+/** Jupiter quote. null = no fill; noRouteFlag tells a genuine NO_ROUTES_FOUND apart from a rate limit / outage. */
 async function quote(input: string, output: string, amount: string | number): Promise<{ out: bigint; impact: number } | null> {
-  const q = await getJ(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${input}&outputMint=${output}&amount=${amount}&slippageBps=2000`, 5000);
+  noRouteFlag = false;
+  const r = await fetch(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${input}&outputMint=${output}&amount=${amount}&slippageBps=2000`, { headers: UA, signal: AbortSignal.timeout(5000) }).catch(() => null);
+  const q: any = r ? await r.json().catch(() => null) : null;
+  if (q && /NO_ROUTE|COULD_NOT_FIND/i.test(String(q.errorCode ?? q.error ?? ""))) noRouteFlag = true;
   if (!q?.outAmount) return null;
   return { out: BigInt(q.outAmount), impact: Number(q.priceImpactPct ?? 0) };
 }
@@ -93,7 +98,13 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
   if (!signals.rug) rugSnapshot(c.mint).then((r) => { pos.rug = r; dirty = true; });
   else pos.rug = signals.rug;
 }
-async function rugSnapshot(mint: string) {
+let rugChain: Promise<unknown> = Promise.resolve();
+/** RugRadar's own internal check, strictly one at a time and >= 15 s apart, so live RugRadar traffic keeps priority. */
+function rugSnapshot(mint: string): Promise<any> {
+  const p = rugChain.then(async () => { const r = await rugSnapshotNow(mint); await sleep(15_000); return r; });
+  rugChain = p.catch(() => {}); return p;
+}
+async function rugSnapshotNow(mint: string) {
   if (!rugCheckFn) return null;
   try { const r = await rugCheckFn(mint); return { riskScore: r.riskScore, riskLevel: r.riskLevel, confidence: r.confidence, unknownSignals: r.unknownSignals, checks: r.checks, buyer: r.buyer, facts: r.facts }; }
   catch (e) { return { error: String((e as Error).message ?? e).slice(0, 100) }; }
@@ -115,6 +126,7 @@ async function manage(p: Pos) {
   const q = await quote(p.mint, SOL, p.tokens);
   const fees = BASE_FEE + cfg.prio + cfg.tip;
   if (!q || q.out === 0n) {
+    if (!noRouteFlag && q == null) { bump("quoteErrors"); return; } // API error/rate limit: retry, do not count as unsellable
     p.noRouteSince ??= Date.now();
     if (Date.now() - p.noRouteSince > 10 * 60_000) return close(p, "no_sell_route_writeoff", 0n, fees);
     return;
@@ -182,7 +194,7 @@ async function scanCandidates() {
     }
     if (wantEdge) {
       if (!momentum) { if (age > 540) c.checked.add("edge"); continue; }
-      if (now - lastRugAt < 45_000) continue; // throttle RugRadar's internal checks so live RugRadar traffic is not slowed
+      if (now - lastRugAt < 45_000) continue; // throttle
       lastRugAt = now; c.checked.add("edge");
       const rug = await rugSnapshot(c.mint);
       bump("edge.rugChecks");
