@@ -952,14 +952,34 @@ async function main() {
         ...declareDiscoveryExtension({
           input: { token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", chain: "solana" },
           inputSchema: {
-            properties: { token: { type: "string", minLength: 32, maxLength: 44, description: "Solana SPL mint address (incl. pump.fun) or EVM token contract (0x...) on base/bnb/ethereum/arbitrum" }, chain: { type: "string", enum: ["solana", "base", "bnb", "ethereum", "arbitrum"], description: "default solana; 0x addresses default to base" } },
+            properties: {
+              token: { type: "string", minLength: 32, maxLength: 44, description: "Solana SPL mint address (incl. pump.fun) or EVM token contract (0x...) on base/bnb/ethereum/arbitrum" },
+              mint: { type: "string", minLength: 32, maxLength: 44, description: "Alias for token (same value); either token or mint is accepted" },
+              chain: { type: "string", enum: ["solana", "base", "bnb", "ethereum", "arbitrum"], description: "default solana; 0x addresses default to base" },
+            },
             required: ["token"],
           },
           output: {
-            example: { product: "RugRadar", chain: "solana", token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", riskScore: 5, riskLevel: "low", verdict: "No major high-risk patterns found.", reasons: ["Top-holder concentration unavailable from public RPC."], disclaimer: "Automated heuristic, may be wrong. Not financial advice. Do your own research." },
+            example: {
+              product: "RugRadar", chain: "solana", token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+              riskScore: 5, riskLevel: "low", confidence: "high",
+              verdict: "No major high-risk patterns found.",
+              buyerSummary: "No major high-risk patterns found. Still only buy what you can afford to lose.",
+              signalCount: 48,
+              reasons: ["Mint authority is revoked: supply is fixed.", "Freeze authority is revoked."],
+              buyer: { canSell: true, sellImpactPct: 0.4, devSoldPctOfBought: 0, sniperSupplyPct10s: 2.1, volumeToMcap: 0.08, organicScore: 92 },
+              disclaimer: "Automated heuristic, may be wrong. Not financial advice. Do your own research.",
+            },
             schema: {
-              properties: { product: { type: "string" }, chain: { type: "string" }, token: { type: "string" }, riskScore: { type: "integer", minimum: 0, maximum: 100 }, riskLevel: { type: "string", enum: ["low", "medium", "high"] }, verdict: { type: "string" }, reasons: { type: "array", items: { type: "string" } }, checks: { type: "array", items: { type: "object" } }, facts: { type: "object" }, disclaimer: { type: "string" } },
-              required: ["riskScore", "riskLevel", "reasons", "disclaimer"],
+              properties: {
+                product: { type: "string" }, chain: { type: "string" }, token: { type: "string" },
+                riskScore: { type: "integer", minimum: 0, maximum: 100 }, riskLevel: { type: "string", enum: ["low", "medium", "high"] },
+                confidence: { type: "string" }, verdict: { type: "string" }, buyerSummary: { type: "string" },
+                signalCount: { type: "integer" }, reasons: { type: "array", items: { type: "string" } },
+                buyer: { type: ["object", "null"] }, checks: { type: "array", items: { type: "object" } },
+                facts: { type: "object" }, disclaimer: { type: "string" },
+              },
+              required: ["riskScore", "riskLevel", "reasons", "disclaimer", "buyerSummary"],
             },
           },
         }),
@@ -971,20 +991,40 @@ async function main() {
         `${RUG_EDGE_SHORT} RugRadar token safety and honeypot check: token scam check and memecoin risk score for Solana (pump.fun), BNB, Base, Ethereum, Arbitrum (chain=). 0-100 score with plain reasons. Heuristic, may be wrong. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "RugRadar Honeypot Check & Solana Token Safety",
-      tags: ["honeypot check", "solana token safety", "token scam check", "memecoin risk", "token safety check"],
+      tags: ["token safety", "token security scan", "memecoin safety", "solana token safety", "honeypot check"],
       iconUrl: RUG_ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
           input: { token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", chain: "solana" },
           inputSchema: {
-            properties: { token: { type: "string", minLength: 32, maxLength: 44, description: "Solana SPL mint address (incl. pump.fun) or EVM token contract (0x...) on base/bnb/ethereum/arbitrum" }, chain: { type: "string", enum: ["solana", "base", "bnb", "ethereum", "arbitrum"], description: "default solana; 0x addresses default to base" } },
+            properties: {
+              token: { type: "string", minLength: 32, maxLength: 44, description: "Solana SPL mint address (incl. pump.fun) or EVM token contract (0x...) on base/bnb/ethereum/arbitrum" },
+              mint: { type: "string", minLength: 32, maxLength: 44, description: "Alias for token (same value); either token or mint is accepted" },
+              chain: { type: "string", enum: ["solana", "base", "bnb", "ethereum", "arbitrum"], description: "default solana; 0x addresses default to base" },
+            },
             required: ["token"],
           },
           output: {
-            example: { product: "RugRadar", chain: "solana", token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", riskScore: 5, riskLevel: "low", verdict: "No major high-risk patterns found.", reasons: ["Top-holder concentration unavailable from public RPC."], disclaimer: "Automated heuristic, may be wrong. Not financial advice. Do your own research." },
+            example: {
+              product: "RugRadar", chain: "solana", token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+              riskScore: 5, riskLevel: "low", confidence: "high",
+              verdict: "No major high-risk patterns found.",
+              buyerSummary: "No major high-risk patterns found. Still only buy what you can afford to lose.",
+              signalCount: 48,
+              reasons: ["Mint authority is revoked: supply is fixed.", "Freeze authority is revoked."],
+              buyer: { canSell: true, sellImpactPct: 0.4, devSoldPctOfBought: 0, sniperSupplyPct10s: 2.1, volumeToMcap: 0.08, organicScore: 92 },
+              disclaimer: "Automated heuristic, may be wrong. Not financial advice. Do your own research.",
+            },
             schema: {
-              properties: { product: { type: "string" }, chain: { type: "string" }, token: { type: "string" }, riskScore: { type: "integer", minimum: 0, maximum: 100 }, riskLevel: { type: "string", enum: ["low", "medium", "high"] }, verdict: { type: "string" }, reasons: { type: "array", items: { type: "string" } }, checks: { type: "array", items: { type: "object" } }, facts: { type: "object" }, disclaimer: { type: "string" } },
-              required: ["riskScore", "riskLevel", "reasons", "disclaimer"],
+              properties: {
+                product: { type: "string" }, chain: { type: "string" }, token: { type: "string" },
+                riskScore: { type: "integer", minimum: 0, maximum: 100 }, riskLevel: { type: "string", enum: ["low", "medium", "high"] },
+                confidence: { type: "string" }, verdict: { type: "string" }, buyerSummary: { type: "string" },
+                signalCount: { type: "integer" }, reasons: { type: "array", items: { type: "string" } },
+                buyer: { type: ["object", "null"] }, checks: { type: "array", items: { type: "object" } },
+                facts: { type: "object" }, disclaimer: { type: "string" },
+              },
+              required: ["riskScore", "riskLevel", "reasons", "disclaimer", "buyerSummary"],
             },
           },
         }),
@@ -1002,14 +1042,34 @@ async function main() {
         ...declareDiscoveryExtension({
           input: { token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", chain: "solana" },
           inputSchema: {
-            properties: { token: { type: "string", minLength: 32, maxLength: 44, description: "Solana SPL mint address (incl. pump.fun) or EVM token contract (0x...) on base/bnb/ethereum/arbitrum" }, chain: { type: "string", enum: ["solana", "base", "bnb", "ethereum", "arbitrum"], description: "default solana; 0x addresses default to base" } },
+            properties: {
+              token: { type: "string", minLength: 32, maxLength: 44, description: "Solana SPL mint address (incl. pump.fun) or EVM token contract (0x...) on base/bnb/ethereum/arbitrum" },
+              mint: { type: "string", minLength: 32, maxLength: 44, description: "Alias for token (same value); either token or mint is accepted" },
+              chain: { type: "string", enum: ["solana", "base", "bnb", "ethereum", "arbitrum"], description: "default solana; 0x addresses default to base" },
+            },
             required: ["token"],
           },
           output: {
-            example: { product: "RugRadar", chain: "solana", token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", riskScore: 5, riskLevel: "low", verdict: "No major high-risk patterns found.", reasons: ["Top-holder concentration unavailable from public RPC."], disclaimer: "Automated heuristic, may be wrong. Not financial advice. Do your own research." },
+            example: {
+              product: "RugRadar", chain: "solana", token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+              riskScore: 5, riskLevel: "low", confidence: "high",
+              verdict: "No major high-risk patterns found.",
+              buyerSummary: "No major high-risk patterns found. Still only buy what you can afford to lose.",
+              signalCount: 48,
+              reasons: ["Mint authority is revoked: supply is fixed.", "Freeze authority is revoked."],
+              buyer: { canSell: true, sellImpactPct: 0.4, devSoldPctOfBought: 0, sniperSupplyPct10s: 2.1, volumeToMcap: 0.08, organicScore: 92 },
+              disclaimer: "Automated heuristic, may be wrong. Not financial advice. Do your own research.",
+            },
             schema: {
-              properties: { product: { type: "string" }, chain: { type: "string" }, token: { type: "string" }, riskScore: { type: "integer", minimum: 0, maximum: 100 }, riskLevel: { type: "string", enum: ["low", "medium", "high"] }, verdict: { type: "string" }, reasons: { type: "array", items: { type: "string" } }, checks: { type: "array", items: { type: "object" } }, facts: { type: "object" }, disclaimer: { type: "string" } },
-              required: ["riskScore", "riskLevel", "reasons", "disclaimer"],
+              properties: {
+                product: { type: "string" }, chain: { type: "string" }, token: { type: "string" },
+                riskScore: { type: "integer", minimum: 0, maximum: 100 }, riskLevel: { type: "string", enum: ["low", "medium", "high"] },
+                confidence: { type: "string" }, verdict: { type: "string" }, buyerSummary: { type: "string" },
+                signalCount: { type: "integer" }, reasons: { type: "array", items: { type: "string" } },
+                buyer: { type: ["object", "null"] }, checks: { type: "array", items: { type: "object" } },
+                facts: { type: "object" }, disclaimer: { type: "string" },
+              },
+              required: ["riskScore", "riskLevel", "reasons", "disclaimer", "buyerSummary"],
             },
           },
         }),
@@ -1295,14 +1355,14 @@ async function main() {
       res.type("text/plain").send(llmsTxt());
       return;
     }
-    res.json({ name: SERVICE_NAME, description: `Pay-per-call research and onchain data tools for AI agents over x402 (${ON_NETWORKS}): cited research briefs, URL to markdown, news search, token prices (EVM + Solana), wallet balances, transaction lookup, gas prices, x402 endpoint checks.`, docs: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json`, resources: catalog() });
+    res.json({ name: SERVICE_NAME, description: `Pay-per-call research and onchain data tools for AI agents over x402 (${ON_NETWORKS}): cited research briefs, URL to markdown, news search, token prices (EVM + Solana), wallet balances, transaction lookup, gas prices, x402 endpoint checks, RugRadar rug/honeypot/token-safety checks.`, docs: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json`, resources: catalog() });
   });
 
   const llmsTxt = () =>
     [
       `# ${SERVICE_NAME} (x402)`,
       "",
-      `> Pay-per-call research tools for autonomous AI agents. No API key, no signup: pay per request in ${ON_NETWORKS}`,
+      `> Pay-per-call research and token-safety tools for autonomous AI agents. No API key, no signup: pay per request in ${ON_NETWORKS}`,
       `> (${NETWORKS.join(", ")}) with the x402 protocol (HTTP 402 + PAYMENT-REQUIRED / PAYMENT-SIGNATURE headers; CDP facilitator, PayAI for Avalanche/Sei).`,
       `> Pay to: ${payToAddr} (EVM chains)${payToSolana ? `, ${payToSolana} (Solana)` : ""}. ${ERRORS_DOC}`,
       "",
@@ -1317,6 +1377,10 @@ async function main() {
       `- GET ${PUBLIC_URL}/balance?address=<0x|name.eth|solana address>  (${BALANCE_PRICE}) — wallet balance: native + major tokens with USD values on ethereum, base, arbitrum, polygon (all in one call) or Solana. Optional chain=, tokens=<comma-separated contracts or mints>.`,
       `- GET ${PUBLIC_URL}/tx?hash=<0x hash|solana signature>  (${TX_PRICE}) — transaction lookup: status, block time, from/to, method, fee in USD, decoded token transfers (EVM chains auto-detected) or SOL/token balance changes (Solana). Optional chain=.`,
       `- GET ${PUBLIC_URL}/gas  (${GAS_PRICE}) — gas price tracker: base fee, slow/standard/fast priority fees, USD cost of a transfer, ERC-20 transfer and swap on ethereum, base, arbitrum, polygon + Solana priority fees. Optional chain=.`,
+      `- GET ${PUBLIC_URL}/rug-check?token=<mint|0x>  (${RUG_PRICE}) — RugRadar Solana rug check / rug pull checker (also BNB, Base, Ethereum, Arbitrum via chain=): 0-100 risk score, plain reasons, buyer summary, and 45+ data points (dev sold %, snipers, bundles, live can-you-sell, creator history). Alias: mint=. Heuristic; not financial advice. Failed calls free.`,
+      `- GET ${PUBLIC_URL}/token-safety?token=<mint|0x>  (${RUG_PRICE}) — same RugRadar engine as /rug-check, listed for token safety / memecoin safety / honeypot search terms. Optional chain=.`,
+      `- GET ${PUBLIC_URL}/honeypot-check?token=<mint|0x>  (${RUG_PRICE}) — honeypot check: can I sell this token? Simulated buy/sell + tax on EVM; live sell quote + freeze authority on Solana. Optional chain=.`,
+      `- GET ${PUBLIC_URL}/credits/buy?credits=N  (${RUG_PRICE} each) — RugRadar prepaid credits (1-1000): returns a secret key once; send X-RugRadar-Key to skip x402 (~1.8x faster). Balance: /credits/balance.`,
       "",
       "## How to pay",
       `1. Call the endpoint without payment -> HTTP 402 with base64 JSON in the PAYMENT-REQUIRED header (x402Version 2, scheme exact; one accepts entry per network: ${NETWORKS.map((n) => `${NETWORK_INFO[n]!.name} USDC ${NETWORK_INFO[n]!.usdc}`).join("; ")}).`,
@@ -1329,6 +1393,7 @@ async function main() {
       `- ${PUBLIC_URL}/openapi.json — OpenAPI 3.1 with x-payment-info`,
       `- ${PUBLIC_URL}/.well-known/x402 — x402 discovery document`,
       `- ${PUBLIC_URL}/health — status`,
+      `- ${PUBLIC_URL}/rugradar — free RugRadar landing page (human UI + free checks)`,
       "",
       "## Example",
       `curl -i "${PUBLIC_URL}/report?q=What+is+the+Model+Context+Protocol%3F"   # 402 challenge`,
@@ -1361,7 +1426,7 @@ async function main() {
   const wellKnown = () => ({
     version: 1,
     name: SERVICE_NAME,
-    description: `Pay-per-call research and onchain data tools for AI agents: cited research briefs, URL to markdown, news search, token prices (EVM + Solana), wallet balances, transaction lookup, gas prices, x402 endpoint checks. ${ON_NETWORKS} via x402.`,
+    description: `Pay-per-call research and onchain data tools for AI agents: cited research briefs, URL to markdown, news search, token prices (EVM + Solana), wallet balances, transaction lookup, gas prices, x402 endpoint checks, RugRadar rug/honeypot/token-safety checks. ${ON_NETWORKS} via x402.`,
     resources: catalog().map((c) => c.url),
     items: catalog(),
     network: NETWORKS[0],
@@ -1370,7 +1435,7 @@ async function main() {
     payToSolana,
     openapi: `${PUBLIC_URL}/openapi.json`,
     llms: `${PUBLIC_URL}/llms.txt`,
-    free: ["/health", "/stats", "/examples", "/a/<id>", "/llms.txt", "/openapi.json", "/.well-known/x402", "/robots.txt"],
+    free: ["/health", "/stats", "/examples", "/a/<id>", "/llms.txt", "/openapi.json", "/.well-known/x402", "/robots.txt", "/rugradar", "/credits/balance"],
   });
   // 402 Index domain verification (public SHA-256 hash of the claim token, not the token itself)
   app.get("/.well-known/402index-verify.txt", (_req, res) =>
@@ -1393,15 +1458,26 @@ async function main() {
         price: { mode: "fixed", currency: "USD", amount: usd(price) },
       },
     });
+    const payRug = (price: string) => ({
+      "x-payment-info": {
+        protocols: NETWORKS.map((network) => ({
+          x402: {
+            version: 2, scheme: "exact", network, asset: NETWORK_INFO[network]!.usdc,
+            payTo: NETWORK_INFO[network]!.family === "svm" ? RUG_PAY_TO_SVM : RUG_PAY_TO_EVM,
+          },
+        })),
+        price: { mode: "fixed", currency: "USD", amount: usd(price) },
+      },
+    });
     const r = routes as any;
     res.json({
       openapi: "3.1.0",
       info: {
         title: SERVICE_NAME,
         version: "2.0.0",
-        description: `Pay-per-call research and onchain data tools for AI agents over x402 (${ON_NETWORKS}). ` + ERRORS_DOC,
+        description: `Pay-per-call research, onchain data, and RugRadar token-safety tools for AI agents over x402 (${ON_NETWORKS}). ` + ERRORS_DOC,
         "x-guidance":
-          "Use /report for a cited answer to a question, /read to turn a known URL into markdown, /search for web search results with page text, /news for recent headlines on a topic, /price or /solana-price for a verifiable onchain token price (+24h change on EVM), /balance for wallet holdings, /tx to check or decode a transaction, /gas for current fees, /check to validate an x402 endpoint. Call without payment to get the 402 challenge, then retry with PAYMENT-SIGNATURE.",
+          "Use /report for a cited answer to a question, /read to turn a known URL into markdown, /search for web search results with page text, /news for recent headlines on a topic, /price or /solana-price for a verifiable onchain token price (+24h change on EVM), /balance for wallet holdings, /tx to check or decode a transaction, /gas for current fees, /check to validate an x402 endpoint, /rug-check /token-safety /honeypot-check for a 0-100 token risk score (RugRadar). Call without payment to get the 402 challenge, then retry with PAYMENT-SIGNATURE.",
       },
       servers: [{ url: PUBLIC_URL }],
       paths: {
@@ -1536,6 +1612,51 @@ async function main() {
             parameters: [qp("chain", { type: "string", enum: ["all", "ethereum", "base", "arbitrum", "polygon", "solana"] }, false, "Default all")],
             ...pay(GAS_PRICE),
             responses: { "200": { description: "Fees", content: { "application/json": { schema: r["GET /gas"].extensions.bazaar.schema.properties.output.properties.example, example: gasExample } } }, ...errs },
+          },
+        },
+        "/rug-check": {
+          get: {
+            operationId: "rugCheck",
+            summary: "RugRadar: Solana rug check & token safety score (multi-chain)",
+            description: r["GET /rug-check"].description,
+            tags: ["RugRadar"],
+            parameters: [
+              qp("token", { type: "string", minLength: 32, maxLength: 44 }, true, "Solana mint or EVM token contract (mint= alias also accepted)"),
+              qp("mint", { type: "string", minLength: 32, maxLength: 44 }, false, "Alias for token"),
+              qp("chain", { type: "string", enum: ["solana", "base", "bnb", "ethereum", "arbitrum"] }, false, "Default solana; 0x addresses default to base"),
+            ],
+            ...payRug(RUG_PRICE),
+            responses: { "200": { description: "Risk score and buyer signals", content: { "application/json": { schema: r["GET /rug-check"].extensions.bazaar.schema.properties.output.properties.example, example: r["GET /rug-check"].extensions.bazaar.info.output.example } } }, ...errs },
+          },
+        },
+        "/token-safety": {
+          get: {
+            operationId: "tokenSafety",
+            summary: "RugRadar token safety / memecoin risk score",
+            description: r["GET /token-safety"].description,
+            tags: ["RugRadar"],
+            parameters: [
+              qp("token", { type: "string", minLength: 32, maxLength: 44 }, true, "Solana mint or EVM token contract (mint= alias also accepted)"),
+              qp("mint", { type: "string", minLength: 32, maxLength: 44 }, false, "Alias for token"),
+              qp("chain", { type: "string", enum: ["solana", "base", "bnb", "ethereum", "arbitrum"] }, false, "Default solana; 0x addresses default to base"),
+            ],
+            ...payRug(RUG_PRICE),
+            responses: { "200": { description: "Risk score and buyer signals", content: { "application/json": { schema: r["GET /token-safety"].extensions.bazaar.schema.properties.output.properties.example, example: r["GET /token-safety"].extensions.bazaar.info.output.example } } }, ...errs },
+          },
+        },
+        "/honeypot-check": {
+          get: {
+            operationId: "honeypotCheck",
+            summary: "Honeypot check: can I sell this token? (RugRadar)",
+            description: r["GET /honeypot-check"].description,
+            tags: ["RugRadar"],
+            parameters: [
+              qp("token", { type: "string", minLength: 32, maxLength: 44 }, true, "Solana mint or EVM token contract (mint= alias also accepted)"),
+              qp("mint", { type: "string", minLength: 32, maxLength: 44 }, false, "Alias for token"),
+              qp("chain", { type: "string", enum: ["solana", "base", "bnb", "ethereum", "arbitrum"] }, false, "Default solana; 0x addresses default to base"),
+            ],
+            ...payRug(RUG_PRICE),
+            responses: { "200": { description: "Risk score and sellability signals", content: { "application/json": { schema: r["GET /honeypot-check"].extensions.bazaar.schema.properties.output.properties.example, example: r["GET /honeypot-check"].extensions.bazaar.info.output.example } } }, ...errs },
           },
         },
       },
