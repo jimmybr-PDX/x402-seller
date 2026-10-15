@@ -87,7 +87,7 @@ async function preCheck(mint: string, creator: string, devBuyPct: number | null)
   // ("processed" commitment) and retry every ~50 ms until the 240 ms budget. Still unknown = skip, never buy blind.
   let authority: string = "unknown"; let tries = 0;
   const RPC2 = [RPC, "https://solana-rpc.publicnode.com"];
-  const ask = (u: string) => fetch(u, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [mint, { encoding: "jsonParsed", commitment: "processed" }] }), signal: AbortSignal.timeout(Math.max(30, 240 - (Date.now() - t0))) })
+  const ask = (u: string) => fetch(u, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [mint, { encoding: "jsonParsed", commitment: "processed" }] }), signal: AbortSignal.timeout(Math.max(30, Math.min(120, 240 - (Date.now() - t0)))) })
     .then((x) => x.json()).then((r: any) => { const info = r?.result?.value?.data?.parsed?.info; if (!info) throw new Error("not visible"); return info; });
   while (Date.now() - t0 < 200 && authority === "unknown") {
     tries++;
@@ -274,7 +274,10 @@ function onNewCoin(c: any, via: string) {
   if (now - createdMs < 30_000 && now - (state.counters.lastSnipeMs ?? 0) > 60_000) {
     state.counters.lastSnipeMs = now;
     (async () => {
-      const pre = await preCheck(mint, creator, c.devBuyPct ?? null);
+      let pre: any = await preCheck(mint, creator, c.devBuyPct ?? null);
+      // Brand-new mints often are not visible on public nodes for ~1 s: if authority was the only unknown, look once more 0.7 s later
+      if (pre.red.length === 1 && pre.red[0] === "authority_unknown") { await sleep(700); const p2: any = await preCheck(mint, creator, c.devBuyPct ?? null); p2.firstPass = { ms: pre.ms, authority: pre.authority }; pre = p2; bump("sniper.authoritySecondLook"); }
+      if (pre.red.includes("authority_unknown")) bump("sniper.skippedAuthorityUnknown");
       if (pre.red.length) { bump("sniper.skippedByPrecheck"); return; }
       await enter("sniper", { mint, symbol: String(c.symbol ?? ""), createdMs }, { detectLatencyMs: now - createdMs, via, precheck: pre });
     })().catch((e) => { lastErr = String(e).slice(0, 120); });
