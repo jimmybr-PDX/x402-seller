@@ -133,12 +133,22 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   const t0 = Date.now();
   const timed = <T>(name: string, p: Promise<T>) => p.finally(() => { timingsMs[name] = Date.now() - t0; });
   // Parallel: mint account (RPC), Jupiter token data and DexScreener market start together.
-  const acctP = timed("rpcMint", cached(`acct:${mint}`, () => retry(() => rpc<any>("getAccountInfo", [mint, { encoding: "jsonParsed" }], { timeoutMs: 3500 }), (v) => !v?.value), (v: any) => !!v?.value));
+  // Mint account at "processed" commitment (brand-new mints are not "finalized" for ~13 s), retried a few times
+  // within ~1.2 s, since a node can lag a fresh mint by a slot or two. Authorities are only reported when actually read.
+  const acctP = timed("rpcMint", cached(`acct:${mint}`, async () => {
+    for (let i = 0; i < 6; i++) {
+      const v = await rpc<any>("getAccountInfo", [mint, { encoding: "jsonParsed", commitment: "processed" }], { timeoutMs: 2500 }).catch(() => null);
+      if (v?.value) return v;
+      if (Date.now() - t0 > 1200) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return null;
+  }, (v: any) => !!v?.value));
   const jupP = timed("jupiter", jupiter(mint));
   const marketP = timed("dexscreener", marketOf(mint));
   const acct = await acctP;
   const info = acct?.value?.data?.parsed?.info;
-  if (!acct?.value || acct.value.data?.parsed?.type !== "mint" || !KNOWN_PROGRAM_OWNERS.has(acct.value.owner)) throw new SolanaInputError("not an SPL token mint address");
+  if (!acct?.value || acct.value.data?.parsed?.type !== "mint" || !KNOWN_PROGRAM_OWNERS.has(acct.value.owner)) throw new SolanaInputError(!acct?.value && /pump$/.test(mint) ? "token account not visible on-chain yet (brand-new launch?): mint/freeze authority unknown, so no score was given. Try again in a few seconds." : "not an SPL token mint address");
   const decimals = info.decimals ?? null; const supply = Number(info.supply) / 10 ** (decimals ?? 0);
   const jup = await jupP;
   // DexScreener often has no pair for pump.fun bonding-curve tokens; Jupiter's liquidity covers them.

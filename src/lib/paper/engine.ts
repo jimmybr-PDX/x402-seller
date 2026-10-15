@@ -83,17 +83,22 @@ async function preCheck(mint: string, creator: string, devBuyPct: number | null)
   const launches1h = creatorLaunches.get(creator)?.length ?? 0;
   if (launches1h >= 2) red.push(`creator_${launches1h}_launches_1h`);
   if (devBuyPct != null && devBuyPct > 10) red.push(`creator_bought_${devBuyPct.toFixed(0)}pct`);
-  let authority: string = "unknown";
-  try {
-    const r: any = await Promise.race([
-      fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [mint, { encoding: "jsonParsed", commitment: "processed" }] }), signal: AbortSignal.timeout(250) }).then((x) => x.json()),
-      sleep(250).then(() => { throw new Error("budget"); }),
-    ]);
-    const info = r?.result?.value?.data?.parsed?.info;
-    if (info) { authority = "ok"; if (info.mintAuthority) red.push("mint_authority"); if (info.freezeAuthority) red.push("freeze_authority"); }
-  } catch { authority = "timeout"; red.push("authority_check_timed_out"); } // stricter (Oct 15): no blind buys
-  const ms = Date.now() - t0; push(preMs, ms); push(preLog as any, { ms, at: Date.now(), authority, uptimeS: Math.round(process.uptime()) } as any);
-  return { ms, red, authority, devBuyPct, creatorLaunches1h: launches1h };
+  // Mint/freeze authority: brand-new mints are often not visible yet on one node, so ask two free RPCs at once
+  // ("processed" commitment) and retry every ~50 ms until the 240 ms budget. Still unknown = skip, never buy blind.
+  let authority: string = "unknown"; let tries = 0;
+  const RPC2 = [RPC, "https://solana-rpc.publicnode.com"];
+  const ask = (u: string) => fetch(u, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [mint, { encoding: "jsonParsed", commitment: "processed" }] }), signal: AbortSignal.timeout(Math.max(30, 240 - (Date.now() - t0))) })
+    .then((x) => x.json()).then((r: any) => { const info = r?.result?.value?.data?.parsed?.info; if (!info) throw new Error("not visible"); return info; });
+  while (Date.now() - t0 < 200 && authority === "unknown") {
+    tries++;
+    try {
+      const info: any = await Promise.race([Promise.any(RPC2.map(ask)), sleep(Math.max(20, 240 - (Date.now() - t0))).then(() => { throw new Error("budget"); })]);
+      authority = "ok"; if (info.mintAuthority) red.push("mint_authority"); if (info.freezeAuthority) red.push("freeze_authority");
+    } catch { if (Date.now() - t0 < 190) await sleep(50); }
+  }
+  if (authority !== "ok") red.push("authority_unknown");
+  const ms = Date.now() - t0; push(preMs, ms); push(preLog as any, { ms, at: Date.now(), authority, tries, uptimeS: Math.round(process.uptime()) } as any);
+  return { ms, red, authority, tries, devBuyPct, creatorLaunches1h: launches1h };
 }
 async function rpcPing(): Promise<number> {
   const t = Date.now();
