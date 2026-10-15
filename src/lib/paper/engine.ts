@@ -31,7 +31,7 @@ export const CFG: Record<Base, Cfg> = {
   edge: { prio: 300_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 1800 },
 };
 type Pos = { id: string; strat: Strat; mint: string; symbol: string; entryAt: number; entryAgeS: number; latencyMs: number; costLamports: number; tokens: string; entryPriceSol: number;
-  forceExit?: string; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
+  forceExit?: string; peakAt?: number; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
 type State = { v: 1; open: Pos[]; counters: Record<string, number>; startedAt: string };
 let state: State = { v: 1, open: [], counters: {}, startedAt: new Date().toISOString() };
 let closed: any[] = [];
@@ -155,7 +155,7 @@ async function manage(p: Pos) {
   const tr = await trades(p.mint, 5);
   const price = tr?.[0] ? Number(tr[0].priceSol) : null;
   const holdS = (Date.now() - p.entryAt) / 1000;
-  if (price) { p.lastMarkRoi = (price / p.entryPriceSol) - 1; p.peakRoi = Math.max(p.peakRoi, p.lastMarkRoi); }
+  if (price) { p.lastMarkRoi = (price / p.entryPriceSol) - 1; if (p.lastMarkRoi > p.peakRoi) { p.peakRoi = p.lastMarkRoi; p.peakAt = Date.now(); } }
   const r = p.lastMarkRoi;
   let reason: string | null = p.forceExit ?? null;
   if (reason) {}
@@ -190,7 +190,7 @@ async function close(p: Pos, reason: string, outLamports: bigint, fees: number) 
   const t = { id: p.id, strat: p.strat, mint: p.mint, symbol: p.symbol, result: pnl > 0 ? "win" : "loss", exitReason: reason,
     entryAt: new Date(p.entryAt).toISOString(), exitAt: new Date().toISOString(), holdS: Math.round((Date.now() - p.entryAt) / 1000), entryAgeS: p.entryAgeS, latencyMs: p.latencyMs,
     sizeSol: SIZE_SOL, costSol: +(p.costLamports / LAMPORTS).toFixed(6), proceedsSol: +(proceeds / LAMPORTS).toFixed(6), pnlSol: +pnl.toFixed(6), roi: +(pnl / SIZE_SOL).toFixed(4),
-    entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug };
+    entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug };
   state.open = state.open.filter((x) => x !== p); closed.push(t); appendTrade(t); dirty = true; bump(`${p.strat}.exits`);
 }
 
