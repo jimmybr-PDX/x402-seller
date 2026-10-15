@@ -22,17 +22,17 @@ type Base = "copy" | "sniper" | "edge";
 export const RUG_VARIANTS: Record<"copy" | "edge", number[]> = { copy: [25, 40, 60], edge: [15, 25, 40] }; // max RugRadar score allowed
 export const STRATS: Strat[] = ["sniper", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
 const baseOf = (s: Strat) => s.split(/[_@]/)[0] as Base;
-type Cfg = { size: number; prio: number; tip: number; buyFail: number; sellFail: number; maxOpen: number; tp: number; trailArm: number; trail: number; sl: number; maxHoldS: number };
+type Cfg = { size: number; prio: number; tip: number; buyFail: number; sellFail: number; maxOpen: number; tp: number; trailArm: number; trail: number; sl: number; maxHoldS: number; stallS: number; maxBePct: number };
 export const CFG: Record<Base, Cfg> = {
   // sniper: contested launch block via public RPC, no Jito bundle -> high buy-failure rate, quick exits (snipers hold seconds-minutes)
-  sniper: { size: 0.1, prio: 3_000_000, tip: 2_000_000, buyFail: 0.25, sellFail: 0.05, maxOpen: 3, tp: 0.4, trailArm: 0.2, trail: 0.15, sl: -0.25, maxHoldS: 120 },
+  sniper: { size: 0.4, stallS: 60, maxBePct: 8, prio: 3_000_000, tip: 2_000_000, buyFail: 0.25, sellFail: 0.05, maxOpen: 3, tp: 0.4, trailArm: 0.2, trail: 0.15, sl: -0.25, maxHoldS: 120 },
   // copy: rules inferred from profitable early wallets (enter ~20-180 s, ~0.5 SOL, hold ~5-20 min, take profit / trail)
-  copy: { size: 0.2, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.3, maxHoldS: 1200 },
+  copy: { size: 0.2, stallS: 300, maxBePct: 8, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.3, maxHoldS: 600 },
   // edge: momentum + RugRadar low risk only
-  edge: { size: 0.1, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 1800 },
+  edge: { size: 0.1, stallS: 300, maxBePct: 8, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 900 },
 };
 type Pos = { id: string; strat: Strat; mint: string; symbol: string; entryAt: number; entryAgeS: number; latencyMs: number; costLamports: number; tokens: string; entryPriceSol: number;
-  forceExit?: string; buyDriftLamports?: number; sellDriftLamports?: number; buyFeeLamports?: number; sizeSol?: number; sizeMult?: number; family?: Family | null; peakAt?: number; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
+  forceExit?: string; bePct?: number; buyDriftLamports?: number; sellDriftLamports?: number; buyFeeLamports?: number; sizeSol?: number; sizeMult?: number; family?: Family | null; peakAt?: number; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
 type State = { v: 1; open: Pos[]; counters: Record<string, number>; startedAt: string };
 let state: State = { v: 1, open: [], counters: {}, startedAt: new Date().toISOString() };
 let closed: any[] = [];
@@ -78,8 +78,8 @@ async function preCheck(mint: string, creator: string, devBuyPct: number | null)
   const t0 = Date.now(); const red: string[] = [];
   if (creator && flagged()[creator]) red.push("flagged_deployer");
   const launches1h = creatorLaunches.get(creator)?.length ?? 0;
-  if (launches1h >= 3) red.push(`creator_${launches1h}_launches_1h`);
-  if (devBuyPct != null && devBuyPct > 15) red.push(`creator_bought_${devBuyPct.toFixed(0)}pct`);
+  if (launches1h >= 2) red.push(`creator_${launches1h}_launches_1h`);
+  if (devBuyPct != null && devBuyPct > 10) red.push(`creator_bought_${devBuyPct.toFixed(0)}pct`);
   let authority: string = "unknown";
   try {
     const r: any = await Promise.race([
@@ -88,7 +88,7 @@ async function preCheck(mint: string, creator: string, devBuyPct: number | null)
     ]);
     const info = r?.result?.value?.data?.parsed?.info;
     if (info) { authority = "ok"; if (info.mintAuthority) red.push("mint_authority"); if (info.freezeAuthority) red.push("freeze_authority"); }
-  } catch { authority = "timeout"; } // over budget: proceed on the memory-only signals (logged)
+  } catch { authority = "timeout"; red.push("authority_check_timed_out"); } // stricter (Oct 15): no blind buys
   const ms = Date.now() - t0; push(preMs, ms);
   return { ms, red, authority, devBuyPct, creatorLaunches1h: launches1h };
 }
@@ -117,7 +117,7 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
   const SIZE = +(CFG[baseOf(strat)].size * mult).toFixed(4); // copy 0.2 SOL, sniper/edge 0.1 SOL; trusted-dev multipliers on top
   if (mult === 1) { // trusted-dev coin: also open bigger test positions, tracked as their own variants ("<strategy>@2x")
     const fam = await Promise.race([familyFor(c.mint) ?? Promise.resolve(null), sleep(baseOf(strat) === "sniper" ? 0 : 1000).then(() => null)]).catch(() => null);
-    const tr = trustFor(c.mint, fam as any);
+    const tr = trustFor(c.mint, fam as any); if (fam) signals = { ...signals, familyKnown: fam };
     if (tr?.knownGood) for (const m of GOOD_DEV_MULTS) enter(`${strat}@${m}x`, c, { ...signals, trust: tr }, m).catch(() => {});
     if (tr) signals = { ...signals, trust: tr };
   }
@@ -127,6 +127,12 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
   const tDecide = Date.now();
   const q1 = await quote(SOL, c.mint, Math.round(SIZE * LAMPORTS));
   if (!q1) { bump(`${strat}.noBuyRoute`); return; }
+  // Oct 15: skip when costs alone need more than maxBePct to break even (fixed fees + ~2.5% pump.fun + price impact)
+  const fixedRT = (2 * (BASE_FEE + cfg.prio + cfg.tip) + BASE_FEE) / LAMPORTS;
+  const beEst = (fixedRT / SIZE + 0.025 + Math.abs(q1.impact || 0)) * 100;
+  if (beEst > cfg.maxBePct) { bump(`${strat}.skippedBreakEven`); return; }
+  const famNow = signals.trust ? null : null; void famNow;
+  if (signals.family?.serialRugger || signals.familyKnown?.serialRugger) { bump(`${strat}.skippedSerialRugger`); return; }
   const lms = execLatencyMs(); await sleep(lms);
   const q2 = await quote(SOL, c.mint, Math.round(SIZE * LAMPORTS)); // price at simulated landing
   const fill = q2 && q2.out < q1.out ? q2.out : q1.out; // worse of the two (never flatter)
@@ -139,7 +145,7 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
   }
   const latencyMs = Date.now() - tDecide;
   const pos: Pos = { id, strat, mint: c.mint, symbol: c.symbol, entryAt: Date.now(), entryAgeS: Math.round((Date.now() - c.createdMs) / 1000), latencyMs,
-    costLamports: Math.round(SIZE * LAMPORTS) + fees + ATA_RENT, tokens: fill.toString(), entryPriceSol: SIZE / (Number(fill) / 1e6), sizeSol: SIZE, sizeMult: mult, buyFeeLamports: fees, buyDriftLamports: q1.out > 0n ? Math.round(Number(q1.out - fill) / Number(q1.out) * SIZE * LAMPORTS) : 0,
+    costLamports: Math.round(SIZE * LAMPORTS) + fees + ATA_RENT, tokens: fill.toString(), entryPriceSol: SIZE / (Number(fill) / 1e6), bePct: beEst, sizeSol: SIZE, sizeMult: mult, buyFeeLamports: fees, buyDriftLamports: q1.out > 0n ? Math.round(Number(q1.out - fill) / Number(q1.out) * SIZE * LAMPORTS) : 0,
     peakRoi: 0, lastMarkRoi: 0, sellFails: 0, noRouteSince: null, rug: null, signals: { ...signals, impactPct: q2?.impact ?? q1.impact } };
   state.open.push(pos); bump(`${strat}.entries`); dirty = true;
   // Private creator-family trace: async for the sniper (never on its critical path); copy/edge wait up to 1 s, else it fills in later.
@@ -170,9 +176,12 @@ async function manage(p: Pos) {
   if (price) { p.lastMarkRoi = (price / p.entryPriceSol) - 1; if (p.lastMarkRoi > p.peakRoi) { p.peakRoi = p.lastMarkRoi; p.peakAt = Date.now(); } }
   const r = p.lastMarkRoi;
   let reason: string | null = p.forceExit ?? null;
+  // Oct 15: mark is vs our all-in buy price, so selling costs (~1.25% + sell fees) still apply; keep every profit exit above break-even
+  const be = (p.bePct ?? 5) / 100, arm = Math.max(cfg.trailArm, be + cfg.trail + 0.02), tp = Math.max(cfg.tp, be + 0.1);
   if (reason) {}
-  else if (r >= cfg.tp) reason = "take_profit";
-  else if (p.peakRoi >= cfg.trailArm && r <= p.peakRoi - cfg.trail) reason = "trailing_stop";
+  else if (r >= tp) reason = "take_profit";
+  else if (p.peakRoi >= arm && r <= p.peakRoi - cfg.trail) reason = "trailing_stop";
+  else if (holdS >= cfg.stallS && p.peakRoi < be) reason = "stalled";
   else if (r <= cfg.sl) reason = "stop_loss";
   else if (holdS >= cfg.maxHoldS) reason = "time_stop";
   if (!reason) return;
@@ -324,7 +333,7 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   if (!sc.length) for (const t of closed) if (t.rug?.riskScore != null && !sc.some((x) => x.mint === t.mint)) sc.push({ mint: t.mint, symbol: t.symbol, checkedAt: Date.parse(t.entryAt), score: t.rug.riskScore, level: t.rug.riskLevel, priceSol: t.entryPriceSol, liqUsd: t.rug.facts?.liquidityUsd ?? null, backfilled: true, after: {} });
   loop(scRecheck, 60_000);
   loop(pollNew, 6000); loop(rpcPing, 60_000); loop(scanCandidates, 8000);
-  loop(async () => { for (const p of [...state.open]) await manage(p); }, 10_000);
+  loop(async () => { for (const p of [...state.open]) await manage(p); }, 5_000); // Oct 15: 10 s -> 5 s price checks
   loop(async () => { writeFile("scorecard.json", sc); writeFile("names.json", nlog); writeFile("creators.json", creatorMints); writeFile("devstats.json", devStats); if (dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
 }
 
