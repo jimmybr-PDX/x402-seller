@@ -297,6 +297,16 @@ async function rugCheckUncached(mintRaw: string, chainRaw = "solana") {
   const f = await gatherFacts(mint);
   const base = scoreFacts(f); const ex = f.extra;
   const reasons = [...base.reasons, ...(ex?.checks ?? [])].sort((a, b) => b.points - a.points);
+  // Coins under 10 minutes old: warnings true of every new coin (age, thin liquidity, no socials yet) count far less;
+  // fake volume and big creator holdings count more, since they separate bad launches from normal ones.
+  const young = f.ageHours != null && f.ageHours < 10 / 60;
+  if (young) {
+    for (const x of reasons) {
+      if (["age", "liquidity", "no_socials"].includes(x.check) && x.points > 0) { x.points = Math.round(x.points / 4); x.detail += " (down-weighted: normal for a coin under 10 minutes old)"; }
+      if (["inorganic_volume", "dev_holding"].includes(x.check) && x.points > 0) { x.points = Math.round(x.points * 1.6); x.detail += " (weighted up for a brand-new coin)"; }
+    }
+    reasons.sort((a, b) => b.points - a.points);
+  }
   // Established (Jupiter-verified, highly organic, $1B+ cap): issuer authorities are normal for e.g. stablecoins; keep them visible at low weight.
   const sg = (ex?.signals ?? {}) as any;
   if (sg.jupiterVerified && Number(sg.organicScore) >= 90 && Number(sg.marketCapUsd) >= 1e9) {
@@ -308,7 +318,7 @@ async function rugCheckUncached(mintRaw: string, chainRaw = "solana") {
   const { extra: _x, ...factsOnly } = f;
   if (level === "low") logValidation(mint, score, f.priceUsd, f.liquidityUsd);
   return {
-    product: "RugRadar", chain, token: mint, riskScore: score, riskLevel: level, confidence, unknownSignals, verdict: verdictOf(level),
+    product: "RugRadar", chain, token: mint, ...(young ? { scoring: "new-coin scoring (under 10 minutes old)" } : {}), riskScore: score, riskLevel: level, confidence, unknownSignals, verdict: verdictOf(level),
     buyerSummary: buyerSummary(level, reasons.filter((x) => x.points > 0).map((x) => x.detail), confidence), buyer: ex?.signals ?? null,
     reasons: reasons.filter((x) => x.points > 0).map((x) => x.detail), checks: reasons,
     facts: { ...factsOnly, top1Pct: f.top1Pct && +f.top1Pct.toFixed(2), top10Pct: f.top10Pct && +f.top10Pct.toFixed(2), ageHours: f.ageHours && +f.ageHours.toFixed(1) },

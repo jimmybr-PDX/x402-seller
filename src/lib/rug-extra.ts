@@ -6,6 +6,24 @@ const j = (u: string, ms = 3500) => fetch(u, { headers: UA, signal: AbortSignal.
 const r2 = (n: number | null | undefined, d = 2) => (n == null || !isFinite(Number(n)) ? null : +Number(n).toFixed(d));
 export type Extra = { signals: Record<string, unknown>; checks: { check: string; points: number; detail: string }[]; unknown: string[]; ms: number };
 
+// Known early-buyer wallets: profitable early wallets from our public-trade research (winners.json) + wallets this
+// service has seen sniping (first 10 s) 3+ different coins. In-memory, free, no lookups.
+const knownWinners = new Set<string>();
+try { const fs = await import("node:fs"); for (const w of JSON.parse(fs.readFileSync(new URL("./paper/winners.json", import.meta.url), "utf8")).top ?? []) knownWinners.add(w.wallet); } catch {}
+const sniperSeen = new Map<string, Set<string>>();
+function noteSnipers(mint: string, ws: string[]) { for (const w of ws) { const x = sniperSeen.get(w) ?? new Set(); x.add(mint); sniperSeen.set(w, x); } if (sniperSeen.size > 50000) sniperSeen.delete(sniperSeen.keys().next().value!); }
+const isKnownSniper = (w: string) => (sniperSeen.get(w)?.size ?? 0) >= 3;
+/** pump.fun bonding curve state via RPC: active curve = still sellable on pump.fun even without a Jupiter route. */
+export async function pumpCurve(mint: string): Promise<{ active: boolean; complete: boolean } | null> {
+  try {
+    const { getProgramDerivedAddress, getAddressEncoder, address } = await import("@solana/kit");
+    const [pda] = await getProgramDerivedAddress({ programAddress: address("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), seeds: ["bonding-curve", getAddressEncoder().encode(address(mint))] });
+    const { rpc } = await import("./solana.js");
+    const v: any = await rpc<any>("getAccountInfo", [pda, { encoding: "base64" }], { timeoutMs: 1500 });
+    const b = Buffer.from(v?.value?.data?.[0] ?? "", "base64"); if (b.length < 49) return null;
+    return { active: b[48] === 0 && b.readBigUInt64LE(24) > 0n, complete: b[48] === 1 };
+  } catch { return null; }
+}
 /** pump.fun public trade history (newest first, 100/page). Reaches launch only for young tokens (<= 400 trades). */
 export async function pumpLaunch(mint: string, dev: string | null, supply: number) {
   const trades: any[] = []; let cursor = ""; let complete = false;
@@ -29,6 +47,19 @@ export async function pumpLaunch(mint: string, dev: string | null, supply: numbe
     const pct = (xs: any[]) => (supply > 0 ? r2((xs.reduce((a, t) => a + amt(t), 0) / supply) * 100, 2) : null);
     Object.assign(out, { sniperWallets10s: new Set(sniperBuys.map((t) => t.userAddress)).size, sniperSupplyPct10s: pct(sniperBuys),
       bundledWalletsLaunchSlot: new Set(bundleBuys.map((t) => t.userAddress)).size, bundledSupplyPctLaunchSlot: pct(bundleBuys) });
+    // First minute of trading
+    const m1 = asc.filter((t) => Date.parse(t.timestamp) - t0 <= 60_000);
+    const sol = (xs: any[]) => r2(xs.reduce((a, t) => a + Number(t.amountSol || 0), 0), 3);
+    const devFirstSell = dev ? asc.find((t) => t.userAddress === dev && t.type === "sell") : null;
+    out.firstMinute = { buyers: new Set(m1.filter((t) => t.type === "buy").map((t) => t.userAddress)).size, buySol: sol(m1.filter((t) => t.type === "buy")), sellSol: sol(m1.filter((t) => t.type === "sell")), trades: m1.length };
+    out.creatorFirstSellAfterSec = devFirstSell ? Math.round((Date.parse(devFirstSell.timestamp) - t0) / 1000) : null;
+    // Early snipers (first 10 s, not the dev): how much they still hold, and known sniper/winner wallets among early buyers
+    const sn = [...new Set(sniperBuys.map((t) => t.userAddress))];
+    const net = (w: string) => asc.filter((t) => t.userAddress === w).reduce((a, t) => a + (t.type === "buy" ? 1 : -1) * amt(t), 0);
+    out.sniperStillHoldPct = supply > 0 ? r2((sn.reduce((a, w) => a + Math.max(0, net(w)), 0) / supply) * 100, 2) : null;
+    const early = [...new Set(asc.filter((t) => t.type === "buy" && Date.parse(t.timestamp) - t0 <= 60_000 && t.userAddress !== dev).map((t) => t.userAddress))];
+    out.knownSnipersEarly = early.filter(isKnownSniper).length; out.knownWinnersEarly = early.filter((w) => knownWinners.has(w)).length;
+    noteSnipers(mint, sn);
   }
   return out;
 }
@@ -40,13 +71,19 @@ export async function solanaExtra(mint: string, o: { jup: any; mintInfo: any; ds
   // Sell check: ask Jupiter for a sell quote of ~$100 worth (or 0.1% of supply).
   const price = Number(jup?.usdPrice ?? 0);
   const units = price > 0 ? Math.floor((100 / price) * 10 ** (o.decimals ?? 0)) : Math.floor(o.supply * 0.001 * 10 ** (o.decimals ?? 0));
-  const [quote, pump] = await Promise.all([
+  const [quote, pump, curve] = await Promise.all([
     units > 0 && mint !== SOL ? fetch(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${mint}&outputMint=${SOL}&amount=${units}&slippageBps=1000`, { headers: UA, signal: AbortSignal.timeout(3500) }).then((r) => r.json()).catch(() => null) : Promise.resolve(null),
     isPump ? pumpLaunch(mint, jup?.dev ?? null, o.supply).catch(() => null) : Promise.resolve(null),
+    isPump ? pumpCurve(mint) : Promise.resolve(null),
   ]);
   const s: Record<string, unknown> = {};
   // Sell route (honeypot pattern on Solana = no route out, or a huge impact)
-  if (quote?.outAmount) { s.sellRoute = true; s.sellPriceImpactPct = r2(Number(quote.priceImpactPct) * 100, 2); s.sellTestUsd = price > 0 ? 100 : null; s.sellVia = [...new Set((quote.routePlan ?? []).map((x: any) => x.swapInfo?.label).filter(Boolean))].slice(0, 3); }
+  // Can it still be sold? Jupiter route or, for pump.fun coins, an active bonding curve.
+  s.sellableOnPumpCurve = curve ? curve.active : null;
+  s.canSell = quote?.outAmount ? "yes (Jupiter route)" : curve?.active ? "yes (pump.fun curve)" : curve == null && !quote ? "unknown" : "no route found";
+  if (!quote?.outAmount && curve?.active) { s.sellRoute = "pump.fun curve only"; }
+  else if (!quote?.outAmount && isPump && curve && !curve.active && /ROUTE|NOT_TRADABLE/i.test(String(quote?.errorCode ?? quote?.error ?? ""))) { s.sellRoute = false; add("sell_route", 30, "Cannot be sold: no Jupiter route and the pump.fun curve is closed (honeypot / dead-coin high-risk pattern)."); }
+  else if (quote?.outAmount) { s.sellRoute = true; s.sellPriceImpactPct = r2(Number(quote.priceImpactPct) * 100, 2); s.sellTestUsd = price > 0 ? 100 : null; s.sellVia = [...new Set((quote.routePlan ?? []).map((x: any) => x.swapInfo?.label).filter(Boolean))].slice(0, 3); }
   else if (/ROUTE|NOT_TRADABLE/i.test(String(quote?.errorCode ?? quote?.error ?? "")) && (o.liquidityUsd ?? 0) > 1000) { s.sellRoute = false; add("sell_route", 30, "No sell route found despite listed liquidity (honeypot high-risk pattern)."); }
   else unknown.push("sell route");
   if (Number(s.sellPriceImpactPct) > 20) add("sell_impact", 10, `Selling ~$100 moves the price ${s.sellPriceImpactPct}%: very thin exit.`);
@@ -92,6 +129,13 @@ export async function solanaExtra(mint: string, o: { jup: any; mintInfo: any; ds
     if (Number(pump.sniperSupplyPct10s) >= 25) add("snipers", 10, `Snipers bought ${pump.sniperSupplyPct10s}% of supply in the first 10 seconds.`);
     if (Number(pump.bundledSupplyPctLaunchSlot) >= 15) add("bundled", 12, `${pump.bundledWalletsLaunchSlot} wallets bought ${pump.bundledSupplyPctLaunchSlot}% in the launch block (bundle high-risk pattern).`);
     if (!pump.historyComplete) unknown.push("sniper/bundle share (too many trades to reach launch)");
+    Object.assign(s, { firstMinute: pump.firstMinute ?? null, creatorFirstSellAfterSec: pump.creatorFirstSellAfterSec ?? null, sniperStillHoldPct: pump.sniperStillHoldPct ?? null, knownSnipersEarly: pump.knownSnipersEarly ?? null, knownWinnersEarly: pump.knownWinnersEarly ?? null });
+    const fm: any = pump.firstMinute;
+    if (pump.creatorFirstSellAfterSec != null && Number(pump.creatorFirstSellAfterSec) <= 60) add("creator_fast_sell", 12, `Creator started selling ${pump.creatorFirstSellAfterSec} seconds after launch.`);
+    if (fm && fm.sellSol > fm.buySol && fm.trades >= 5) add("first_minute_selling", 6, `More selling than buying in the first minute (${fm.sellSol} vs ${fm.buySol} SOL).`);
+    if (fm && fm.buyers < 5 && fm.trades > 0) add("first_minute_thin", 4, `Only ${fm.buyers} buyers in the first minute.`);
+    if (Number(pump.sniperStillHoldPct) >= 20) add("snipers_holding", 8, `Early snipers still hold ${pump.sniperStillHoldPct}% of supply (likely to sell into buyers).`);
+    if (Number(pump.knownSnipersEarly) >= 3) add("known_snipers", 5, `${pump.knownSnipersEarly} repeat sniper wallets bought in the first minute.`);
   } else if (isPump) unknown.push("pump.fun trade history"); else s.launchAnalysis = "not a pump.fun launch";
   return { signals: s, checks, unknown, ms: Date.now() - t0 };
 }
