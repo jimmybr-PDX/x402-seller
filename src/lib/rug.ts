@@ -119,8 +119,16 @@ const mintsCreated = (tx: any): string[] => {
   return ins.filter((i: any) => /^initializeMint2?$/.test(i?.parsed?.type ?? "")).map((i: any) => i.parsed.info.mint);
 };
 
+// Time budgets: slow public-RPC steps answer "not available" instead of holding the whole check; the lookup keeps
+// running in the background and its result is cached per creator so the next check of that creator is instant.
+const TIMEOUT = Symbol("timeout");
+const within = <T>(p: Promise<T>, ms: number): Promise<T | typeof TIMEOUT> => Promise.race([p, new Promise<typeof TIMEOUT>((r) => setTimeout(() => r(TIMEOUT), ms).unref?.())]);
+const HISTORY_MS = Number(process.env.RUG_HISTORY_MS ?? 1200);
+type History = { priorLaunches: number; priorDead: number; funder: string | null } | null;
+const historyCache = new Map<string, { at: number; p: Promise<History> }>();
 export async function gatherFacts(mint: string): Promise<Facts> {
   const unknown: string[] = [];
+  const T0 = Date.now(); const left = (budget: number) => Math.max(50, T0 + budget - Date.now()); // whole-check budget: slow steps share one deadline
   const timingsMs: Record<string, number> = {};
   const t0 = Date.now();
   const timed = <T>(name: string, p: Promise<T>) => p.finally(() => { timingsMs[name] = Date.now() - t0; });
@@ -138,9 +146,9 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   const extraP = timed("buyerSignals", marketP.then((m) => solanaExtra(mint, { jup, mintInfo: info, dsPairs: m.pairs, supply, decimals, liquidityUsd: liqOf(m) })).catch(() => null));
   const fast = !!(jup?.dev && jup.createdAt && jup.audit?.topHoldersPercentage != null);
   const [largest, market, oldest] = await Promise.all([
-    fast ? null : rpc<any>("getTokenLargestAccounts", [mint], { timeoutMs: 6000 }).catch(() => null),
+    fast ? null : within(rpc<any>("getTokenLargestAccounts", [mint], { timeoutMs: 1500 }), left(1300)).then((v) => (v === TIMEOUT ? null : v)).catch(() => null),
     marketP,
-    fast ? null : oldestTx(mint).catch(() => null),
+    fast ? null : within(cached(`oldest:${mint}`, () => oldestTx(mint, 2), (v: any) => !!v), left(1300)).then((v) => (v === TIMEOUT ? null : v)).catch(() => null),
   ]);
   let top1Pct: number | null = null, top10Pct: number | null = null, holderSource: string | null = null;
   if (jup?.audit?.topHoldersPercentage != null) { top10Pct = Number(jup.audit.topHoldersPercentage); top1Pct = top10Pct / 3; holderSource = "jupiter"; } // Jupiter gives the top-holders share only; top1 is a conservative stand-in
@@ -155,7 +163,8 @@ export async function gatherFacts(mint: string): Promise<Facts> {
     if (typeof jup.audit?.devMints === "number") { priorLaunches = Math.max(0, jup.audit.devMints - 1); priorDead = Math.max(0, priorLaunches - (jup.audit.devMigrations ?? 0)); }
   } else if (oldest?.complete) {
     if (oldest.time) ageHours = (Date.now() / 1000 - oldest.time) / 3600;
-    creator = feePayer(await getTx(oldest.sig));
+    const tx = await within(getTx(oldest.sig), left(1500)); creator = tx === TIMEOUT ? null : feePayer(tx);
+    if (!creator) unknown.push("creator (lookup over time budget)");
   } else unknown.push("creator (token has too much history for the free RPC lookup)");
   if (creator && fast) {
     if (priorDead! >= 3 && priorDead! / Math.max(1, priorLaunches!) >= 0.5) flagDeployer(creator, priorDead!, priorLaunches!);
@@ -168,27 +177,33 @@ export async function gatherFacts(mint: string): Promise<Facts> {
       return { v: (t?.transaction?.message?.instructions ?? []).find((i: any) => i?.parsed?.type === "transfer" && i.parsed.info?.destination === creator)?.parsed?.info?.source ?? null };
     }, (v) => v != null).then((x) => (x ? x.v : null)).catch(() => null);
     const FUNDER_MS = Number(process.env.RUG_FUNDER_MS ?? 1500);
-    const got = await Promise.race([look, new Promise<"timeout">((r) => setTimeout(() => r("timeout"), FUNDER_MS).unref?.())]);
+    const got = await Promise.race([look, new Promise<"timeout">((r) => setTimeout(() => r("timeout"), Math.min(FUNDER_MS, left(1700))).unref?.())]);
     if (got === "timeout") unknown.push("funding wallet (lookup over time budget)"); else funder = got as string | null;
     timingsMs.funder = Date.now() - t0;
   } else if (creator) {
-    try {
-      const sigs = await rpc<any[]>("getSignaturesForAddress", [creator, { limit: 100 }], { timeoutMs: 8000 });
+    const c = creator; let h = historyCache.get(c);
+    if (!h || Date.now() - h.at > 30 * 60_000) { h = { at: Date.now(), p: (async (): Promise<History> => {
+      const sigs = await rpc<any[]>("getSignaturesForAddress", [c, { limit: 100 }], { timeoutMs: 8000 });
       const txs: any[] = [];
       for (let i = 0; i < Math.min(sigs.length, 40); i += 8) txs.push(...(await Promise.all(sigs.slice(i, i + 8).map((s) => getTx(s.signature)))));
-      const others = [...new Set(txs.filter((t) => feePayer(t) === creator).flatMap(mintsCreated))].filter((m) => m !== mint).slice(0, 29);
-      priorLaunches = others.length; priorDead = 0;
-      if (others.length) { const live = new Set((await ds(others)).filter((p) => (p.liquidity?.usd ?? 0) >= 1000).map((p) => p.baseToken?.address)); priorDead = others.filter((m) => !live.has(m)).length; }
-      if (priorDead >= 3 && priorDead / Math.max(1, priorLaunches) >= 0.5) flagDeployer(creator, priorDead, priorLaunches);
-      const first = await oldestTx(creator, 1).catch(() => null);
-      if (first?.complete) {
-        const t = await getTx(first.sig);
-        const ix = (t?.transaction?.message?.instructions ?? []).find((i: any) => i?.parsed?.type === "transfer" && i.parsed.info?.destination === creator);
-        funder = ix?.parsed?.info?.source ?? null;
-      }
-    } catch { unknown.push("deployer history"); }
+      const others = [...new Set(txs.filter((t) => feePayer(t) === c).flatMap(mintsCreated))].filter((m) => m !== mint).slice(0, 29);
+      let dead = 0;
+      if (others.length) { const live = new Set((await ds(others)).filter((p) => (p.liquidity?.usd ?? 0) >= 1000).map((p) => p.baseToken?.address)); dead = others.filter((m) => !live.has(m)).length; }
+      if (dead >= 3 && dead / Math.max(1, others.length) >= 0.5) flagDeployer(c, dead, others.length);
+      let f: string | null = null;
+      const first = await oldestTx(c, 1).catch(() => null);
+      if (first?.complete) { const t = await getTx(first.sig); f = (t?.transaction?.message?.instructions ?? []).find((i: any) => i?.parsed?.type === "transfer" && i.parsed.info?.destination === c)?.parsed?.info?.source ?? null; }
+      return { priorLaunches: others.length, priorDead: dead, funder: f };
+    })().catch(() => null) }; historyCache.set(c, h); if (historyCache.size > 5000) historyCache.delete(historyCache.keys().next().value!); }
+    const got = await within(h.p, Math.min(HISTORY_MS, left(1700)));
+    if (got === TIMEOUT) unknown.push("deployer history (not available: lookup over time budget, retrying in background)");
+    else if (got == null) { unknown.push("deployer history"); historyCache.delete(c); }
+    else { priorLaunches = got.priorLaunches; priorDead = got.priorDead; funder = got.funder; }
+    timingsMs.history = Date.now() - t0;
   }
-  const extra = await extraP;
+  const ex = await within(extraP, left(1900));
+  const extra = ex === TIMEOUT ? null : ex;
+  if (ex === TIMEOUT) unknown.push("buyer signals (not available: over time budget)");
   return { extra, mint, decimals, supply, mintAuthority: info.mintAuthority ?? null, freezeAuthority: info.freezeAuthority ?? null, token2022: acct.value.owner !== "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
     top1Pct, top10Pct, liquidityUsd: liqOf(market),  priceUsd: market.priceUsd, pairs: market.pairs.length,
     timingsMs: { ...timingsMs, total: Date.now() - t0 }, marketUnknown: market.failed, holderSource, holderCount: jup?.holderCount ?? null, launchpad: jup?.launchpad ?? null,
