@@ -263,6 +263,9 @@ function onNewCoin(c: any, via: string) {
   if (createdMs < now) push(lat.detectMs, now - createdMs);
   bump(`seen.${via}`);
   // SNIPER: earliest realistic entry = the moment we detect it (+ measured exec latency inside enter()). One sniper buy per 60 s max (leaves RugRadar snapshot queue room for every trade).
+  // Warm-up: the first ~3 minutes after a restart the server is busy starting (event-loop delays up to seconds),
+  // which made the pre-check overrun its 250 ms budget; no sniper buys until it settles.
+  if (process.uptime() < 180) { bump("sniper.skippedWarmup"); return; }
   if (now - createdMs < 30_000 && now - (state.counters.lastSnipeMs ?? 0) > 60_000) {
     state.counters.lastSnipeMs = now;
     (async () => {
