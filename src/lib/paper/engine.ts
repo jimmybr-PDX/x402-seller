@@ -14,7 +14,7 @@ import { initStore, loadState, loadTrades, appendTrade, saveState, storeStatus, 
 const SOL = "So11111111111111111111111111111111111111112";
 const UA = { "user-agent": "Mozilla/5.0 (paper-trader)", accept: "application/json" };
 const LAMPORTS = 1e9;
-const SIZE_SOL = Number(process.env.PAPER_SIZE_SOL ?? 0.5);
+const SIZE_SOL = Number(process.env.PAPER_SIZE_SOL ?? 0.1);
 const RPC = process.env.SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 const BASE_FEE = 5000, ATA_RENT = 2039280;
 export type Strat = string; // "sniper", or "<copy|edge>_r<maxRugScore>" threshold variants
@@ -25,11 +25,11 @@ const baseOf = (s: Strat) => s.split(/[_@]/)[0] as Base;
 type Cfg = { prio: number; tip: number; buyFail: number; sellFail: number; maxOpen: number; tp: number; trailArm: number; trail: number; sl: number; maxHoldS: number };
 export const CFG: Record<Base, Cfg> = {
   // sniper: contested launch block via public RPC, no Jito bundle -> high buy-failure rate, quick exits (snipers hold seconds-minutes)
-  sniper: { prio: 1_000_000, tip: 1_000_000, buyFail: 0.25, sellFail: 0.05, maxOpen: 3, tp: 0.4, trailArm: 0.2, trail: 0.15, sl: -0.25, maxHoldS: 120 },
+  sniper: { prio: 3_000_000, tip: 2_000_000, buyFail: 0.25, sellFail: 0.05, maxOpen: 3, tp: 0.4, trailArm: 0.2, trail: 0.15, sl: -0.25, maxHoldS: 120 },
   // copy: rules inferred from profitable early wallets (enter ~20-180 s, ~0.5 SOL, hold ~5-20 min, take profit / trail)
-  copy: { prio: 300_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.3, maxHoldS: 1200 },
+  copy: { prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.3, maxHoldS: 1200 },
   // edge: momentum + RugRadar low risk only
-  edge: { prio: 300_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 1800 },
+  edge: { prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 1800 },
 };
 type Pos = { id: string; strat: Strat; mint: string; symbol: string; entryAt: number; entryAgeS: number; latencyMs: number; costLamports: number; tokens: string; entryPriceSol: number;
   forceExit?: string; buyDriftLamports?: number; sellDriftLamports?: number; buyFeeLamports?: number; sizeSol?: number; sizeMult?: number; family?: Family | null; peakAt?: number; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
