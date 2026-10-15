@@ -174,8 +174,8 @@ function onNewCoin(c: any, via: string) {
   if (seen.size > 3000) seen.delete(seen.keys().next().value!);
   if (createdMs < now) push(lat.detectMs, now - createdMs);
   bump(`seen.${via}`);
-  // SNIPER: earliest realistic entry = the moment we detect it (+ measured exec latency inside enter()). One sniper buy per 20 s max.
-  if (now - createdMs < 30_000 && now - (state.counters.lastSnipeMs ?? 0) > 20_000) {
+  // SNIPER: earliest realistic entry = the moment we detect it (+ measured exec latency inside enter()). One sniper buy per 60 s max (leaves RugRadar snapshot queue room for every trade).
+  if (now - createdMs < 30_000 && now - (state.counters.lastSnipeMs ?? 0) > 60_000) {
     state.counters.lastSnipeMs = now;
     enter("sniper", { mint, symbol: String(c.symbol ?? ""), createdMs }, { detectLatencyMs: now - createdMs, via }).catch((e) => { lastErr = String(e).slice(0, 120); });
   }
