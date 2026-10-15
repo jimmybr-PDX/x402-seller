@@ -7,6 +7,7 @@
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { getProgramDerivedAddress, getAddressEncoder, address } from "@solana/kit";
 import { initStore, loadState, loadTrades, appendTrade, saveState, storeStatus } from "./store.js";
 
 const SOL = "So11111111111111111111111111111111111111112";
@@ -51,6 +52,17 @@ async function quote(input: string, output: string, amount: string | number): Pr
   if (q && /NO_ROUTE|COULD_NOT_FIND/i.test(String(q.errorCode ?? q.error ?? ""))) noRouteFlag = true;
   if (!q?.outAmount) return null;
   return { out: BigInt(q.outAmount), impact: Number(q.priceImpactPct ?? 0) };
+}
+/** Fallback when Jupiter drops a dead pump.fun coin from routing: price a sell straight against the bonding curve account
+ * (constant product on virtual reserves, minus ~1.25% pump.fun fees). Returns null if the curve is complete/unreadable. */
+async function curveSell(mint: string, tokens: bigint): Promise<bigint | null> {
+  try {
+    const [pda] = await getProgramDerivedAddress({ programAddress: address("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), seeds: ["bonding-curve", getAddressEncoder().encode(address(mint))] });
+    const r: any = await (await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [pda, { encoding: "base64" }] }), signal: AbortSignal.timeout(5000) })).json();
+    const b = Buffer.from(r?.result?.value?.data?.[0] ?? "", "base64"); if (b.length < 49 || b[48] === 1) return null;
+    const vtok = b.readBigUInt64LE(8), vsol = b.readBigUInt64LE(16);
+    return (vsol * tokens / (vtok + tokens)) * 9875n / 10000n;
+  } catch { return null; }
 }
 async function rpcPing(): Promise<number> {
   const t = Date.now();
@@ -128,6 +140,8 @@ async function manage(p: Pos) {
   const fees = BASE_FEE + cfg.prio + cfg.tip;
   if (!q || q.out === 0n) {
     if (!noRouteFlag && q == null) { bump("quoteErrors"); return; } // API error/rate limit: retry, do not count as unsellable
+    const direct = await curveSell(p.mint, BigInt(p.tokens));
+    if (direct != null && direct > 0n) { await sleep(execLatencyMs()); return close(p, reason + "_via_curve", direct, fees); }
     p.noRouteSince ??= Date.now();
     if (Date.now() - p.noRouteSince > 10 * 60_000) return close(p, "no_sell_route_writeoff", 0n, fees);
     return;
@@ -192,13 +206,15 @@ async function scanCandidates() {
     if (!wantCopy && !wantEdge) continue;
     const tr = await trades(c.mint, 100); if (!tr) continue;
     const f = flow(tr, c.creator);
+    // edge looks later (2-10 min) when sell flow is normal, so it uses a looser flow test; RugRadar is its main filter
+    const edgeFlow = f.uniqueBuyers >= 20 && f.buySol >= f.sellSol && !f.devSold && (f.mcapUsd ?? 0) >= 7000 && (f.mcapUsd ?? 0) <= 80000;
     const momentum = f.uniqueBuyers >= 15 && f.buySol >= 1.5 * Math.max(0.5, f.sellSol) && !f.devSold && (f.mcapUsd ?? 0) >= 6000 && (f.mcapUsd ?? 0) <= 60000;
     if (wantCopy) {
       if (momentum || f.winnerBuyers.length >= 1 && !f.devSold) { c.checked.add("copy"); await enter("copy", c, { ...f, ageS: Math.round(age), rule: f.winnerBuyers.length ? "winner_wallet_bought" : "momentum" }); }
       else if (age > 150) c.checked.add("copy");
     }
     if (wantEdge) {
-      if (!momentum) { if (age > 540) c.checked.add("edge"); continue; }
+      if (!edgeFlow) { if (age > 540) c.checked.add("edge"); continue; }
       if (now - lastRugAt < 45_000) continue; // throttle
       lastRugAt = now; c.checked.add("edge");
       const rug = await rugSnapshot(c.mint);
