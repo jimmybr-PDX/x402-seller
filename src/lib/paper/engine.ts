@@ -8,6 +8,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { getProgramDerivedAddress, getAddressEncoder, address } from "@solana/kit";
+import { familyOf, type Family } from "./family.js";
 import { initStore, loadState, loadTrades, appendTrade, saveState, storeStatus, loadFile, writeFile } from "./store.js";
 
 const SOL = "So11111111111111111111111111111111111111112";
@@ -20,7 +21,7 @@ export type Strat = string; // "sniper", or "<copy|edge>_r<maxRugScore>" thresho
 type Base = "copy" | "sniper" | "edge";
 export const RUG_VARIANTS: Record<"copy" | "edge", number[]> = { copy: [25, 40, 60], edge: [15, 25, 40] }; // max RugRadar score allowed
 export const STRATS: Strat[] = ["sniper", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
-const baseOf = (s: Strat) => s.split("_")[0] as Base;
+const baseOf = (s: Strat) => s.split(/[_@]/)[0] as Base;
 type Cfg = { prio: number; tip: number; buyFail: number; sellFail: number; maxOpen: number; tp: number; trailArm: number; trail: number; sl: number; maxHoldS: number };
 export const CFG: Record<Base, Cfg> = {
   // sniper: contested launch block via public RPC, no Jito bundle -> high buy-failure rate, quick exits (snipers hold seconds-minutes)
@@ -31,7 +32,7 @@ export const CFG: Record<Base, Cfg> = {
   edge: { prio: 300_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 1800 },
 };
 type Pos = { id: string; strat: Strat; mint: string; symbol: string; entryAt: number; entryAgeS: number; latencyMs: number; costLamports: number; tokens: string; entryPriceSol: number;
-  forceExit?: string; peakAt?: number; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
+  forceExit?: string; sizeSol?: number; sizeMult?: number; family?: Family | null; peakAt?: number; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
 type State = { v: 1; open: Pos[]; counters: Record<string, number>; startedAt: string };
 let state: State = { v: 1, open: [], counters: {}, startedAt: new Date().toISOString() };
 let closed: any[] = [];
@@ -111,28 +112,39 @@ function flow(tr: any[], creator: string) {
     priceSol: tr[0] ? Number(tr[0].priceSol) : null, mcapUsd: tr[0] ? Number(tr[0].priceUsd) * 1e9 : null };
 }
 
-async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs: number }, signals: any) {
+export const GOOD_DEV_MULTS = [1.5, 2, 3]; // extra test positions on "Known good dev" coins
+async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs: number }, signals: any, mult = 1) {
+  const SIZE = SIZE_SOL * mult;
+  if (mult === 1) { // trusted-dev coin: also open bigger test positions, tracked as their own variants ("<strategy>@2x")
+    const fam = await Promise.race([familyFor(c.mint) ?? Promise.resolve(null), sleep(baseOf(strat) === "sniper" ? 0 : 1000).then(() => null)]).catch(() => null);
+    const tr = trustFor(c.mint, fam as any);
+    if (tr?.knownGood) for (const m of GOOD_DEV_MULTS) enter(`${strat}@${m}x`, c, { ...signals, trust: tr }, m).catch(() => {});
+    if (tr) signals = { ...signals, trust: tr };
+  }
   const cfg = CFG[baseOf(strat)];
   if (state.open.filter((p) => p.strat === strat).length >= cfg.maxOpen) { bump(`${strat}.skipFull`); return; }
   if (state.open.some((p) => p.strat === strat && p.mint === c.mint)) return;
   const tDecide = Date.now();
-  const q1 = await quote(SOL, c.mint, Math.round(SIZE_SOL * LAMPORTS));
+  const q1 = await quote(SOL, c.mint, Math.round(SIZE * LAMPORTS));
   if (!q1) { bump(`${strat}.noBuyRoute`); return; }
   const lms = execLatencyMs(); await sleep(lms);
-  const q2 = await quote(SOL, c.mint, Math.round(SIZE_SOL * LAMPORTS)); // price at simulated landing
+  const q2 = await quote(SOL, c.mint, Math.round(SIZE * LAMPORTS)); // price at simulated landing
   const fill = q2 && q2.out < q1.out ? q2.out : q1.out; // worse of the two (never flatter)
   const fees = BASE_FEE + cfg.prio + cfg.tip;
   const id = `${strat}:${c.mint}`;
   if (rng(id + ":buy") < cfg.buyFail) { // failed buy: fees burned, no position
     bump(`${strat}.buyFailed`);
-    const t = { id, strat, mint: c.mint, symbol: c.symbol, result: "buy_failed", entryAt: new Date(tDecide).toISOString(), pnlSol: -fees / LAMPORTS, roi: -fees / (SIZE_SOL * LAMPORTS), signals };
+    const t = { id, strat, mint: c.mint, symbol: c.symbol, result: "buy_failed", entryAt: new Date(tDecide).toISOString(), pnlSol: -fees / LAMPORTS, roi: -fees / (SIZE * LAMPORTS), sizeSol: SIZE, sizeMult: mult, signals };
     closed.push(t); appendTrade(t); dirty = true; return;
   }
   const latencyMs = Date.now() - tDecide;
   const pos: Pos = { id, strat, mint: c.mint, symbol: c.symbol, entryAt: Date.now(), entryAgeS: Math.round((Date.now() - c.createdMs) / 1000), latencyMs,
-    costLamports: Math.round(SIZE_SOL * LAMPORTS) + fees + ATA_RENT, tokens: fill.toString(), entryPriceSol: SIZE_SOL / (Number(fill) / 1e6),
+    costLamports: Math.round(SIZE * LAMPORTS) + fees + ATA_RENT, tokens: fill.toString(), entryPriceSol: SIZE / (Number(fill) / 1e6), sizeSol: SIZE, sizeMult: mult,
     peakRoi: 0, lastMarkRoi: 0, sellFails: 0, noRouteSince: null, rug: null, signals: { ...signals, impactPct: q2?.impact ?? q1.impact } };
   state.open.push(pos); bump(`${strat}.entries`); dirty = true;
+  // Private creator-family trace: async for the sniper (never on its critical path); copy/edge wait up to 1 s, else it fills in later.
+  const famP = familyFor(c.mint);
+  if (famP) { famP.then((f) => { pos.family = f; dirty = true; }).catch(() => {}); if (baseOf(strat) !== "sniper") await Promise.race([famP, sleep(1000)]).catch(() => {}); }
   // Record RugRadar's full signals at the moment of the buy, for every strategy (sniper: right after, never delays entry).
   if (!signals.rug) pendingRug.set(pos.id, rugSnapshot(c.mint).then((r) => { pos.rug = r; dirty = true; pendingRug.delete(pos.id); if (strat === "sniper" && r?.riskLevel === "high") pos.forceExit = "rugradar_high_risk_after_entry"; return r; }));
   else pos.rug = signals.rug;
@@ -181,6 +193,29 @@ async function manage(p: Pos) {
   const out = q2 && q2.out < q.out ? q2.out : q.out;
   close(p, reason, out, fees);
 }
+let creatorMints: Record<string, [string, number][]> = {};
+const famCtx = { coinsBy: (w: string) => (creatorMints[w] ?? []).map(([mint, t]) => ({ mint, t })),
+  rugged: (m: string) => { const x = sc.find((y) => y.mint === m); const a = x && (x.after["24h"] ?? x.after["1h"] ?? x.after["10m"]); return a ? isRugged(a) : null; },
+  flagged: (w: string) => !!flagged()[w] };
+// ---------------- PRIVATE "trusted creator" flag (paper + scorecard only) ----------------
+let trustedManual: Record<string, string> = {};
+try { trustedManual = JSON.parse(fs.readFileSync(new URL("./trusted-creators.json", import.meta.url), "utf8")).wallets ?? {}; } catch {}
+let devStats: Record<string, { launches: number; graduated: number; at: number }> = {}; // from Jupiter dev stats seen in RugRadar snapshots
+export type Trust = { knownGood: boolean; reason: string | null; wallet: string | null };
+function noteDev(creator: string, rug: any) { const b = rug?.buyer; if (creator && typeof b?.devLaunches === "number") { devStats[creator] = { launches: b.devLaunches, graduated: b.devGraduated ?? 0, at: Date.now() }; } }
+function trustOf(wallets: string[]): Trust {
+  for (const [i, w] of wallets.entries()) {
+    const who = i === 0 ? "Creator" : `Funder ${i} hop${i > 1 ? "s" : ""} back`;
+    if (trustedManual[w]) return { knownGood: true, reason: `${who} is a known team: ${trustedManual[w]}`, wallet: w };
+    const d = devStats[w];
+    if (d && d.graduated >= 2 && d.graduated / Math.max(1, d.launches) >= 0.3) return { knownGood: true, reason: `${who} had ${d.graduated} of ${d.launches} earlier coins graduate on pump.fun`, wallet: w };
+    const ours = (creatorMints[w] ?? []).map(([m]) => famCtx.rugged(m)).filter((v) => v != null);
+    if (ours.length >= 2 && ours.every((v) => v === false)) return { knownGood: true, reason: `${who}'s ${ours.length} earlier coins we tracked all survived`, wallet: w };
+  }
+  return { knownGood: false, reason: null, wallet: null };
+}
+const trustFor = (mint: string, f: Family | null | undefined) => { const c = seen.get(mint)?.creator ?? f?.creator; return c ? trustOf([c, ...(f?.hops ?? []).filter((h) => !h.label).map((h) => h.wallet)]) : null; };
+function familyFor(mint: string) { const c = seen.get(mint); return c?.creator ? familyOf(c.creator, c.createdMs, famCtx) : null; }
 async function close(p: Pos, reason: string, outLamports: bigint, fees: number) {
   state.open = state.open.filter((x) => x !== p);
   const pr = pendingRug.get(p.id); // trade log must carry RugRadar's snapshot taken at buy time
@@ -189,8 +224,8 @@ async function close(p: Pos, reason: string, outLamports: bigint, fees: number) 
   const pnl = (proceeds - p.costLamports) / LAMPORTS;
   const t = { id: p.id, strat: p.strat, mint: p.mint, symbol: p.symbol, result: pnl > 0 ? "win" : "loss", exitReason: reason,
     entryAt: new Date(p.entryAt).toISOString(), exitAt: new Date().toISOString(), holdS: Math.round((Date.now() - p.entryAt) / 1000), entryAgeS: p.entryAgeS, latencyMs: p.latencyMs,
-    sizeSol: SIZE_SOL, costSol: +(p.costLamports / LAMPORTS).toFixed(6), proceedsSol: +(proceeds / LAMPORTS).toFixed(6), pnlSol: +pnl.toFixed(6), roi: +(pnl / SIZE_SOL).toFixed(4),
-    entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug };
+    sizeSol: p.sizeSol ?? SIZE_SOL, sizeMult: p.sizeMult ?? 1, costSol: +(p.costLamports / LAMPORTS).toFixed(6), proceedsSol: +(proceeds / LAMPORTS).toFixed(6), pnlSol: +pnl.toFixed(6), roi: +(pnl / (p.sizeSol ?? SIZE_SOL)).toFixed(4),
+    entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, trust: trustFor(p.mint, p.family) };
   state.open = state.open.filter((x) => x !== p); closed.push(t); appendTrade(t); dirty = true; bump(`${p.strat}.exits`);
 }
 
@@ -201,6 +236,7 @@ function onNewCoin(c: any, via: string) {
   const creator = c.creator ?? c.traderPublicKey ?? "";
   seen.set(mint, { mint, symbol: String(c.symbol ?? "").slice(0, 16), creator, createdMs, seenMs: now, checked: new Set(), devBuyPct: c.devBuyPct ?? null });
   nameLog(mint, String(c.name ?? ""), String(c.symbol ?? ""), createdMs);
+  if (creator) { const a = (creatorMints[creator] ??= []); if (!a.some((x) => x[0] === mint)) a.push([mint, createdMs]); if (a.length > 100) a.shift(); const ks = Object.keys(creatorMints); if (ks.length > 50000) delete creatorMints[ks[0]]; }
   if (creator) { const xs = (creatorLaunches.get(creator) ?? []).filter((t) => now - t < 3_600_000); xs.push(now); creatorLaunches.set(creator, xs); if (creatorLaunches.size > 5000) creatorLaunches.delete(creatorLaunches.keys().next().value!); }
   if (seen.size > 3000) seen.delete(seen.keys().next().value!);
   if (createdMs < now) push(lat.detectMs, now - createdMs);
@@ -275,12 +311,12 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   startWs();
   const loop = async (fn: () => Promise<unknown>, ms: number) => { for (;;) { try { await fn(); } catch (e) { lastErr = String((e as Error).message ?? e).slice(0, 160); } await sleep(ms); } };
   process.once("SIGTERM", () => { saveState(state, "paper: flush on shutdown").catch(() => {}); });
-  sc = loadFile<Sc[]>("scorecard.json", []); nlog = loadFile("names.json", {});
+  sc = loadFile<Sc[]>("scorecard.json", []); nlog = loadFile("names.json", {}); creatorMints = loadFile("creators.json", {}); devStats = loadFile("devstats.json", {});
   if (!sc.length) for (const t of closed) if (t.rug?.riskScore != null && !sc.some((x) => x.mint === t.mint)) sc.push({ mint: t.mint, symbol: t.symbol, checkedAt: Date.parse(t.entryAt), score: t.rug.riskScore, level: t.rug.riskLevel, priceSol: t.entryPriceSol, liqUsd: t.rug.facts?.liquidityUsd ?? null, backfilled: true, after: {} });
   loop(scRecheck, 60_000);
   loop(pollNew, 6000); loop(rpcPing, 60_000); loop(scanCandidates, 8000);
   loop(async () => { for (const p of [...state.open]) await manage(p); }, 10_000);
-  loop(async () => { writeFile("scorecard.json", sc); writeFile("names.json", nlog); if (dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
+  loop(async () => { writeFile("scorecard.json", sc); writeFile("names.json", nlog); writeFile("creators.json", creatorMints); writeFile("devstats.json", devStats); if (dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
 }
 
 export function paperSummary() {
@@ -303,7 +339,7 @@ export const paperTrades = () => closed;
 
 // ---------------- RugRadar scorecard: every coin RugRadar checked, re-checked at +10 min, +1 h, +24 h ----------------
 type After = { at: number; changePct: number | null; priceSol: number | null; liqUsd: number | null; sellable: boolean | null; graduated: boolean; late: boolean };
-export type Sc = { mint: string; symbol: string; checkedAt: number; score: number; level: string; priceSol: number | null; liqUsd: number | null; backfilled?: boolean; names?: Names | null; after: Record<string, After> };
+export type Sc = { mint: string; symbol: string; checkedAt: number; score: number; level: string; priceSol: number | null; liqUsd: number | null; backfilled?: boolean; names?: Names | null; family?: Family | null; trust?: Trust | null; after: Record<string, After> };
 // ---------------- name / ticker history (paper + scorecard only) ----------------
 type Names = { nameKey: string; tickerKey: string; sameBefore: number; sameBeforeOurLog: number; sameBeforeDexScreener: number; rank: number; firstMover: boolean; launches1h: number; trend: boolean; priorScored: number; priorRugged: number };
 /** Normalize for "same or very similar": lowercase, letters+digits only, drop a leading "the", trailing digits and common filler suffixes. */
@@ -360,6 +396,9 @@ async function scRecord(mint: string, r: any) {
   sc.push({ mint, symbol: String(r?.facts?.symbol ?? seen.get(mint)?.symbol ?? "").slice(0, 16), checkedAt: Date.now(), score: r.riskScore, level: r.riskLevel, priceSol: s0.priceSol, liqUsd: s0.liqUsd ?? r?.facts?.liquidityUsd ?? null, names, after: {} });
   if (sc.length > 5000) sc.shift();
   scDirty = true;
+  const row = sc[sc.length - 1]; const cr = seen.get(mint)?.creator; if (cr) noteDev(cr, r);
+  row.trust = trustFor(mint, null);
+  familyFor(mint)?.then((f) => { row.family = f; row.trust = trustFor(mint, f); scDirty = true; }).catch(() => {});
 }
 async function scRecheck() {
   const now = Date.now(); let n = 0;
