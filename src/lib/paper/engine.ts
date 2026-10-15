@@ -341,14 +341,14 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   closed = loadTrades().slice(-5000);
   await loadWinners();
   startWs();
-  const loop = async (fn: () => Promise<unknown>, ms: number) => { for (;;) { try { await fn(); } catch (e) { lastErr = String((e as Error).message ?? e).slice(0, 160); } await sleep(ms); } };
+  const loop = async (fn: () => Promise<unknown>, ms: number) => { for (;;) { await new Promise((r) => setImmediate(r)); try { await fn(); } catch (e) { lastErr = String((e as Error).message ?? e).slice(0, 160); } await sleep(ms); } };
   process.once("SIGTERM", () => { saveState(state, "paper: flush on shutdown").catch(() => {}); });
   sc = loadFile<Sc[]>("scorecard.json", []); nlog = loadFile("names.json", {}); creatorMints = loadFile("creators.json", {}); devStats = loadFile("devstats.json", {});
   if (!sc.length) for (const t of closed) if (t.rug?.riskScore != null && !sc.some((x) => x.mint === t.mint)) sc.push({ mint: t.mint, symbol: t.symbol, checkedAt: Date.parse(t.entryAt), score: t.rug.riskScore, level: t.rug.riskLevel, priceSol: t.entryPriceSol, liqUsd: t.rug.facts?.liquidityUsd ?? null, backfilled: true, after: {} });
   loop(scRecheck, 60_000);
   loop(pollNew, 6000); loop(rpcPing, 60_000); loop(scanCandidates, 8000);
-  loop(async () => { for (const p of [...state.open]) await manage(p); }, 5_000); // Oct 15: 10 s -> 5 s price checks
-  loop(async () => { writeFile("scorecard.json", sc); writeFile("names.json", nlog); writeFile("creators.json", creatorMints); writeFile("devstats.json", devStats); if (dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
+  loop(async () => { for (const p of [...state.open]) { await manage(p); await new Promise((r) => setImmediate(r)); } }, 5_000); // Oct 15: 10 s -> 5 s price checks
+  loop(async () => { for (const [n, o] of [["scorecard.json", sc], ["names.json", nlog], ["creators.json", creatorMints], ["devstats.json", devStats]] as const) { writeFile(n, o); await new Promise((r) => setImmediate(r)); } if (dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
 }
 
 export function paperSummary() {

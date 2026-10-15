@@ -242,6 +242,8 @@ async function main() {
   // Render terminates TLS at the edge; trust proxy so 402 resource URLs become https://.
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
+  // Oct 15: answer the keep-awake probe before any other middleware, so it never waits on body parsing, tracking or payments.
+  app.get("/health", (_req, res) => { res.set("Cache-Control", "no-store").json({ ok: true }); }); // Oct 15: answered before all other middleware (keep-awake probe)
   app.use(express.json());
 
   // Interest tracker (counts only; visitor = salted hash of IP+UA, raw IPs never stored).
@@ -1900,7 +1902,7 @@ async function main() {
     if (!res.headersSent) res.status(502).json({ error: "payment_or_server_error", message });
   });
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const httpServer = app.listen(PORT, "0.0.0.0", () => {
     startTraffic();
     initCredits().catch(() => {});
     setTimeout(() => startPaper({ rugCheck: (m) => rugCheck(m, "solana"), flagged: flaggedWallets }).catch(() => {}), 20_000);
@@ -1909,6 +1911,8 @@ async function main() {
     console.log(`x402 seller listening on http://localhost:${PORT}  env=${X402_ENV} networks=${NETWORKS.join(",")} (${NETWORK_LABEL})`);
     console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}, /news ${NEWS_PRICE}, /price ${TOKEN_PRICE}, /solana-price ${SOL_PRICE}, /balance ${BALANCE_PRICE}, /tx ${TX_PRICE}, /gas ${GAS_PRICE}, /search ${SEARCH_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}${Object.keys(builderCode).length ? ` builderCode=${BUILDER_CODE_RAW}` : ""}`);
   });
+  // Render's proxy reuses idle connections; Node's 5 s default closes them first and some requests hang. Keep them open longer than the proxy.
+  httpServer.keepAliveTimeout = 65_000; httpServer.headersTimeout = 66_000;
 }
 
 main().catch((err) => {
