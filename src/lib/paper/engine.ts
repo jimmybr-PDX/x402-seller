@@ -200,6 +200,7 @@ function onNewCoin(c: any, via: string) {
   const now = Date.now();
   const creator = c.creator ?? c.traderPublicKey ?? "";
   seen.set(mint, { mint, symbol: String(c.symbol ?? "").slice(0, 16), creator, createdMs, seenMs: now, checked: new Set(), devBuyPct: c.devBuyPct ?? null });
+  nameLog(mint, String(c.name ?? ""), String(c.symbol ?? ""), createdMs);
   if (creator) { const xs = (creatorLaunches.get(creator) ?? []).filter((t) => now - t < 3_600_000); xs.push(now); creatorLaunches.set(creator, xs); if (creatorLaunches.size > 5000) creatorLaunches.delete(creatorLaunches.keys().next().value!); }
   if (seen.size > 3000) seen.delete(seen.keys().next().value!);
   if (createdMs < now) push(lat.detectMs, now - createdMs);
@@ -224,7 +225,7 @@ function startWs() {
   try {
     ws = new W("wss://pumpportal.fun/api/data");
     ws.onopen = () => ws.send(JSON.stringify({ method: "subscribeNewToken" }));
-    ws.onmessage = (ev: any) => { try { const m = JSON.parse(String(ev.data)); if (m.mint && m.txType === "create") onNewCoin({ mint: m.mint, symbol: m.symbol, creator: m.traderPublicKey, created_timestamp: Date.now() - 1000, devBuyPct: m.initialBuy != null ? Number(m.initialBuy) / 1e7 : null }, "ws"); } catch {} };
+    ws.onmessage = (ev: any) => { try { const m = JSON.parse(String(ev.data)); if (m.mint && m.txType === "create") onNewCoin({ mint: m.mint, symbol: m.symbol, name: m.name, creator: m.traderPublicKey, created_timestamp: Date.now() - 1000, devBuyPct: m.initialBuy != null ? Number(m.initialBuy) / 1e7 : null }, "ws"); } catch {} };
     ws.onclose = () => { ws = null; setTimeout(startWs, 30_000).unref?.(); };
     ws.onerror = () => {};
   } catch { ws = null; }
@@ -274,12 +275,12 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   startWs();
   const loop = async (fn: () => Promise<unknown>, ms: number) => { for (;;) { try { await fn(); } catch (e) { lastErr = String((e as Error).message ?? e).slice(0, 160); } await sleep(ms); } };
   process.once("SIGTERM", () => { saveState(state, "paper: flush on shutdown").catch(() => {}); });
-  sc = loadFile<Sc[]>("scorecard.json", []);
+  sc = loadFile<Sc[]>("scorecard.json", []); nlog = loadFile("names.json", {});
   if (!sc.length) for (const t of closed) if (t.rug?.riskScore != null && !sc.some((x) => x.mint === t.mint)) sc.push({ mint: t.mint, symbol: t.symbol, checkedAt: Date.parse(t.entryAt), score: t.rug.riskScore, level: t.rug.riskLevel, priceSol: t.entryPriceSol, liqUsd: t.rug.facts?.liquidityUsd ?? null, backfilled: true, after: {} });
   loop(scRecheck, 60_000);
   loop(pollNew, 6000); loop(rpcPing, 60_000); loop(scanCandidates, 8000);
   loop(async () => { for (const p of [...state.open]) await manage(p); }, 10_000);
-  loop(async () => { writeFile("scorecard.json", sc); if (dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
+  loop(async () => { writeFile("scorecard.json", sc); writeFile("names.json", nlog); if (dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
 }
 
 export function paperSummary() {
@@ -302,7 +303,38 @@ export const paperTrades = () => closed;
 
 // ---------------- RugRadar scorecard: every coin RugRadar checked, re-checked at +10 min, +1 h, +24 h ----------------
 type After = { at: number; changePct: number | null; priceSol: number | null; liqUsd: number | null; sellable: boolean | null; graduated: boolean; late: boolean };
-export type Sc = { mint: string; symbol: string; checkedAt: number; score: number; level: string; priceSol: number | null; liqUsd: number | null; backfilled?: boolean; after: Record<string, After> };
+export type Sc = { mint: string; symbol: string; checkedAt: number; score: number; level: string; priceSol: number | null; liqUsd: number | null; backfilled?: boolean; names?: Names | null; after: Record<string, After> };
+// ---------------- name / ticker history (paper + scorecard only) ----------------
+type Names = { nameKey: string; tickerKey: string; sameBefore: number; sameBeforeOurLog: number; sameBeforeDexScreener: number; rank: number; firstMover: boolean; launches1h: number; trend: boolean; priorScored: number; priorRugged: number };
+/** Normalize for "same or very similar": lowercase, letters+digits only, drop a leading "the", trailing digits and common filler suffixes. */
+export const normName = (x: string) => x.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g, "").replace(/^the/, "").replace(/(coin|token|inu|onsol|sol|ai)$/, "").replace(/\d+$/, "") || x.toLowerCase();
+let nlog: Record<string, [string, number][]> = {}; // key -> [mint, launchMs][] from our own launch log
+const meta = new Map<string, { nameKey: string; tickerKey: string; t: number }>();
+function nameLog(mint: string, name: string, ticker: string, t: number) {
+  const nk = "n:" + normName(name), tk = "t:" + normName(ticker); meta.set(mint, { nameKey: nk, tickerKey: tk, t }); if (meta.size > 20000) meta.delete(meta.keys().next().value!);
+  for (const k of new Set([nk, tk])) { const a = (nlog[k] ??= []); if (!a.some((x) => x[0] === mint)) a.push([mint, t]); if (a.length > 200) a.shift(); }
+  const ks = Object.keys(nlog); if (ks.length > 30000) delete nlog[ks[0]];
+}
+const dsCache = new Map<string, { at: number; v: { mint: string; t: number }[] }>();
+/** Free DexScreener search for older same-name Solana coins (cached 6 h). Only coins that ever got a pool show up. */
+async function dsSame(q: string, key: (x: string) => string, want: string) {
+  const c = dsCache.get(want); if (c && Date.now() - c.at < 6 * 3_600_000) return c.v;
+  const d = await getJ(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, 5000);
+  const v = ((d?.pairs ?? []) as any[]).filter((p) => p.chainId === "solana" && (key(p.baseToken?.symbol ?? "") === want || key(p.baseToken?.name ?? "") === want)).map((p) => ({ mint: p.baseToken.address, t: p.pairCreatedAt ?? 0 }));
+  dsCache.set(want, { at: Date.now(), v }); if (dsCache.size > 2000) dsCache.delete(dsCache.keys().next().value!); return v;
+}
+async function nameHistory(mint: string): Promise<Names | null> {
+  const m = meta.get(mint); if (!m) return null;
+  const ours = [...new Map([...(nlog[m.nameKey] ?? []), ...(nlog[m.tickerKey] ?? [])].filter((x) => x[0] !== mint)).entries()];
+  const raw = seen.get(mint)?.symbol ?? m.tickerKey.slice(2);
+  const ds = (await dsSame(raw, normName, m.tickerKey.slice(2))).filter((x) => x.mint !== mint && !ours.some((o) => o[0] === x.mint));
+  const before = [...ours.filter(([, t]) => t < m.t).map(([mm]) => mm), ...ds.filter((x) => x.t && x.t < m.t).map((x) => x.mint)];
+  const launches1h = ours.filter(([, t]) => Math.abs(m.t - t) < 3_600_000).length + 1;
+  const prior = sc.filter((x) => before.includes(x.mint));
+  const latest = (x: Sc) => x.after["24h"] ?? x.after["1h"] ?? x.after["10m"];
+  return { nameKey: m.nameKey, tickerKey: m.tickerKey, sameBefore: before.length, sameBeforeOurLog: ours.filter(([, t]) => t < m.t).length, sameBeforeDexScreener: ds.filter((x) => x.t && x.t < m.t).length,
+    rank: before.length + 1, firstMover: before.length === 0, launches1h, trend: launches1h >= 5, priorScored: prior.length, priorRugged: prior.filter((x) => isRugged(latest(x))).length };
+}
 let sc: Sc[] = []; let scDirty = false;
 export const scorecard = () => sc;
 const OFFSETS: [string, number][] = [["10m", 600_000], ["1h", 3_600_000], ["24h", 86_400_000]];
@@ -324,7 +356,8 @@ async function nowState(mint: string): Promise<{ priceSol: number | null; liqUsd
 async function scRecord(mint: string, r: any) {
   if (sc.some((x) => x.mint === mint && Date.now() - x.checkedAt < 3_600_000)) return; // one scorecard row per coin per hour
   const s0 = await nowState(mint);
-  sc.push({ mint, symbol: String(r?.facts?.symbol ?? seen.get(mint)?.symbol ?? "").slice(0, 16), checkedAt: Date.now(), score: r.riskScore, level: r.riskLevel, priceSol: s0.priceSol, liqUsd: s0.liqUsd ?? r?.facts?.liquidityUsd ?? null, after: {} });
+  const names = await nameHistory(mint).catch(() => null);
+  sc.push({ mint, symbol: String(r?.facts?.symbol ?? seen.get(mint)?.symbol ?? "").slice(0, 16), checkedAt: Date.now(), score: r.riskScore, level: r.riskLevel, priceSol: s0.priceSol, liqUsd: s0.liqUsd ?? r?.facts?.liquidityUsd ?? null, names, after: {} });
   if (sc.length > 5000) sc.shift();
   scDirty = true;
 }
