@@ -7,6 +7,8 @@
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { monitorEventLoopDelay } from "node:perf_hooks";
+const loopLag = monitorEventLoopDelay({ resolution: 20 }); loopLag.enable();
 import { getProgramDerivedAddress, getAddressEncoder, address } from "@solana/kit";
 import { familyOf, type Family } from "./family.js";
 import { initStore, loadState, loadTrades, appendTrade, saveState, storeStatus, loadFile, writeFile } from "./store.js";
@@ -39,6 +41,7 @@ let closed: any[] = [];
 const seen = new Map<string, { mint: string; symbol: string; creator: string; createdMs: number; seenMs: number; checked: Set<string>; devBuyPct: number | null }>();
 const creatorLaunches = new Map<string, number[]>(); // in-session creator history (launch times)
 const preMs: number[] = [];
+const preLog: { ms: number; at: number; authority: string; uptimeS: number }[] = [];
 let flagged: () => Record<string, any> = () => ({});
 const lat = { detectMs: [] as number[], rpcMs: [] as number[] };
 let winners = new Set<string>();
@@ -89,7 +92,7 @@ async function preCheck(mint: string, creator: string, devBuyPct: number | null)
     const info = r?.result?.value?.data?.parsed?.info;
     if (info) { authority = "ok"; if (info.mintAuthority) red.push("mint_authority"); if (info.freezeAuthority) red.push("freeze_authority"); }
   } catch { authority = "timeout"; red.push("authority_check_timed_out"); } // stricter (Oct 15): no blind buys
-  const ms = Date.now() - t0; push(preMs, ms);
+  const ms = Date.now() - t0; push(preMs, ms); push(preLog as any, { ms, at: Date.now(), authority, uptimeS: Math.round(process.uptime()) } as any);
   return { ms, red, authority, devBuyPct, creatorLaunches1h: launches1h };
 }
 async function rpcPing(): Promise<number> {
@@ -349,7 +352,7 @@ export function paperSummary() {
       open: state.open.filter((p) => p.strat === s).map((p) => ({ symbol: p.symbol, mint: p.mint, ageS: Math.round((Date.now() - p.entryAt) / 1000), markRoi: +p.lastMarkRoi.toFixed(3) })) };
   }
   return { paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL, sniper and edge-finder 0.1 SOL", startedAt: state.startedAt, strategies: by,
-    latency: { sniperPrecheckMedianMs: med(preMs), sniperPrecheckP90Ms: preMs.length ? [...preMs].sort((a, b) => a - b)[Math.floor(preMs.length * 0.9)] : 0, medianDetectMs: med(lat.detectMs), detectNote: "websocket launches have no on-chain timestamp in the feed; counted as 1000 ms (conservative floor). Poll-detected launches are measured.", medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
+    latency: { precheckRecent: preLog.slice(-30), eventLoopDelayMs: { p50: Math.round(loopLag.percentile(50) / 1e6), p99: Math.round(loopLag.percentile(99) / 1e6), max: Math.round(loopLag.max / 1e6) }, sniperPrecheckMedianMs: med(preMs), sniperPrecheckP90Ms: preMs.length ? [...preMs].sort((a, b) => a - b)[Math.floor(preMs.length * 0.9)] : 0, medianDetectMs: med(lat.detectMs), detectNote: "websocket launches have no on-chain timestamp in the feed; counted as 1000 ms (conservative floor). Poll-detected launches are measured.", medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
     counters: state.counters, store: storeStatus(), websocket: !!ws, winnersTracked: winners.size, lastError: lastErr,
     recent: closed.slice(-40).reverse().map(({ signals, rug, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, precheckMs: signals?.precheck?.ms ?? null, rugMax: signals?.rugMax ?? null, rugLevel: rug?.riskLevel ?? null })) };
 }
