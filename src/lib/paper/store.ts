@@ -50,3 +50,6 @@ export async function saveState(state: unknown, msg: string) {
   } catch (e) { lastError = String((e as Error).message ?? e).replace(/\s+/g, " ").slice(0, 160); }
   finally { busy = false; }
 }
+
+export function loadFile<T>(name: string, fallback: T): T { try { return JSON.parse(fs.readFileSync(path.join(dir, "data", name), "utf8")); } catch { return fallback; } }
+export function writeFile(name: string, obj: unknown) { if (mode === "unavailable") return; fs.writeFileSync(path.join(dir, "data", name), JSON.stringify(obj) + "\n"); }

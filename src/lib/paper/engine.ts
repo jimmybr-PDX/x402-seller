@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { getProgramDerivedAddress, getAddressEncoder, address } from "@solana/kit";
-import { initStore, loadState, loadTrades, appendTrade, saveState, storeStatus } from "./store.js";
+import { initStore, loadState, loadTrades, appendTrade, saveState, storeStatus, loadFile, writeFile } from "./store.js";
 
 const SOL = "So11111111111111111111111111111111111111112";
 const UA = { "user-agent": "Mozilla/5.0 (paper-trader)", accept: "application/json" };
@@ -81,7 +81,10 @@ async function preCheck(mint: string, creator: string, devBuyPct: number | null)
   if (devBuyPct != null && devBuyPct > 15) red.push(`creator_bought_${devBuyPct.toFixed(0)}pct`);
   let authority: string = "unknown";
   try {
-    const r: any = await (await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [mint, { encoding: "jsonParsed", commitment: "processed" }] }), signal: AbortSignal.timeout(250) })).json();
+    const r: any = await Promise.race([
+      fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [mint, { encoding: "jsonParsed", commitment: "processed" }] }), signal: AbortSignal.timeout(250) }).then((x) => x.json()),
+      sleep(250).then(() => { throw new Error("budget"); }),
+    ]);
     const info = r?.result?.value?.data?.parsed?.info;
     if (info) { authority = "ok"; if (info.mintAuthority) red.push("mint_authority"); if (info.freezeAuthority) red.push("freeze_authority"); }
   } catch { authority = "timeout"; } // over budget: proceed on the memory-only signals (logged)
@@ -143,7 +146,7 @@ function rugSnapshot(mint: string): Promise<any> {
 }
 async function rugSnapshotNow(mint: string) {
   if (!rugCheckFn) return null;
-  try { const r = await rugCheckFn(mint); return { riskScore: r.riskScore, riskLevel: r.riskLevel, confidence: r.confidence, unknownSignals: r.unknownSignals, checks: r.checks, buyer: r.buyer, facts: r.facts }; }
+  try { const r = await rugCheckFn(mint); bump("rugChecksTotal"); scRecord(mint, r).catch(() => {}); return { riskScore: r.riskScore, riskLevel: r.riskLevel, confidence: r.confidence, unknownSignals: r.unknownSignals, checks: r.checks, buyer: r.buyer, facts: r.facts }; }
   catch (e) { return { error: String((e as Error).message ?? e).slice(0, 100) }; }
 }
 
@@ -271,9 +274,12 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   startWs();
   const loop = async (fn: () => Promise<unknown>, ms: number) => { for (;;) { try { await fn(); } catch (e) { lastErr = String((e as Error).message ?? e).slice(0, 160); } await sleep(ms); } };
   process.once("SIGTERM", () => { saveState(state, "paper: flush on shutdown").catch(() => {}); });
+  sc = loadFile<Sc[]>("scorecard.json", []);
+  if (!sc.length) for (const t of closed) if (t.rug?.riskScore != null && !sc.some((x) => x.mint === t.mint)) sc.push({ mint: t.mint, symbol: t.symbol, checkedAt: Date.parse(t.entryAt), score: t.rug.riskScore, level: t.rug.riskLevel, priceSol: t.entryPriceSol, liqUsd: t.rug.facts?.liquidityUsd ?? null, backfilled: true, after: {} });
+  loop(scRecheck, 60_000);
   loop(pollNew, 6000); loop(rpcPing, 60_000); loop(scanCandidates, 8000);
   loop(async () => { for (const p of [...state.open]) await manage(p); }, 10_000);
-  loop(async () => { if (dirty) { dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
+  loop(async () => { writeFile("scorecard.json", sc); if (dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
 }
 
 export function paperSummary() {
@@ -293,3 +299,45 @@ export function paperSummary() {
     recent: closed.slice(-40).reverse().map(({ signals, rug, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, precheckMs: signals?.precheck?.ms ?? null, rugMax: signals?.rugMax ?? null, rugLevel: rug?.riskLevel ?? null })) };
 }
 export const paperTrades = () => closed;
+
+// ---------------- RugRadar scorecard: every coin RugRadar checked, re-checked at +10 min, +1 h, +24 h ----------------
+type After = { at: number; changePct: number | null; priceSol: number | null; liqUsd: number | null; sellable: boolean | null; graduated: boolean; late: boolean };
+export type Sc = { mint: string; symbol: string; checkedAt: number; score: number; level: string; priceSol: number | null; liqUsd: number | null; backfilled?: boolean; after: Record<string, After> };
+let sc: Sc[] = []; let scDirty = false;
+export const scorecard = () => sc;
+const OFFSETS: [string, number][] = [["10m", 600_000], ["1h", 3_600_000], ["24h", 86_400_000]];
+/** Current price in SOL per whole token, from free sources: pump.fun bonding curve account (RPC) or DexScreener after graduation. */
+async function nowState(mint: string): Promise<{ priceSol: number | null; liqUsd: number | null; graduated: boolean; sellable: boolean | null }> {
+  try {
+    const [pda] = await getProgramDerivedAddress({ programAddress: address("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), seeds: ["bonding-curve", getAddressEncoder().encode(address(mint))] });
+    const r: any = await (await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [pda, { encoding: "base64" }] }), signal: AbortSignal.timeout(5000) })).json();
+    const b = Buffer.from(r?.result?.value?.data?.[0] ?? "", "base64");
+    if (b.length >= 49 && b[48] === 0) { const vtok = Number(b.readBigUInt64LE(8)), vsol = Number(b.readBigUInt64LE(16)); return { priceSol: (vsol / 1e9) / (vtok / 1e6), liqUsd: null, graduated: false, sellable: true }; }
+  } catch {}
+  const d = await getJ(`https://api.dexscreener.com/tokens/v1/solana/${mint}`, 5000);
+  const pairs = (Array.isArray(d) ? d : []).filter((x: any) => x.baseToken?.address === mint);
+  const best = pairs.sort((a: any, b: any) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
+  const q = await quote(mint, SOL, 1_000_000_000); // 1,000 tokens: does any sell route exist?
+  const sellable = q ? true : noRouteFlag ? false : null;
+  return { priceSol: best?.priceNative ? Number(best.priceNative) : (q ? Number(q.out) / 1e9 / 1000 : null), liqUsd: best ? (best.liquidity?.usd ?? 0) : null, graduated: true, sellable };
+}
+async function scRecord(mint: string, r: any) {
+  if (sc.some((x) => x.mint === mint && Date.now() - x.checkedAt < 3_600_000)) return; // one scorecard row per coin per hour
+  const s0 = await nowState(mint);
+  sc.push({ mint, symbol: String(r?.facts?.symbol ?? seen.get(mint)?.symbol ?? "").slice(0, 16), checkedAt: Date.now(), score: r.riskScore, level: r.riskLevel, priceSol: s0.priceSol, liqUsd: s0.liqUsd ?? r?.facts?.liquidityUsd ?? null, after: {} });
+  if (sc.length > 5000) sc.shift();
+  scDirty = true;
+}
+async function scRecheck() {
+  const now = Date.now(); let n = 0;
+  for (const x of sc) {
+    for (const [k, off] of OFFSETS) {
+      if (x.after[k] || now - x.checkedAt < off || n >= 20) continue; // at most 20 lookups/min, free sources only
+      n++; const st = await nowState(x.mint);
+      const changePct = st.priceSol != null && x.priceSol ? +(((st.priceSol / x.priceSol) - 1) * 100).toFixed(1) : null;
+      x.after[k] = { at: now, changePct, priceSol: st.priceSol, liqUsd: st.liqUsd, sellable: st.sellable, graduated: st.graduated, late: now - x.checkedAt > off * 1.5 + 120_000 };
+      scDirty = true;
+    }
+  }
+}
+export const isRugged = (a?: After) => !!a && ((a.changePct != null && a.changePct <= -90) || a.sellable === false || (a.graduated && a.liqUsd != null && a.liqUsd < 500));

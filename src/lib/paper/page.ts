@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { paperSummary, paperTrades } from "./engine.js";
+import { registerScorecard } from "./scorecard-page.js";
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 let solUsd: { v: number | null; at: number } = { v: null, at: 0 };
 /** Live SOL/USD from Jupiter's free price API, cached 5 minutes. */
@@ -21,6 +22,7 @@ const usd = (n: number | null | undefined, p: number | null) => (n == null || p 
 const pct = (n: number | null | undefined) => (n == null ? "-" : (n > 0 ? "+" : "") + (n * 100).toFixed(1) + "%");
 const secs = (n?: number) => (n == null ? "-" : n < 120 ? `${n} seconds` : `${(n / 60).toFixed(1)} minutes`);
 export function registerPaper(app: Express) {
+  registerScorecard(app);
   app.get("/paper.json", (_req, res) => { res.set("Cache-Control", "no-store").json(paperSummary()); });
   app.get("/paper/trades.json", (_req, res) => { res.set("Cache-Control", "no-store").json(paperTrades().slice(-500)); });
   app.get("/paper", async (_req, res) => {
@@ -38,6 +40,6 @@ export function registerPaper(app: Express) {
 <p>Running since ${esc(s.startedAt).replace("T", " ").slice(0, 16)} UTC &middot; SOL price used: ${p ? "$" + p.toFixed(2) : "unavailable"} (live, refreshed every 5 minutes) &middot; Sniper safety pre-check time: typical ${s.latency.sniperPrecheckMedianMs} ms, slowest 10% ${s.latency.sniperPrecheckP90Ms} ms or more (target under 250 ms) &middot; Time to spot a new coin: about ${(s.latency.medianDetectMs / 1000).toFixed(1)} seconds &middot; Time for a pretend trade to land: about ${(s.latency.simulatedExecMs / 1000).toFixed(1)} seconds &middot; Data saved to: ${s.store.mode === "github" ? "private GitHub repo" : esc(s.store.mode)}</p>
 <h2>Totals by strategy</h2><table><tr><th>Strategy</th><th>Finished trades</th><th>Profitable trades</th><th>Win rate</th><th>Total spent (SOL)</th><th>Total profit/loss (SOL)</th><th>Total profit/loss (USD)</th><th>Average gain/loss per trade</th><th>Buys that failed</th><th>Trades still open</th></tr>${rows}</table>
 <h2>Recent trades</h2><table><tr><th>Time (UTC)</th><th>Strategy</th><th>Coin</th><th>Result</th><th>Why it sold</th><th>Coin age when bought</th><th>Held for</th><th>Bought for (SOL)</th><th>Sold for (SOL)</th><th>Profit/loss (SOL)</th><th>Profit/loss (USD)</th><th>Gain/loss %</th><th>RugRadar risk score (0 safe - 100 risky)</th><th>Sniper pre-check time</th></tr>${rec}</table>
-<p>"Bought for" includes fees and the token account deposit; "Sold for" is what came back after fees, with the deposit refunded. <a href="/paper.json">Raw data</a> &middot; <a href="/paper/trades.json">All trades</a></p>`);
+<p>"Bought for" includes fees and the token account deposit; "Sold for" is what came back after fees, with the deposit refunded. <a href="/paper/rugradar">RugRadar scorecard</a> &middot; <a href="/paper.json">Raw data</a> &middot; <a href="/paper/trades.json">All trades</a></p>`);
   });
 }
