@@ -1,4 +1,57 @@
-{ "name": "@rugradar/solana-agent-kit-rugradar", "version": "0.1.0", "description": "RugRadar rug-pull / token-safety / honeypot checks for Solana Agent Kit. Automated heuristic, may be wrong. Not financial advice. Do your own research.", "type": "module", "main": "dist/index.js", "types": "dist/index.d.ts",
-  "files": ["dist", "README.md"], "scripts": { "build": "tsc -p ." }, "keywords": ["rug check","honeypot","token safety","solana","x402","solana-agent-kit"],
-  "license": "MIT", "repository": { "type": "git", "url": "https://github.com/jimmybr-PDX/x402-seller", "directory": "plugins/solana-agent-kit-rugradar" },
-  "peerDependencies": { "solana-agent-kit": ">=2.0.0", "zod": ">=3" } }
+{
+  "name": "solana-agent-kit-rugradar",
+  "version": "0.1.0",
+  "description": "RugRadar rug-pull / token-safety / honeypot checks for Solana Agent Kit. Automated heuristic, may be wrong. Not financial advice. Do your own research.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p .",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "rug check",
+    "rug pull checker",
+    "honeypot",
+    "token safety",
+    "solana",
+    "base",
+    "x402",
+    "mcp",
+    "rugradar",
+    "memecoin",
+    "pump.fun",
+    "solana-agent-kit"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jimmybr-PDX/x402-seller",
+    "directory": "plugins/solana-agent-kit-rugradar"
+  },
+  "peerDependencies": {
+    "solana-agent-kit": ">=2.0.0",
+    "zod": ">=3"
+  },
+  "author": "jimmy.pdx",
+  "homepage": "https://x402-seller-pmlm.onrender.com/rugradar",
+  "bugs": {
+    "url": "https://github.com/jimmybr-PDX/x402-seller/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "@types/node": "^20.14.0",
+    "zod": "^3.23.8"
+  }
+}

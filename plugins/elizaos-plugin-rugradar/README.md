@@ -7,6 +7,14 @@ Each call costs $0.01 and is paid from a prepaid RugRadar credit key (sent as `X
 
 > Automated heuristic, may be wrong. Not financial advice. Do your own research. Results describe high-risk patterns, not people.
 
+## Install
+
+```
+npm install elizaos-plugin-rugradar
+```
+
+RugRadar: https://x402-seller-pmlm.onrender.com/rugradar
+
 ## Setup
 1. Buy credits (x402, USDC on Base or Solana): `GET https://x402-seller-pmlm.onrender.com/credits/buy?credits=100` (1–1000 credits, $0.01 each). The response contains your key.
 2. Set `RUGRADAR_API_KEY=<your key>` in your agent's environment.
