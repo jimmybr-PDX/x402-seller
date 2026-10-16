@@ -12,6 +12,7 @@ const loopLag = monitorEventLoopDelay({ resolution: 20 }); loopLag.enable();
 import { getProgramDerivedAddress, getAddressEncoder, getAddressDecoder, address } from "@solana/kit";
 import { familyOf, type Family } from "./family.js";
 import { namedWallet, type Named } from "./named.js";
+import { track, pin, chainTrades, curveState, setOn, isOn, chainStat } from "./chain-trades.js";
 import { privateSignals, noteLaunchMeta, launchMeta, type Priv } from "./private-signals.js";
 import { initStore, loadState, loadTrades, appendTrade, saveState, storeStatus, loadFile, writeFile } from "./store.js";
 
@@ -74,7 +75,15 @@ const med = (a: number[]) => (a.length ? [...a].sort((x, y) => x - y)[Math.floor
 const push = (a: number[], v: number) => { a.push(v); if (a.length > 200) a.shift(); };
 const rng = (seed: string) => parseInt(createHash("sha256").update(seed).digest("hex").slice(0, 8), 16) / 0xffffffff; // deterministic
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const getJ = (u: string, ms = 5000) => fetch(u, { headers: UA, signal: AbortSignal.timeout(ms) }).then((r) => (r.ok ? r.json() : null)).catch(() => null) as Promise<any>;
+// Oct 16: record pump.fun response codes/headers (diagnostics for blocks vs rate limits), per endpoint
+export const pumpDiag: Record<string, { ok: number; fail: number; codes: Record<string, number>; last: any }> = {};
+function noteHttp(u: string, r: Response | null, err?: string) {
+  const host = /swap-api/.test(u) ? "swap-api trades" : /frontend-api/.test(u) ? "frontend-api coins list" : null; if (!host) return;
+  const d = (pumpDiag[host] ??= { ok: 0, fail: 0, codes: {}, last: null }); const code = r ? String(r.status) : `error:${(err ?? "").slice(0, 40)}`;
+  d.codes[code] = (d.codes[code] ?? 0) + 1; if (r?.ok) d.ok++; else d.fail++;
+  if (!r?.ok) d.last = { at: new Date().toISOString(), code, server: r?.headers.get("server") ?? null, cfRay: r?.headers.get("cf-ray") ? "present" : null, cfMitigated: r?.headers.get("cf-mitigated") ?? null, retryAfter: r?.headers.get("retry-after") ?? null, rateLimitRemaining: r?.headers.get("x-ratelimit-remaining") ?? null, contentType: r?.headers.get("content-type") ?? null };
+}
+const getJ = (u: string, ms = 5000) => fetch(u, { headers: UA, signal: AbortSignal.timeout(ms) }).then((r) => { noteHttp(u, r); return r; }, (e) => { noteHttp(u, null, String(e?.name ?? e)); throw e; }).then((r) => (r.ok ? r.json() : null)).catch(() => null) as Promise<any>;
 
 let noRouteFlag = false;
 /** Jupiter quote. null = no fill; noRouteFlag tells a genuine NO_ROUTES_FOUND apart from a rate limit / outage. */
@@ -83,7 +92,14 @@ async function quote(input: string, output: string, amount: string | number): Pr
   const r = await fetch(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${input}&outputMint=${output}&amount=${amount}&slippageBps=2000`, { headers: UA, signal: AbortSignal.timeout(5000) }).catch(() => null);
   const q: any = r ? await r.json().catch(() => null) : null;
   if (q && /NO_ROUTE|COULD_NOT_FIND/i.test(String(q.errorCode ?? q.error ?? ""))) noRouteFlag = true;
-  if (!q?.outAmount) return null;
+  if (!q?.outAmount) { // Oct 16: Jupiter gave nothing (not a genuine no-route) and the Solana backup is on -> price against the bonding curve
+    if (noRouteFlag || !isOn() || (input !== SOL && output !== SOL)) return null;
+    const mint = input === SOL ? output : input; const cs = (await curveState([mint]))[mint]; if (!cs || cs.complete) return null;
+    const amt = BigInt(amount); const net = amt * 99n / 100n; // ~1% pump.fun fee
+    const out = input === SOL ? cs.vtok * net / (cs.vsol + net) : (cs.vsol * amt / (cs.vtok + amt)) * 99n / 100n;
+    const spot = input === SOL ? Number(cs.vtok) / Number(cs.vsol) * Number(amt) : Number(cs.vsol) / Number(cs.vtok) * Number(amt);
+    return { out, impact: spot > 0 ? Math.max(0, 1 - Number(out) / spot) : 0 };
+  }
   return { out: BigInt(q.outAmount), impact: Number(q.priceImpactPct ?? 0) };
 }
 /** Fallback when Jupiter drops a dead pump.fun coin from routing: price a sell straight against the bonding curve account
@@ -130,9 +146,24 @@ async function rpcPing(): Promise<number> {
 /** Simulated time from "decide" to "landed": blockhash fetch + send round-trip (measured) + ~1 slot. */
 const execLatencyMs = () => 2 * (med(lat.rpcMs) || 300) + 400;
 
+// Oct 16: trade lookups fall back to Solana (chain-trades.ts) when pump.fun's swap-api fails or is limited; switched off again when it recovers.
+const apiWin: boolean[] = []; let probeN = 0;
+export const dataSource = () => ({ trades: isOn() ? "Solana backup (bonding-curve events + reserves)" : "pump.fun swap-api", recentApiOkPct: apiWin.length ? Math.round(apiWin.filter(Boolean).length / apiWin.length * 100) : null, chain: chainStat, pumpFun: pumpDiag });
+function apiResult(ok: boolean) {
+  apiWin.push(ok); if (apiWin.length > 30) apiWin.shift();
+  const fails = apiWin.filter((x) => !x).length;
+  if (!isOn() && apiWin.length >= 10 && fails / apiWin.length >= 0.5) setOn(true);
+  else if (isOn() && apiWin.length >= 10 && apiWin.slice(-10).every(Boolean)) setOn(false);
+}
+const FORCE_CHAIN = process.env.PAPER_FORCE_CHAIN === "1"; // test switch: use only the Solana backup
 async function trades(mint: string, limit = 100): Promise<any[] | null> {
+  if (FORCE_CHAIN) { const c = chainTrades(mint, limit); if (!c) track(mint, 120).catch(() => {}); return c; }
+  if (isOn() && chainTrades(mint, 0) && probeN++ % 4 !== 0) return chainTrades(mint, limit); // backup on: only probe the API on every 4th call
   const d = await getJ(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=${limit}`, 5000);
-  return d?.trades ?? null;
+  const tr = d?.trades ?? null; apiResult(tr != null);
+  if (tr != null) return tr;
+  if (isOn()) { const c = chainTrades(mint, limit); if (c) return c; track(mint, 120).catch(() => {}); }
+  return null;
 }
 function flow(tr: any[], creator: string) {
   const buys = tr.filter((t) => t.type === "buy"), sells = tr.filter((t) => t.type === "sell");
@@ -177,7 +208,7 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
   const pos: Pos = { id, strat, mint: c.mint, symbol: c.symbol, entryAt: Date.now(), entryAgeS: Math.round((Date.now() - c.createdMs) / 1000), latencyMs,
     costLamports: Math.round(SIZE * LAMPORTS) + fees + ATA_RENT, tokens: fill.toString(), entryPriceSol: SIZE / (Number(fill) / 1e6), bePct: beEst, sizeSol: SIZE, sizeMult: mult, buyFeeLamports: fees, buyDriftLamports: q1.out > 0n ? Math.round(Number(q1.out - fill) / Number(q1.out) * SIZE * LAMPORTS) : 0,
     peakRoi: 0, lastMarkRoi: 0, sellFails: 0, noRouteSince: null, rug: null, signals: { ...signals, impactPct: q2?.impact ?? q1.impact } };
-  state.open.push(pos); bump(`${strat}.entries`); dirty = true;
+  state.open.push(pos); bump(`${strat}.entries`); dirty = true; pin(c.mint, true);
   if (strat === "copy_v2cp") trades(c.mint, 100).then((tr) => { const m: Record<string, number> = {}; const cr = seen.get(c.mint)?.creator;
     for (const t of tr ?? []) if (t.type === "buy" && t.userAddress !== cr) m[t.userAddress] = (m[t.userAddress] ?? 0) + Number(t.amountSol || 0);
     pos.cpTop = Object.fromEntries(Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 5)); dirty = true; }).catch(() => {});
@@ -210,7 +241,8 @@ async function manage(p: Pos) {
   const cfg = cfgOf(p.strat);
   const isCp = p.strat.split("@")[0] === "copy_v2cp", isCs = p.strat.split("@")[0] === "copy_v2cs", isIn = p.strat === "inflow_v1";
   const tr = await trades(p.mint, isCp || isCs || isIn ? 30 : 5);
-  const price = tr?.[0] ? Number(tr[0].priceSol) : null;
+  let price = tr?.[0] ? Number(tr[0].priceSol) : null;
+  if (isOn()) { const cs = (await curveState([p.mint]))[p.mint]; if (cs && !cs.complete && cs.priceSol > 0) price = cs.priceSol; }
   const holdS = (Date.now() - p.entryAt) / 1000;
   let cpReason: string | null = null;
   if (isCp && tr) { // crash-protect (paper test): fast drop, or the creator / a top-5 early buyer dumping
@@ -304,7 +336,7 @@ function privFor(mint: string, createdMs: number): Promise<Priv> {
 }
 function familyFor(mint: string) { const c = seen.get(mint); return c?.creator ? familyOf(c.creator, c.createdMs, famCtx) : null; }
 async function close(p: Pos, reason: string, outLamports: bigint, fees: number) {
-  state.open = state.open.filter((x) => x !== p);
+  state.open = state.open.filter((x) => x !== p); pin(p.mint, false); (p as any).dataSource = isOn() ? "solana_backup" : "pump.fun";
   const pr = pendingRug.get(p.id); // trade log must carry RugRadar's snapshot taken at buy time
   if (pr) await Promise.race([pr, sleep(90_000)]);
   const proceeds = Number(outLamports) - fees - BASE_FEE + ATA_RENT; // sell tx + close-account tx refunds rent
@@ -320,7 +352,7 @@ async function close(p: Pos, reason: string, outLamports: bigint, fees: number) 
   const t = { id: p.id, strat: p.strat, mint: p.mint, symbol: p.symbol, result: pnl > 0 ? "win" : "loss", exitReason: reason,
     entryAt: new Date(p.entryAt).toISOString(), exitAt: new Date().toISOString(), holdS: Math.round((Date.now() - p.entryAt) / 1000), entryAgeS: p.entryAgeS, latencyMs: p.latencyMs,
     sizeSol: p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */, sizeMult: p.sizeMult ?? 1, costSol: +(p.costLamports / LAMPORTS).toFixed(6), proceedsSol: +(proceeds / LAMPORTS).toFixed(6), pnlSol: +pnl.toFixed(6), roi: +(pnl / (p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */)).toFixed(4),
-    entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, priv: p.priv ?? null, named: p.named ?? null, trust: trustFor(p.mint, p.family), feesPaid, breakEvenPct };
+    entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, priv: p.priv ?? null, named: p.named ?? null, dataSource: (p as any).dataSource ?? null, trust: trustFor(p.mint, p.family), feesPaid, breakEvenPct };
   state.open = state.open.filter((x) => x !== p); closed.push(t); appendTrade(t); dirty = true; bump(`${p.strat}.exits`);
 }
 
@@ -330,6 +362,7 @@ function onNewCoin(c: any, via: string) {
   if (fresh) { if (via === "ws") feed.lastWsAt = Date.now(); else if (via === "poll") feed.lastPollAt = Date.now(); else feed.lastChainAt = Date.now(); }
   const mint = c.mint; if (!mint || seen.has(mint)) return;
   if (via === "chain") feed.chainNew++;
+  if (isOn()) track(mint, 120).catch(() => {});
   const createdMs = Number(c.created_timestamp ?? Date.now());
   const now = Date.now();
   const creator = c.creator ?? c.traderPublicKey ?? "";
@@ -446,6 +479,7 @@ async function scanCandidates() {
     const momentum = f.uniqueBuyers >= 15 && f.buySol >= 1.5 * Math.max(0.5, f.sellSol) && !f.devSold && (f.mcapUsd ?? 0) >= 6000 && (f.mcapUsd ?? 0) <= 60000;
     if (wantCopy) {
       if (momentum || f.winnerBuyers.length >= 1 && !f.devSold) {
+        track(c.mint, 600).catch(() => {}); // passed the early filter: keep it on the Solana backup longer (no-op when backup is off)
         c.checked.add("copy"); const rug = await rugSnapshot(c.mint); bump("copy.rugChecks");
         const v2ok = f.winnerBuyers.length >= V2.minWinners && f.uniqueBuyers >= V2.minBuyers && rug?.riskScore != null && rug.riskScore <= V2.maxRug;
         const devSoldBefore = f.devSold || Number(rug?.buyer?.devSells ?? 0) > 0 || rug?.buyer?.creatorFirstSellAfterSec != null;
@@ -476,6 +510,7 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   closed = loadTrades().slice(-5000);
   await loadWinners();
   startWs();
+  if (process.env.PAPER_FORCE_CHAIN === "1") setOn(true); // test switch
   const loop = async (fn: () => Promise<unknown>, ms: number) => { for (;;) { await new Promise((r) => setImmediate(r)); try { await fn(); } catch (e) { lastErr = String((e as Error).message ?? e).slice(0, 160); } await sleep(ms); } };
   process.once("SIGTERM", () => { saveState(state, "paper: flush on shutdown").catch(() => {}); });
   sc = loadFile<Sc[]>("scorecard.json", []); nlog = loadFile("names.json", {}); creatorMints = loadFile("creators.json", {}); devStats = loadFile("devstats.json", {});
@@ -501,7 +536,7 @@ export function paperSummary() {
     const xs = closed.filter((x) => x.strat === t.strat && x.result !== "buy_failed" && Date.parse(x.entryAt) >= start); const losses = xs.filter((x) => x.pnlSol <= 0);
     return { ...t, startedAt: new Date(start).toISOString(), trades: xs.length, totalPnlSol: +xs.reduce((a, x) => a + x.pnlSol, 0).toFixed(4), avgRoi: xs.length ? +(xs.reduce((a, x) => a + x.roi, 0) / xs.length).toFixed(4) : null,
       winRate: xs.length ? +(xs.filter((x) => x.pnlSol > 0).length / xs.length).toFixed(3) : null, avgLossRoi: losses.length ? +(losses.reduce((a, x) => a + x.roi, 0) / losses.length).toFixed(4) : null }; });
-  return { feed: activeFeed(), inflowDiag, paused: PAUSED, tests, testDecisionRule: TEST_RULE, paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL (control and v2 tests), edge-finder 0.1 SOL; sniper paused (was 0.4 SOL)", startedAt: state.startedAt, strategies: by,
+  return { dataSource: dataSource(), feed: activeFeed(), inflowDiag, paused: PAUSED, tests, testDecisionRule: TEST_RULE, paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL (control and v2 tests), edge-finder 0.1 SOL; sniper paused (was 0.4 SOL)", startedAt: state.startedAt, strategies: by,
     latency: { precheckRecent: preLog.slice(-30), eventLoopDelayMs: { p50: Math.round(loopLag.percentile(50) / 1e6), p99: Math.round(loopLag.percentile(99) / 1e6), max: Math.round(loopLag.max / 1e6) }, sniperPrecheckMedianMs: med(preMs), sniperPrecheckP90Ms: preMs.length ? [...preMs].sort((a, b) => a - b)[Math.floor(preMs.length * 0.9)] : 0, medianDetectMs: med(lat.detectMs), detectNote: "websocket launches have no on-chain timestamp in the feed; counted as 1000 ms (conservative floor). Poll-detected launches are measured.", medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
     counters: state.counters, store: storeStatus(), websocket: !!ws, winnersTracked: winners.size, lastError: lastErr,
     recent: closed.slice(-40).reverse().map(({ signals, rug, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, precheckMs: signals?.precheck?.ms ?? null, rugMax: signals?.rugMax ?? null, rugLevel: rug?.riskLevel ?? null })) };
