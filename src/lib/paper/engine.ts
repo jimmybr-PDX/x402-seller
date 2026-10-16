@@ -369,18 +369,13 @@ function startWs() {
     ws.onerror = () => {};
   } catch { ws = null; }
 }
-async function scanCandidates() {
+/** Oct 16 inflow_v1: its own fast loop (the copy scan waits on RugRadar snapshots and would miss the 30-60 s window). */
+async function scanInflow() {
   const now = Date.now();
-  // Only coins still needing a decision (the old slice(-25) of all seen coins dropped everything older than ~2 min, so edge never ran).
-  const cands = [...seen.values()].filter((c) => now - c.createdMs > 20_000 && now - c.createdMs < 600_000 && !(c.checked.has("copy") && c.checked.has("edge"))).slice(-40);
+  const cands = [...seen.values()].filter((c) => now - c.createdMs >= 30_000 && now - c.createdMs <= 75_000 && !c.checked.has("inflow"));
   for (const c of cands) {
-    const age = (now - c.createdMs) / 1000;
-    const wantCopy = age <= 180 && !c.checked.has("copy");
-    const wantEdge = age >= 120 && !c.checked.has("edge");
-    const wantInflow = age >= 30 && age <= 75 && !c.checked.has("inflow");
-    if (!wantCopy && !wantEdge && !wantInflow) continue;
+    const age = (Date.now() - c.createdMs) / 1000; if (age > 80) { c.checked.add("inflow"); bump("inflow_v1.missedWindow"); continue; }
     const tr = await trades(c.mint, 100); if (!tr) continue;
-    if (wantInflow) { // Oct 16 private test: flow in the first 60 s after launch
       const early = tr.filter((t) => Date.parse(t.timestamp) - c.createdMs <= 60_000);
       const buys = early.filter((t) => t.type === "buy"), sells = early.filter((t) => t.type === "sell");
       const sol = (xs: any[]) => xs.reduce((a, t) => a + Number(t.amountSol || 0), 0);
@@ -393,8 +388,18 @@ async function scanCandidates() {
         await enter("inflow_v1", c, { ageS: Math.round(age), rule: "inflow_5sol_60s", netInflowSol: +net.toFixed(2), topBuyerSharePct: Math.round(topShare * 100), earlyBuyers: Object.keys(by).length,
           privateInflow: { telegram: m ? !!m.telegram : null, allThreeSocials: m ? m.socials === 3 : null, creatorFirstBuySol: devBuy ? +Number(devBuy.amountSol || 0).toFixed(3) : null, creatorFirstBuy1SolPlus: devBuy ? Number(devBuy.amountSol || 0) >= 1 : null } });
       } else { bump(net < 5 ? "inflow_v1.lowInflow" : creatorSold ? "inflow_v1.creatorSold" : "inflow_v1.concentrated"); if (age > 60) c.checked.add("inflow"); }
-      if (!wantCopy && !wantEdge) continue;
-    }
+  }
+}
+async function scanCandidates() {
+  const now = Date.now();
+  // Only coins still needing a decision (the old slice(-25) of all seen coins dropped everything older than ~2 min, so edge never ran).
+  const cands = [...seen.values()].filter((c) => now - c.createdMs > 20_000 && now - c.createdMs < 600_000 && !(c.checked.has("copy") && c.checked.has("edge"))).slice(-40);
+  for (const c of cands) {
+    const age = (now - c.createdMs) / 1000;
+    const wantCopy = age <= 180 && !c.checked.has("copy");
+    const wantEdge = age >= 120 && !c.checked.has("edge");
+    if (!wantCopy && !wantEdge) continue;
+    const tr = await trades(c.mint, 100); if (!tr) continue;
     const f = flow(tr, c.creator);
     // edge looks later (2-10 min) when sell flow is normal, so it uses a looser flow test; RugRadar is its main filter
     const edgeFlow = f.uniqueBuyers >= 20 && f.buySol >= f.sellSol && !f.devSold && (f.mcapUsd ?? 0) >= 7000 && (f.mcapUsd ?? 0) <= 80000;
@@ -436,7 +441,7 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   sc = loadFile<Sc[]>("scorecard.json", []); nlog = loadFile("names.json", {}); creatorMints = loadFile("creators.json", {}); devStats = loadFile("devstats.json", {});
   if (!sc.length) for (const t of closed) if (t.rug?.riskScore != null && !sc.some((x) => x.mint === t.mint)) sc.push({ mint: t.mint, symbol: t.symbol, checkedAt: Date.parse(t.entryAt), score: t.rug.riskScore, level: t.rug.riskLevel, priceSol: t.entryPriceSol, liqUsd: t.rug.facts?.liquidityUsd ?? null, backfilled: true, after: {} });
   loop(scRecheck, 60_000);
-  loop(pollNew, 6000); loop(rpcPing, 60_000); loop(scanCandidates, 8000);
+  loop(pollNew, 6000); loop(rpcPing, 60_000); loop(scanCandidates, 8000); loop(scanInflow, 4000);
   loop(async () => { for (const p of [...state.open]) { await manage(p); await new Promise((r) => setImmediate(r)); } }, 5_000); // Oct 15: 10 s -> 5 s price checks
   loop(async () => { for (const [n, o] of [["scorecard.json", sc], ["names.json", nlog], ["creators.json", creatorMints], ["devstats.json", devStats]] as const) { writeFile(n, o); await new Promise((r) => setImmediate(r)); } if (dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
 }
