@@ -12,7 +12,8 @@ const run = promisify(execFile);
 
 let mode: "github" | "file" | "unavailable" = "unavailable";
 let dir = ""; let env: NodeJS.ProcessEnv = process.env; let lastError: string | null = null; let lastPushAt: string | null = null;
-const git = (...a: string[]) => run("git", ["-C", dir, ...a], { env, timeout: 30000 });
+// Oct 16: keep git small in memory (the container has 512 MB shared with the server): single-threaded packing, small windows
+const git = (...a: string[]) => run("git", ["-C", dir, "-c", "pack.threads=1", "-c", "pack.windowMemory=16m", "-c", "core.packedGitLimit=32m", "-c", "core.packedGitWindowSize=8m", "-c", "core.bigFileThreshold=4m", "-c", "gc.auto=0", ...a], { env, timeout: 30000 });
 export const storeStatus = () => ({ mode, lastPushAt, ...(lastError ? { error: lastError } : {}) });
 
 export async function initStore(): Promise<void> {

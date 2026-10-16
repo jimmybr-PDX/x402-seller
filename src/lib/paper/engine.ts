@@ -211,7 +211,7 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
   if (rng(id + ":buy") < cfg.buyFail) { // failed buy: fees burned, no position
     bump(`${strat}.buyFailed`);
     const t = { id, strat, mint: c.mint, symbol: c.symbol, result: "buy_failed", entryAt: new Date(tDecide).toISOString(), pnlSol: -fees / LAMPORTS, roi: -fees / (SIZE * LAMPORTS), sizeSol: SIZE, sizeMult: mult, signals };
-    closed.push(t); appendTrade(t); dirty = true; return;
+    closed.push(t); if (closed.length > 2500) closed.splice(0, 500); appendTrade(t); dirty = true; return;
   }
   const latencyMs = Date.now() - tDecide;
   const pos: Pos = { id, strat, mint: c.mint, symbol: c.symbol, entryAt: Date.now(), entryAgeS: Math.round((Date.now() - c.createdMs) / 1000), latencyMs,
@@ -308,7 +308,7 @@ async function manage(p: Pos) {
   p.sellDriftLamports = Number(q.out - out);
   close(p, reason, out, fees);
 }
-let creatorMints: Record<string, [string, number][]> = {};
+let creatorMints: Record<string, [string, number][]> = {}; let cmAdds = 0, nlAdds = 0;
 const famCtx = { coinsBy: (w: string) => (creatorMints[w] ?? []).map(([mint, t]) => ({ mint, t })),
   rugged: (m: string) => { const x = sc.find((y) => y.mint === m); const a = x && (x.after["24h"] ?? x.after["1h"] ?? x.after["10m"]); return a ? isRugged(a) : null; },
   flagged: (w: string) => !!flagged()[w] };
@@ -362,7 +362,7 @@ async function close(p: Pos, reason: string, outLamports: bigint, fees: number) 
     entryAt: new Date(p.entryAt).toISOString(), exitAt: new Date().toISOString(), holdS: Math.round((Date.now() - p.entryAt) / 1000), entryAgeS: p.entryAgeS, latencyMs: p.latencyMs,
     sizeSol: p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */, sizeMult: p.sizeMult ?? 1, costSol: +(p.costLamports / LAMPORTS).toFixed(6), proceedsSol: +(proceeds / LAMPORTS).toFixed(6), pnlSol: +pnl.toFixed(6), roi: +(pnl / (p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */)).toFixed(4),
     entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, priv: p.priv ?? null, named: p.named ?? null, dataSource: (p as any).dataSource ?? null, trust: trustFor(p.mint, p.family), feesPaid, breakEvenPct };
-  state.open = state.open.filter((x) => x !== p); closed.push(t); appendTrade(t); dirty = true; bump(`${p.strat}.exits`);
+  state.open = state.open.filter((x) => x !== p); closed.push(t); if (closed.length > 2500) closed.splice(0, 500); appendTrade(t); dirty = true; bump(`${p.strat}.exits`);
 }
 
 function onNewCoin(c: any, via: string) {
@@ -378,7 +378,7 @@ function onNewCoin(c: any, via: string) {
   seen.set(mint, { mint, symbol: String(c.symbol ?? "").slice(0, 16), creator, createdMs, seenMs: now, checked: new Set(), devBuyPct: c.devBuyPct ?? null });
   nameLog(mint, String(c.name ?? ""), String(c.symbol ?? ""), createdMs);
   noteLaunchMeta(mint, c.uri ?? c.metadata_uri);
-  if (creator) { const a = (creatorMints[creator] ??= []); if (!a.some((x) => x[0] === mint)) a.push([mint, createdMs]); if (a.length > 100) a.shift(); const ks = Object.keys(creatorMints); if (ks.length > 50000) delete creatorMints[ks[0]]; }
+  if (creator) { const a = (creatorMints[creator] ??= []); if (!a.some((x) => x[0] === mint)) a.push([mint, createdMs]); if (a.length > 100) a.shift(); if (++cmAdds % 500 === 0) { const ks = Object.keys(creatorMints); for (const k of ks.slice(0, Math.max(0, ks.length - 20000))) delete creatorMints[k]; } } /* Oct 16: batched trim (was a 50k-key scan per coin) */
   if (creator) { const xs = (creatorLaunches.get(creator) ?? []).filter((t) => now - t < 3_600_000); xs.push(now); creatorLaunches.set(creator, xs); if (creatorLaunches.size > 5000) creatorLaunches.delete(creatorLaunches.keys().next().value!); }
   if (seen.size > 3000) seen.delete(seen.keys().next().value!);
   if (createdMs < now) push(lat.detectMs, now - createdMs);
@@ -526,7 +526,7 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   rugCheckFn = opts.rugCheck; if (opts.flagged) flagged = opts.flagged;
   await initStore();
   state = loadState<State>(state); (state as any).cpStartedAt ??= new Date().toISOString(); (state as any).csStartedAt ??= new Date().toISOString(); (state as any).inflowStartedAt ??= new Date().toISOString(); state.open ??= []; state.counters ??= {}; state.startedAt ??= new Date().toISOString();
-  closed = loadTrades().slice(-5000);
+  closed = loadTrades().slice(-2000); // Oct 16: 2,000 in memory (memory limit); full history stays in the repo
   await loadWinners();
   startWs();
   if (process.env.PAPER_FORCE_CHAIN === "1") setOn(true); // test switch
@@ -576,7 +576,7 @@ const meta = new Map<string, { nameKey: string; tickerKey: string; t: number }>(
 function nameLog(mint: string, name: string, ticker: string, t: number) {
   const nk = "n:" + normName(name), tk = "t:" + normName(ticker); meta.set(mint, { nameKey: nk, tickerKey: tk, t }); if (meta.size > 20000) meta.delete(meta.keys().next().value!);
   for (const k of new Set([nk, tk])) { const a = (nlog[k] ??= []); if (!a.some((x) => x[0] === mint)) a.push([mint, t]); if (a.length > 200) a.shift(); }
-  const ks = Object.keys(nlog); if (ks.length > 30000) delete nlog[ks[0]];
+  if (++nlAdds % 500 === 0) { const ks = Object.keys(nlog); for (const k of ks.slice(0, Math.max(0, ks.length - 20000))) delete nlog[k]; } // Oct 16: batched trim, 20k names
 }
 const dsCache = new Map<string, { at: number; v: { mint: string; t: number }[] }>();
 /** Free DexScreener search for older same-name Solana coins (cached 6 h). Only coins that ever got a pool show up. */

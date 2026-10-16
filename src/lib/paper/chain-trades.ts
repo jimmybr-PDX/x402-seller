@@ -15,6 +15,7 @@ const MAX = Number(process.env.PAPER_CHAIN_MAX_COINS ?? 40);
 export type T = { type: "buy" | "sell"; userAddress: string; amountSol: number; priceSol: number; timestamp: string; tx: string; slotIndexId: string };
 type Coin = { mint: string; curve: string; trades: T[]; until: number; pinned: number; sub: number | null; reqId: number | null; added: number };
 const coins = new Map<string, Coin>(), bySub = new Map<number, string>(), byReq = new Map<number, string>();
+const pendingAdds = new Set<string>();
 let ws: any = null, wsIdx = 0, reqN = 10, on = false;
 export const chainStat = { on: false, since: null as string | null, tracked: 0, tradesSeen: 0, served: 0, priced: 0, connects: 0, dropped: 0, rpc: "" };
 async function curveOf(mint: string) { const [pda] = await getProgramDerivedAddress({ programAddress: address("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), seeds: ["bonding-curve", enc.encode(address(mint))] }); return String(pda); }
@@ -46,9 +47,12 @@ function drop(m: string) { const c = coins.get(m); if (!c) return; if (c.sub != 
 export async function track(mint: string, keepS = 120, curve?: string) {
   if (!on) return; const now = Date.now(); const c0 = coins.get(mint);
   if (c0) { c0.until = Math.max(c0.until, now + keepS * 1000); return; }
-  if (coins.size >= MAX) { // evict the unpinned coin closest to expiry
+  if (pendingAdds.has(mint)) return;
+  if (coins.size + pendingAdds.size >= MAX) { // evict the unpinned coin closest to expiry
     const v = [...coins.values()].filter((c) => !c.pinned).sort((a, b) => a.until - b.until)[0]; if (!v) return; drop(v.mint); }
-  const c: Coin = { mint, curve: curve ?? await curveOf(mint), trades: [], until: now + keepS * 1000, pinned: 0, sub: null, reqId: null, added: now };
+  pendingAdds.add(mint); let cv: string; try { cv = curve ?? await curveOf(mint); } finally { pendingAdds.delete(mint); }
+  if (coins.has(mint)) return;
+  const c: Coin = { mint, curve: cv, trades: [], until: now + keepS * 1000, pinned: 0, sub: null, reqId: null, added: now };
   coins.set(mint, c); subscribe(c);
 }
 export function pin(mint: string, yes: boolean) { const c = coins.get(mint); if (c) c.pinned = Math.max(0, c.pinned + (yes ? 1 : -1)); else if (yes && on) track(mint, 600).then(() => pin(mint, true)).catch(() => {}); }
