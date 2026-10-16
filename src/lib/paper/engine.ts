@@ -76,11 +76,13 @@ const push = (a: number[], v: number) => { a.push(v); if (a.length > 200) a.shif
 const rng = (seed: string) => parseInt(createHash("sha256").update(seed).digest("hex").slice(0, 8), 16) / 0xffffffff; // deterministic
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Oct 16: record pump.fun response codes/headers (diagnostics for blocks vs rate limits), per endpoint
+let swapBlockedUntil = 0;
 export const pumpDiag: Record<string, { ok: number; fail: number; codes: Record<string, number>; last: any }> = {};
 function noteHttp(u: string, r: Response | null, err?: string) {
   const host = /swap-api/.test(u) ? "swap-api trades" : /frontend-api/.test(u) ? "frontend-api coins list" : null; if (!host) return;
   const d = (pumpDiag[host] ??= { ok: 0, fail: 0, codes: {}, last: null }); const code = r ? String(r.status) : `error:${(err ?? "").slice(0, 40)}`;
   d.codes[code] = (d.codes[code] ?? 0) + 1; if (r?.ok) d.ok++; else d.fail++;
+  if (host === "swap-api trades" && r?.status === 429) { const ra = Number(r.headers.get("retry-after") ?? 60); swapBlockedUntil = Date.now() + Math.min(600, Math.max(10, ra || 60)) * 1000; setOn(true); }
   if (!r?.ok) d.last = { at: new Date().toISOString(), code, server: r?.headers.get("server") ?? null, cfRay: r?.headers.get("cf-ray") ? "present" : null, cfMitigated: r?.headers.get("cf-mitigated") ?? null, retryAfter: r?.headers.get("retry-after") ?? null, rateLimitRemaining: r?.headers.get("x-ratelimit-remaining") ?? null, contentType: r?.headers.get("content-type") ?? null };
 }
 const getJ = (u: string, ms = 5000) => fetch(u, { headers: UA, signal: AbortSignal.timeout(ms) }).then((r) => { noteHttp(u, r); return r; }, (e) => { noteHttp(u, null, String(e?.name ?? e)); throw e; }).then((r) => (r.ok ? r.json() : null)).catch(() => null) as Promise<any>;
@@ -147,17 +149,23 @@ async function rpcPing(): Promise<number> {
 const execLatencyMs = () => 2 * (med(lat.rpcMs) || 300) + 400;
 
 // Oct 16: trade lookups fall back to Solana (chain-trades.ts) when pump.fun's swap-api fails or is limited; switched off again when it recovers.
-const apiWin: boolean[] = []; let probeN = 0;
-export const dataSource = () => ({ trades: isOn() ? "Solana backup (bonding-curve events + reserves)" : "pump.fun swap-api", recentApiOkPct: apiWin.length ? Math.round(apiWin.filter(Boolean).length / apiWin.length * 100) : null, chain: chainStat, pumpFun: pumpDiag });
+const apiWin: boolean[] = []; const apiCalls: number[] = []; let probeN = 0;
+export const dataSource = () => ({ trades: isOn() ? "Solana backup (bonding-curve events + reserves)" : "pump.fun swap-api", recentApiOkPct: apiWin.length ? Math.round(apiWin.filter(Boolean).length / apiWin.length * 100) : null, chain: chainStat, swapApiPausedForS: Math.max(0, Math.round((swapBlockedUntil - Date.now()) / 1000)), pumpFun: pumpDiag, pumpPortalWs: wsDiag });
 function apiResult(ok: boolean) {
   apiWin.push(ok); if (apiWin.length > 30) apiWin.shift();
   const fails = apiWin.filter((x) => !x).length;
   if (!isOn() && apiWin.length >= 10 && fails / apiWin.length >= 0.5) setOn(true);
-  else if (isOn() && apiWin.length >= 10 && apiWin.slice(-10).every(Boolean)) setOn(false);
+  else if (isOn() && apiWin.length >= 20 && apiWin.slice(-20).every(Boolean) && Date.now() > swapBlockedUntil + 300_000) setOn(false); // off only after 20 clean probes and 5 min without a 429
 }
 const FORCE_CHAIN = process.env.PAPER_FORCE_CHAIN === "1"; // test switch: use only the Solana backup
 async function trades(mint: string, limit = 100): Promise<any[] | null> {
   if (FORCE_CHAIN) { const c = chainTrades(mint, limit); if (!c) track(mint, 120).catch(() => {}); return c; }
+  // pump.fun said "slow down" (429 + Retry-After): respect it, use only the Solana backup until then
+  if (Date.now() < swapBlockedUntil) { const c = chainTrades(mint, limit); if (!c) track(mint, 120).catch(() => {}); return c; }
+  // stay under pump.fun's limit: at most 90 trade lookups a minute from us; above that, the Solana backup answers
+  const now = Date.now(); while (apiCalls.length && now - apiCalls[0] > 60_000) apiCalls.shift();
+  if (apiCalls.length >= 90) { setOn(true); const c = chainTrades(mint, limit); if (!c) track(mint, 120).catch(() => {}); return c; }
+  apiCalls.push(now);
   if (isOn() && chainTrades(mint, 0) && probeN++ % 4 !== 0) return chainTrades(mint, limit); // backup on: only probe the API on every 4th call
   const d = await getJ(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=${limit}`, 5000);
   const tr = d?.trades ?? null; apiResult(tr != null);
@@ -395,7 +403,8 @@ async function pollNew() {
   const d = await getJ("https://frontend-api-v3.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC&includeNsfw=true");
   for (const c of (d ?? []).reverse()) onNewCoin(c, "poll");
 }
-let ws: any = null;
+let ws: any = null; let wsBackoff = 30_000;
+export const wsDiag = { opens: 0, closes: 0, lastClose: null as any, lastError: null as string | null };
 // Oct 16: free backup feed. Watches Solana directly (logsSubscribe on pump.fun's mint-authority account, which only appears in create
 // transactions) and decodes the CreateEvent from the logs: no extra RPC calls. Only runs while PumpPortal AND pump.fun's list are stale 60+ s.
 const PUMP_MINT_AUTH = "TSLvdd1pWpHVjahSpsvCXUbgwsL3JAcvokwaKt1eokM";
@@ -433,11 +442,12 @@ function startWs() {
   const W = (globalThis as any).WebSocket; if (!W) return;
   try {
     ws = new W("wss://pumpportal.fun/api/data");
-    ws.onopen = () => ws.send(JSON.stringify({ method: "subscribeNewToken" }));
+    ws.onopen = () => { wsDiag.opens++; wsBackoff = 30_000; ws.send(JSON.stringify({ method: "subscribeNewToken" })); };
     ws.onmessage = (ev: any) => { feed.lastWsMsgAt = Date.now();
        try { const m = JSON.parse(String(ev.data)); if (m.mint && m.txType === "create") onNewCoin({ mint: m.mint, symbol: m.symbol, name: m.name, creator: m.traderPublicKey, created_timestamp: Date.now() - 1000, devBuyPct: m.initialBuy != null ? Number(m.initialBuy) / 1e7 : null, uri: m.uri }, "ws"); } catch {} };
-    ws.onclose = () => { ws = null; setTimeout(startWs, 30_000).unref?.(); };
-    ws.onerror = () => {};
+    // PumpPortal bans clients that reconnect too often (bans last ~1 h): back off 30 s -> 10 min
+    ws.onclose = (ev: any) => { ws = null; wsDiag.closes++; wsDiag.lastClose = { at: new Date().toISOString(), code: ev?.code ?? null }; setTimeout(startWs, wsBackoff).unref?.(); wsBackoff = Math.min(600_000, wsBackoff * 2); };
+    ws.onerror = (ev: any) => { wsDiag.lastError = String(ev?.message ?? ev?.error?.message ?? "error").slice(0, 80); };
   } catch { ws = null; }
 }
 /** Oct 16 inflow_v1: its own fast loop (the copy scan waits on RugRadar snapshots and would miss the 30-60 s window). */
