@@ -58,10 +58,23 @@ const topicAddr = (t: string | undefined) => (t ? getAddress(`0x${t.slice(26)}`)
 
 async function evmTx(k: ChainKey, hash: Hash) {
   const c = client(k);
-  const receipt = await c.getTransactionReceipt({ hash }).catch(() => null);
+  // Distinguish "RPC refused / errored" from "not on this chain": a refused receipt must never read as pending or not found.
+  let rpcErr: unknown = null;
+  const getReceipt = () => c.getTransactionReceipt({ hash }).catch((e) => { if (!/could not be found|not found/i.test(String((e as Error)?.message ?? e))) rpcErr = e; return null; });
+  let receipt = await getReceipt();
   if (!receipt) {
-    const pending = await c.getTransaction({ hash }).catch(() => null);
-    return pending ? { chain: k, status: "pending" as const, hash, from: pending.from, to: pending.to, explorer: EXPLORER_TX[k] + hash } : null;
+    const known = await c.getTransaction({ hash }).catch((e) => { if (!/could not be found|not found/i.test(String((e as Error)?.message ?? e))) rpcErr = e; return null; });
+    if (known && known.blockNumber != null) {
+      // Mined, but the receipt call failed (public RPCs sometimes refuse or lag): one more try before giving up.
+      await new Promise((r) => setTimeout(r, 400));
+      receipt = await getReceipt();
+      if (!receipt) throw new Error(`${k}: transaction is in block ${known.blockNumber} but public RPCs did not return its receipt`);
+    } else if (known) {
+      return { chain: k, status: "pending" as const, hash, from: known.from, to: known.to, explorer: EXPLORER_TX[k] + hash };
+    } else {
+      if (rpcErr) throw new Error(`${k}: RPC error (${String((rpcErr as Error)?.message ?? rpcErr).slice(0, 120)})`);
+      return null;
+    }
   }
   const [tx, block, head] = await Promise.all([c.getTransaction({ hash }), c.getBlock({ blockNumber: receipt.blockNumber }), c.getBlockNumber()]);
   const transfers = receipt.logs.filter((l) => l.topics[0] === TRANSFER && l.topics.length >= 3).slice(0, 50);
@@ -167,9 +180,12 @@ export async function txLookup(hashRaw: string, chainRaw?: string) {
   if (/^0x[0-9a-fA-F]{64}$/.test(h)) {
     if (chainIn && !EVM_CHAINS.includes(chainIn as ChainKey)) throw new TxInputError(`chain must be one of ${EVM_CHAINS.join(", ")} for a 0x hash`);
     const chains = chainIn ? [chainIn as ChainKey] : EVM_CHAINS;
-    const results = await Promise.all(chains.map((k) => evmTx(k, h as Hash).catch(() => null)));
+    const errors: string[] = [];
+    const results = await Promise.all(chains.map((k) => evmTx(k, h as Hash).catch((e) => { errors.push(String((e as Error)?.message ?? e)); return null; })));
     const found = results.filter(Boolean);
     value = found.find((f: any) => f.status !== "pending") ?? found[0] ?? null;
+    // Only say "not found" when every chain actually answered; otherwise it's an upstream outage (503, buyer not charged).
+    if (!value && errors.length) throw new Error(`Could not confirm on every chain: ${errors.join("; ").slice(0, 300)}`);
   } else if (/^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(h)) {
     if (chainIn && chainIn !== "solana") throw new TxInputError("a base58 signature is a Solana transaction (chain=solana)");
     value = await solanaTx(h);
