@@ -27,7 +27,17 @@ type Base = "copy" | "sniper" | "edge";
 export const RUG_VARIANTS: Record<"copy" | "edge", number[]> = { copy: [40], edge: [25] };
 /** Oct 15 test variants (see "What we learned"). v2 = entry filter that held up on held-out trades; v2ff = v2 + faster exits (untested idea). */
 export const V2 = { minWinners: 2, minBuyers: 12, maxRug: 49 };
-const V2_STRATS = ["copy_v2", "copy_v2ff"];
+const V2_STRATS = ["copy_v2", "copy_v2ff", "copy_v2cp"];
+/** Oct 15 (11 PM): sniper paused (no new buys; history stays). copy_v2cp = v2 + crash-protect exits. */
+export const PAUSED: Record<string, string> = { sniper: "paused Oct 15 (−10.06 SOL / 178 trades)" };
+export const CP = { dropPct: 15, windowS: 10, creatorSellSol: 0.3, holderSellFrac: 0.4, holderSellMinSol: 0.5 };
+export const TEST_RULE = "After about 50 trades each, compare every test with the control (copy_r40) on total SOL, average gain/loss per trade, win rate and average loss. Keep it if clearly better, adjust once if mixed, kill it if worse.";
+export const TESTS = [
+  { strat: "copy_r40", rule: "Control: copy the winners, RugRadar score 40 or lower, normal sell rules", startedAt: "2026-10-15T11:20:00Z" },
+  { strat: "copy_v2", rule: "Buy only with 2+ winner wallets, 12+ buyers, RugRadar under 50; normal sell rules", startedAt: "2026-10-16T04:52:07Z" },
+  { strat: "copy_v2ff", rule: "Same entry as v2; sell after 90 s if never above break-even; stop loss 20%", startedAt: "2026-10-16T04:52:07Z" },
+  { strat: "copy_v2cp", rule: "Same entry as v2; also sell at once on a 15%+ drop within about 10 s, when the creator sells 0.3+ SOL, or when a top-5 early buyer sells 40%+ of what they bought (0.5+ SOL); normal stop too", startedAt: "" },
+];
 const VARIANT_CFG: Record<string, Partial<Cfg>> = { copy_v2ff: { stallS: 90, sl: -0.2 } }; // max RugRadar score allowed
 export const STRATS: Strat[] = ["sniper", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...V2_STRATS, ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
 const baseOf = (s: Strat) => s.split(/[_@]/)[0] as Base;
@@ -42,7 +52,7 @@ export const CFG: Record<Base, Cfg> = {
   edge: { size: 0.1, stallS: 300, maxBePct: 8, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 900 },
 };
 type Pos = { id: string; strat: Strat; mint: string; symbol: string; entryAt: number; entryAgeS: number; latencyMs: number; costLamports: number; tokens: string; entryPriceSol: number;
-  forceExit?: string; bePct?: number; buyDriftLamports?: number; sellDriftLamports?: number; buyFeeLamports?: number; sizeSol?: number; sizeMult?: number; family?: Family | null; priv?: Priv | null; named?: Named | null; peakAt?: number; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
+  forceExit?: string; bePct?: number; buyDriftLamports?: number; sellDriftLamports?: number; buyFeeLamports?: number; sizeSol?: number; sizeMult?: number; family?: Family | null; priv?: Priv | null; named?: Named | null; marks?: [number, number][]; cpTop?: Record<string, number>; cpSeen?: string[]; peakAt?: number; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
 type State = { v: 1; open: Pos[]; counters: Record<string, number>; startedAt: string };
 let state: State = { v: 1, open: [], counters: {}, startedAt: new Date().toISOString() };
 let closed: any[] = [];
@@ -164,6 +174,9 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
     costLamports: Math.round(SIZE * LAMPORTS) + fees + ATA_RENT, tokens: fill.toString(), entryPriceSol: SIZE / (Number(fill) / 1e6), bePct: beEst, sizeSol: SIZE, sizeMult: mult, buyFeeLamports: fees, buyDriftLamports: q1.out > 0n ? Math.round(Number(q1.out - fill) / Number(q1.out) * SIZE * LAMPORTS) : 0,
     peakRoi: 0, lastMarkRoi: 0, sellFails: 0, noRouteSince: null, rug: null, signals: { ...signals, impactPct: q2?.impact ?? q1.impact } };
   state.open.push(pos); bump(`${strat}.entries`); dirty = true;
+  if (strat === "copy_v2cp") trades(c.mint, 100).then((tr) => { const m: Record<string, number> = {}; const cr = seen.get(c.mint)?.creator;
+    for (const t of tr ?? []) if (t.type === "buy" && t.userAddress !== cr) m[t.userAddress] = (m[t.userAddress] ?? 0) + Number(t.amountSol || 0);
+    pos.cpTop = Object.fromEntries(Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 5)); dirty = true; }).catch(() => {});
   // Oct 15: 5 private signals, async and queued (never delays the entry). One computation per coin, shared by all variants.
   privFor(c.mint, c.createdMs).then((pv) => { pos.priv = pv; dirty = true; }).catch(() => {});
   // Oct 15: private "named wallet" signal (SNS .sol name / public label for creator or first funder). Waits up to 20 s for the family trace's funder, then looks up.
@@ -191,12 +204,29 @@ async function rugSnapshotNow(mint: string) {
 
 async function manage(p: Pos) {
   const cfg = cfgOf(p.strat);
-  const tr = await trades(p.mint, 5);
+  const isCp = p.strat.split("@")[0] === "copy_v2cp";
+  const tr = await trades(p.mint, isCp ? 30 : 5);
   const price = tr?.[0] ? Number(tr[0].priceSol) : null;
   const holdS = (Date.now() - p.entryAt) / 1000;
+  let cpReason: string | null = null;
+  if (isCp && tr) { // crash-protect (paper test): fast drop, or the creator / a top-5 early buyer dumping
+    const now = Date.now();
+    if (price) { (p.marks ??= []).push([now, price]); p.marks = p.marks.filter(([t]) => now - t <= (CP.windowS + 6) * 1000); }
+    const hi = Math.max(...(p.marks ?? []).filter(([t]) => now - t <= (CP.windowS + 6) * 1000).map(([, v]) => v));
+    if (price && hi > 0 && price <= hi * (1 - CP.dropPct / 100)) cpReason = "crash_exit_fast_drop";
+    const creator = seen.get(p.mint)?.creator; const seenSet = new Set(p.cpSeen ?? []);
+    for (const t of tr) {
+      const key = String(t.signature ?? t.slotIndexId ?? `${t.timestamp}:${t.userAddress}:${t.amountSol}`);
+      if (seenSet.has(key) || t.type !== "sell" || Date.parse(t.timestamp) < p.entryAt) { seenSet.add(key); continue; }
+      seenSet.add(key); const sol = Number(t.amountSol || 0);
+      if (creator && t.userAddress === creator && sol >= CP.creatorSellSol) cpReason ??= "crash_exit_creator_sold";
+      const bought = p.cpTop?.[t.userAddress]; if (bought && sol >= CP.holderSellMinSol && sol >= bought * CP.holderSellFrac) cpReason ??= "crash_exit_top_holder_sold";
+    }
+    p.cpSeen = [...seenSet].slice(-200);
+  }
   if (price) { p.lastMarkRoi = (price / p.entryPriceSol) - 1; if (p.lastMarkRoi > p.peakRoi) { p.peakRoi = p.lastMarkRoi; p.peakAt = Date.now(); } }
   const r = p.lastMarkRoi;
-  let reason: string | null = p.forceExit ?? null;
+  let reason: string | null = p.forceExit ?? cpReason;
   // Oct 15: mark is vs our all-in buy price, so selling costs (~1.25% + sell fees) still apply; keep every profit exit above break-even
   const be = (p.bePct ?? 5) / 100, arm = Math.max(cfg.trailArm, be + cfg.trail + 0.02), tp = Math.max(cfg.tp, be + 0.1);
   if (reason) {}
@@ -297,6 +327,7 @@ function onNewCoin(c: any, via: string) {
   // SNIPER: earliest realistic entry = the moment we detect it (+ measured exec latency inside enter()). One sniper buy per 60 s max (leaves RugRadar snapshot queue room for every trade).
   // Warm-up: the first ~3 minutes after a restart the server is busy starting (event-loop delays up to seconds),
   // which made the pre-check overrun its 250 ms budget; no sniper buys until it settles.
+  if (PAUSED.sniper) { bump("sniper.skippedPaused"); return; }
   if (process.uptime() < 180) { bump("sniper.skippedWarmup"); return; }
   if (now - createdMs < 30_000 && now - (state.counters.lastSnipeMs ?? 0) > 60_000) {
     state.counters.lastSnipeMs = now;
@@ -366,7 +397,7 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   if (started || process.env.PAPER_ENABLED === "0") return; started = true;
   rugCheckFn = opts.rugCheck; if (opts.flagged) flagged = opts.flagged;
   await initStore();
-  state = loadState<State>(state); state.open ??= []; state.counters ??= {}; state.startedAt ??= new Date().toISOString();
+  state = loadState<State>(state); (state as any).cpStartedAt ??= new Date().toISOString(); state.open ??= []; state.counters ??= {}; state.startedAt ??= new Date().toISOString();
   closed = loadTrades().slice(-5000);
   await loadWinners();
   startWs();
@@ -391,7 +422,11 @@ export function paperSummary() {
       totalPnlSol: +pnl.toFixed(4), avgRoi: done.length ? +(done.reduce((a, t) => a + t.roi, 0) / done.length).toFixed(4) : null,
       open: state.open.filter((p) => p.strat === s).map((p) => ({ symbol: p.symbol, mint: p.mint, ageS: Math.round((Date.now() - p.entryAt) / 1000), markRoi: +p.lastMarkRoi.toFixed(3) })) };
   }
-  return { paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL (control and v2 tests), sniper 0.4 SOL, edge-finder 0.1 SOL", startedAt: state.startedAt, strategies: by,
+  const tests = TESTS.map((t) => { const start = Date.parse(t.startedAt || (state as any).cpStartedAt || new Date().toISOString());
+    const xs = closed.filter((x) => x.strat === t.strat && x.result !== "buy_failed" && Date.parse(x.entryAt) >= start); const losses = xs.filter((x) => x.pnlSol <= 0);
+    return { ...t, startedAt: new Date(start).toISOString(), trades: xs.length, totalPnlSol: +xs.reduce((a, x) => a + x.pnlSol, 0).toFixed(4), avgRoi: xs.length ? +(xs.reduce((a, x) => a + x.roi, 0) / xs.length).toFixed(4) : null,
+      winRate: xs.length ? +(xs.filter((x) => x.pnlSol > 0).length / xs.length).toFixed(3) : null, avgLossRoi: losses.length ? +(losses.reduce((a, x) => a + x.roi, 0) / losses.length).toFixed(4) : null }; });
+  return { paused: PAUSED, tests, testDecisionRule: TEST_RULE, paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL (control and v2 tests), edge-finder 0.1 SOL; sniper paused (was 0.4 SOL)", startedAt: state.startedAt, strategies: by,
     latency: { precheckRecent: preLog.slice(-30), eventLoopDelayMs: { p50: Math.round(loopLag.percentile(50) / 1e6), p99: Math.round(loopLag.percentile(99) / 1e6), max: Math.round(loopLag.max / 1e6) }, sniperPrecheckMedianMs: med(preMs), sniperPrecheckP90Ms: preMs.length ? [...preMs].sort((a, b) => a - b)[Math.floor(preMs.length * 0.9)] : 0, medianDetectMs: med(lat.detectMs), detectNote: "websocket launches have no on-chain timestamp in the feed; counted as 1000 ms (conservative floor). Poll-detected launches are measured.", medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
     counters: state.counters, store: storeStatus(), websocket: !!ws, winnersTracked: winners.size, lastError: lastErr,
     recent: closed.slice(-40).reverse().map(({ signals, rug, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, precheckMs: signals?.precheck?.ms ?? null, rugMax: signals?.rugMax ?? null, rugLevel: rug?.riskLevel ?? null })) };
