@@ -11,6 +11,7 @@ import { monitorEventLoopDelay } from "node:perf_hooks";
 const loopLag = monitorEventLoopDelay({ resolution: 20 }); loopLag.enable();
 import { getProgramDerivedAddress, getAddressEncoder, address } from "@solana/kit";
 import { familyOf, type Family } from "./family.js";
+import { privateSignals, noteLaunchMeta, type Priv } from "./private-signals.js";
 import { initStore, loadState, loadTrades, appendTrade, saveState, storeStatus, loadFile, writeFile } from "./store.js";
 
 const SOL = "So11111111111111111111111111111111111111112";
@@ -21,10 +22,16 @@ const RPC = process.env.SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 const BASE_FEE = 5000, ATA_RENT = 2039280;
 export type Strat = string; // "sniper", or "<copy|edge>_r<maxRugScore>" threshold variants
 type Base = "copy" | "sniper" | "edge";
-export const RUG_VARIANTS: Record<"copy" | "edge", number[]> = { copy: [25, 40, 60], edge: [15, 25, 40] }; // max RugRadar score allowed
-export const STRATS: Strat[] = ["sniper", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
+// Oct 15 re-tune: copy_r40 stays as the CONTROL; r25/r60 retired (same coins, no better on held-out trades); edge keeps r25 only.
+export const RUG_VARIANTS: Record<"copy" | "edge", number[]> = { copy: [40], edge: [25] };
+/** Oct 15 test variants (see "What we learned"). v2 = entry filter that held up on held-out trades; v2ff = v2 + faster exits (untested idea). */
+export const V2 = { minWinners: 2, minBuyers: 12, maxRug: 49 };
+const V2_STRATS = ["copy_v2", "copy_v2ff"];
+const VARIANT_CFG: Record<string, Partial<Cfg>> = { copy_v2ff: { stallS: 90, sl: -0.2 } }; // max RugRadar score allowed
+export const STRATS: Strat[] = ["sniper", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...V2_STRATS, ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
 const baseOf = (s: Strat) => s.split(/[_@]/)[0] as Base;
 type Cfg = { size: number; prio: number; tip: number; buyFail: number; sellFail: number; maxOpen: number; tp: number; trailArm: number; trail: number; sl: number; maxHoldS: number; stallS: number; maxBePct: number };
+export const cfgOf = (s: Strat): Cfg => ({ ...CFG[baseOf(s)], ...(VARIANT_CFG[s.split("@")[0]] ?? {}) });
 export const CFG: Record<Base, Cfg> = {
   // sniper: contested launch block via public RPC, no Jito bundle -> high buy-failure rate, quick exits (snipers hold seconds-minutes)
   sniper: { size: 0.4, stallS: 60, maxBePct: 8, prio: 3_000_000, tip: 2_000_000, buyFail: 0.25, sellFail: 0.05, maxOpen: 3, tp: 0.4, trailArm: 0.2, trail: 0.15, sl: -0.25, maxHoldS: 120 },
@@ -34,7 +41,7 @@ export const CFG: Record<Base, Cfg> = {
   edge: { size: 0.1, stallS: 300, maxBePct: 8, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 900 },
 };
 type Pos = { id: string; strat: Strat; mint: string; symbol: string; entryAt: number; entryAgeS: number; latencyMs: number; costLamports: number; tokens: string; entryPriceSol: number;
-  forceExit?: string; bePct?: number; buyDriftLamports?: number; sellDriftLamports?: number; buyFeeLamports?: number; sizeSol?: number; sizeMult?: number; family?: Family | null; peakAt?: number; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
+  forceExit?: string; bePct?: number; buyDriftLamports?: number; sellDriftLamports?: number; buyFeeLamports?: number; sizeSol?: number; sizeMult?: number; family?: Family | null; priv?: Priv | null; peakAt?: number; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
 type State = { v: 1; open: Pos[]; counters: Record<string, number>; startedAt: string };
 let state: State = { v: 1, open: [], counters: {}, startedAt: new Date().toISOString() };
 let closed: any[] = [];
@@ -120,7 +127,7 @@ function flow(tr: any[], creator: string) {
     priceSol: tr[0] ? Number(tr[0].priceSol) : null, mcapUsd: tr[0] ? Number(tr[0].priceUsd) * 1e9 : null };
 }
 
-export const GOOD_DEV_MULTS = [1.5, 2, 3]; // extra test positions on "Known good dev" coins
+export const GOOD_DEV_MULTS: number[] = []; // Oct 15: retired; "known good dev" coins died MORE often (42-46% vs 21-30%), small sample // extra test positions on "Known good dev" coins
 async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs: number }, signals: any, mult = 1) {
   const SIZE = +(CFG[baseOf(strat)].size * mult).toFixed(4); // copy 0.2 SOL, sniper/edge 0.1 SOL; trusted-dev multipliers on top
   if (mult === 1) { // trusted-dev coin: also open bigger test positions, tracked as their own variants ("<strategy>@2x")
@@ -129,7 +136,7 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
     if (tr?.knownGood) for (const m of GOOD_DEV_MULTS) enter(`${strat}@${m}x`, c, { ...signals, trust: tr }, m).catch(() => {});
     if (tr) signals = { ...signals, trust: tr };
   }
-  const cfg = CFG[baseOf(strat)];
+  const cfg = cfgOf(strat);
   if (state.open.filter((p) => p.strat === strat).length >= cfg.maxOpen) { bump(`${strat}.skipFull`); return; }
   if (state.open.some((p) => p.strat === strat && p.mint === c.mint)) return;
   const tDecide = Date.now();
@@ -156,6 +163,8 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
     costLamports: Math.round(SIZE * LAMPORTS) + fees + ATA_RENT, tokens: fill.toString(), entryPriceSol: SIZE / (Number(fill) / 1e6), bePct: beEst, sizeSol: SIZE, sizeMult: mult, buyFeeLamports: fees, buyDriftLamports: q1.out > 0n ? Math.round(Number(q1.out - fill) / Number(q1.out) * SIZE * LAMPORTS) : 0,
     peakRoi: 0, lastMarkRoi: 0, sellFails: 0, noRouteSince: null, rug: null, signals: { ...signals, impactPct: q2?.impact ?? q1.impact } };
   state.open.push(pos); bump(`${strat}.entries`); dirty = true;
+  // Oct 15: 5 private signals, async and queued (never delays the entry). One computation per coin, shared by all variants.
+  privFor(c.mint, c.createdMs).then((pv) => { pos.priv = pv; dirty = true; }).catch(() => {});
   // Private creator-family trace: async for the sniper (never on its critical path); copy/edge wait up to 1 s, else it fills in later.
   const famP = familyFor(c.mint);
   if (famP) { famP.then((f) => { pos.family = f; dirty = true; }).catch(() => {}); if (baseOf(strat) !== "sniper") await Promise.race([famP, sleep(1000)]).catch(() => {}); }
@@ -177,7 +186,7 @@ async function rugSnapshotNow(mint: string) {
 }
 
 async function manage(p: Pos) {
-  const cfg = CFG[baseOf(p.strat)];
+  const cfg = cfgOf(p.strat);
   const tr = await trades(p.mint, 5);
   const price = tr?.[0] ? Number(tr[0].priceSol) : null;
   const holdS = (Date.now() - p.entryAt) / 1000;
@@ -233,6 +242,19 @@ function trustOf(wallets: string[]): Trust {
   return { knownGood: false, reason: null, wallet: null };
 }
 const trustFor = (mint: string, f: Family | null | undefined) => { const c = seen.get(mint)?.creator ?? f?.creator; return c ? trustOf([c, ...(f?.hops ?? []).filter((h) => !h.label).map((h) => h.wallet)]) : null; };
+const privCache = new Map<string, Promise<Priv>>();
+function privFor(mint: string, createdMs: number): Promise<Priv> {
+  const hit = privCache.get(mint); if (hit) return hit;
+  const c = seen.get(mint); const creator = c?.creator ?? "", now = Date.now();
+  const prior = (creatorMints[creator] ?? []).filter(([m, t]) => m !== mint && t < createdMs);
+  const rows = prior.map(([m]) => sc.find((x) => x.mint === m)).filter(Boolean) as Sc[];
+  const lastOf = (x: Sc) => x.after["24h"] ?? x.after["1h"] ?? x.after["10m"];
+  const dev = { launches24h: prior.filter(([, t]) => now - t < 86_400_000).length + 1, priorTracked: rows.length,
+    priorGraduated: rows.filter((x) => lastOf(x)?.graduated).length, priorDead: rows.filter((x) => lastOf(x) && isRugged(lastOf(x))).length };
+  const p = trades(mint, 100).then((tr) => privateSignals(mint, createdMs, creator, tr, dev));
+  privCache.set(mint, p); if (privCache.size > 500) privCache.delete(privCache.keys().next().value!);
+  return p;
+}
 function familyFor(mint: string) { const c = seen.get(mint); return c?.creator ? familyOf(c.creator, c.createdMs, famCtx) : null; }
 async function close(p: Pos, reason: string, outLamports: bigint, fees: number) {
   state.open = state.open.filter((x) => x !== p);
@@ -251,7 +273,7 @@ async function close(p: Pos, reason: string, outLamports: bigint, fees: number) 
   const t = { id: p.id, strat: p.strat, mint: p.mint, symbol: p.symbol, result: pnl > 0 ? "win" : "loss", exitReason: reason,
     entryAt: new Date(p.entryAt).toISOString(), exitAt: new Date().toISOString(), holdS: Math.round((Date.now() - p.entryAt) / 1000), entryAgeS: p.entryAgeS, latencyMs: p.latencyMs,
     sizeSol: p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */, sizeMult: p.sizeMult ?? 1, costSol: +(p.costLamports / LAMPORTS).toFixed(6), proceedsSol: +(proceeds / LAMPORTS).toFixed(6), pnlSol: +pnl.toFixed(6), roi: +(pnl / (p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */)).toFixed(4),
-    entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, trust: trustFor(p.mint, p.family), feesPaid, breakEvenPct };
+    entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, priv: p.priv ?? null, trust: trustFor(p.mint, p.family), feesPaid, breakEvenPct };
   state.open = state.open.filter((x) => x !== p); closed.push(t); appendTrade(t); dirty = true; bump(`${p.strat}.exits`);
 }
 
@@ -262,6 +284,7 @@ function onNewCoin(c: any, via: string) {
   const creator = c.creator ?? c.traderPublicKey ?? "";
   seen.set(mint, { mint, symbol: String(c.symbol ?? "").slice(0, 16), creator, createdMs, seenMs: now, checked: new Set(), devBuyPct: c.devBuyPct ?? null });
   nameLog(mint, String(c.name ?? ""), String(c.symbol ?? ""), createdMs);
+  noteLaunchMeta(mint, c.uri ?? c.metadata_uri);
   if (creator) { const a = (creatorMints[creator] ??= []); if (!a.some((x) => x[0] === mint)) a.push([mint, createdMs]); if (a.length > 100) a.shift(); const ks = Object.keys(creatorMints); if (ks.length > 50000) delete creatorMints[ks[0]]; }
   if (creator) { const xs = (creatorLaunches.get(creator) ?? []).filter((t) => now - t < 3_600_000); xs.push(now); creatorLaunches.set(creator, xs); if (creatorLaunches.size > 5000) creatorLaunches.delete(creatorLaunches.keys().next().value!); }
   if (seen.size > 3000) seen.delete(seen.keys().next().value!);
@@ -293,7 +316,7 @@ function startWs() {
   try {
     ws = new W("wss://pumpportal.fun/api/data");
     ws.onopen = () => ws.send(JSON.stringify({ method: "subscribeNewToken" }));
-    ws.onmessage = (ev: any) => { try { const m = JSON.parse(String(ev.data)); if (m.mint && m.txType === "create") onNewCoin({ mint: m.mint, symbol: m.symbol, name: m.name, creator: m.traderPublicKey, created_timestamp: Date.now() - 1000, devBuyPct: m.initialBuy != null ? Number(m.initialBuy) / 1e7 : null }, "ws"); } catch {} };
+    ws.onmessage = (ev: any) => { try { const m = JSON.parse(String(ev.data)); if (m.mint && m.txType === "create") onNewCoin({ mint: m.mint, symbol: m.symbol, name: m.name, creator: m.traderPublicKey, created_timestamp: Date.now() - 1000, devBuyPct: m.initialBuy != null ? Number(m.initialBuy) / 1e7 : null, uri: m.uri }, "ws"); } catch {} };
     ws.onclose = () => { ws = null; setTimeout(startWs, 30_000).unref?.(); };
     ws.onerror = () => {};
   } catch { ws = null; }
@@ -315,6 +338,8 @@ async function scanCandidates() {
     if (wantCopy) {
       if (momentum || f.winnerBuyers.length >= 1 && !f.devSold) {
         c.checked.add("copy"); const rug = await rugSnapshot(c.mint); bump("copy.rugChecks");
+        const v2ok = f.winnerBuyers.length >= V2.minWinners && f.uniqueBuyers >= V2.minBuyers && rug?.riskScore != null && rug.riskScore <= V2.maxRug;
+        for (const s of V2_STRATS) { if (v2ok) await enter(s, c, { ...f, ageS: Math.round(age), rule: "v2_two_winner_wallets", rug, rugMax: V2.maxRug }); else bump(`${s}.filteredOut`); }
         for (const t of RUG_VARIANTS.copy) { if (rug?.riskScore != null && rug.riskScore <= t) await enter(`copy_r${t}`, c, { ...f, ageS: Math.round(age), rule: f.winnerBuyers.length ? "winner_wallet_bought" : "momentum", rug, rugMax: t }); else bump(`copy_r${t}.rejectedByRugRadar`); }
       }
       else if (age > 150) c.checked.add("copy");
@@ -362,7 +387,7 @@ export function paperSummary() {
       totalPnlSol: +pnl.toFixed(4), avgRoi: done.length ? +(done.reduce((a, t) => a + t.roi, 0) / done.length).toFixed(4) : null,
       open: state.open.filter((p) => p.strat === s).map((p) => ({ symbol: p.symbol, mint: p.mint, ageS: Math.round((Date.now() - p.entryAt) / 1000), markRoi: +p.lastMarkRoi.toFixed(3) })) };
   }
-  return { paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL, sniper and edge-finder 0.1 SOL", startedAt: state.startedAt, strategies: by,
+  return { paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL (control and v2 tests), sniper 0.4 SOL, edge-finder 0.1 SOL", startedAt: state.startedAt, strategies: by,
     latency: { precheckRecent: preLog.slice(-30), eventLoopDelayMs: { p50: Math.round(loopLag.percentile(50) / 1e6), p99: Math.round(loopLag.percentile(99) / 1e6), max: Math.round(loopLag.max / 1e6) }, sniperPrecheckMedianMs: med(preMs), sniperPrecheckP90Ms: preMs.length ? [...preMs].sort((a, b) => a - b)[Math.floor(preMs.length * 0.9)] : 0, medianDetectMs: med(lat.detectMs), detectNote: "websocket launches have no on-chain timestamp in the feed; counted as 1000 ms (conservative floor). Poll-detected launches are measured.", medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
     counters: state.counters, store: storeStatus(), websocket: !!ws, winnersTracked: winners.size, lastError: lastErr,
     recent: closed.slice(-40).reverse().map(({ signals, rug, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, precheckMs: signals?.precheck?.ms ?? null, rugMax: signals?.rugMax ?? null, rugLevel: rug?.riskLevel ?? null })) };
