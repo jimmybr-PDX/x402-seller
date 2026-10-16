@@ -370,12 +370,14 @@ function startWs() {
   } catch { ws = null; }
 }
 /** Oct 16 inflow_v1: its own fast loop (the copy scan waits on RugRadar snapshots and would miss the 30-60 s window). */
+const inflowDiag = { scans: 0, lastCands: 0, seen: 0, noTrades: 0, lastScanAt: "" };
 async function scanInflow() {
   const now = Date.now();
   const cands = [...seen.values()].filter((c) => now - c.createdMs >= 30_000 && now - c.createdMs <= 75_000 && !c.checked.has("inflow"));
+  inflowDiag.scans++; inflowDiag.lastCands = cands.length; inflowDiag.seen = seen.size; inflowDiag.lastScanAt = new Date().toISOString();
   for (const c of cands) {
     const age = (Date.now() - c.createdMs) / 1000; if (age > 80) { c.checked.add("inflow"); bump("inflow_v1.missedWindow"); continue; }
-    const tr = await trades(c.mint, 100); if (!tr) continue;
+    const tr = await trades(c.mint, 100); if (!tr) { inflowDiag.noTrades++; continue; }
       const early = tr.filter((t) => Date.parse(t.timestamp) - c.createdMs <= 60_000);
       const buys = early.filter((t) => t.type === "buy"), sells = early.filter((t) => t.type === "sell");
       const sol = (xs: any[]) => xs.reduce((a, t) => a + Number(t.amountSol || 0), 0);
@@ -461,7 +463,7 @@ export function paperSummary() {
     const xs = closed.filter((x) => x.strat === t.strat && x.result !== "buy_failed" && Date.parse(x.entryAt) >= start); const losses = xs.filter((x) => x.pnlSol <= 0);
     return { ...t, startedAt: new Date(start).toISOString(), trades: xs.length, totalPnlSol: +xs.reduce((a, x) => a + x.pnlSol, 0).toFixed(4), avgRoi: xs.length ? +(xs.reduce((a, x) => a + x.roi, 0) / xs.length).toFixed(4) : null,
       winRate: xs.length ? +(xs.filter((x) => x.pnlSol > 0).length / xs.length).toFixed(3) : null, avgLossRoi: losses.length ? +(losses.reduce((a, x) => a + x.roi, 0) / losses.length).toFixed(4) : null }; });
-  return { paused: PAUSED, tests, testDecisionRule: TEST_RULE, paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL (control and v2 tests), edge-finder 0.1 SOL; sniper paused (was 0.4 SOL)", startedAt: state.startedAt, strategies: by,
+  return { inflowDiag, paused: PAUSED, tests, testDecisionRule: TEST_RULE, paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL (control and v2 tests), edge-finder 0.1 SOL; sniper paused (was 0.4 SOL)", startedAt: state.startedAt, strategies: by,
     latency: { precheckRecent: preLog.slice(-30), eventLoopDelayMs: { p50: Math.round(loopLag.percentile(50) / 1e6), p99: Math.round(loopLag.percentile(99) / 1e6), max: Math.round(loopLag.max / 1e6) }, sniperPrecheckMedianMs: med(preMs), sniperPrecheckP90Ms: preMs.length ? [...preMs].sort((a, b) => a - b)[Math.floor(preMs.length * 0.9)] : 0, medianDetectMs: med(lat.detectMs), detectNote: "websocket launches have no on-chain timestamp in the feed; counted as 1000 ms (conservative floor). Poll-detected launches are measured.", medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
     counters: state.counters, store: storeStatus(), websocket: !!ws, winnersTracked: winners.size, lastError: lastErr,
     recent: closed.slice(-40).reverse().map(({ signals, rug, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, precheckMs: signals?.precheck?.ms ?? null, rugMax: signals?.rugMax ?? null, rugLevel: rug?.riskLevel ?? null })) };
