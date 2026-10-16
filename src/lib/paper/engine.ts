@@ -27,7 +27,7 @@ type Base = "copy" | "sniper" | "edge";
 export const RUG_VARIANTS: Record<"copy" | "edge", number[]> = { copy: [40], edge: [25] };
 /** Oct 15 test variants (see "What we learned"). v2 = entry filter that held up on held-out trades; v2ff = v2 + faster exits (untested idea). */
 export const V2 = { minWinners: 2, minBuyers: 12, maxRug: 49 };
-const V2_STRATS = ["copy_v2", "copy_v2ff", "copy_v2cp"];
+const V2_STRATS = ["copy_v2", "copy_v2ff", "copy_v2cp", "copy_v2cs"];
 /** Oct 15 (11 PM): sniper paused (no new buys; history stays). copy_v2cp = v2 + crash-protect exits. */
 export const PAUSED: Record<string, string> = { sniper: "paused Oct 15 (−10.06 SOL / 178 trades)" };
 export const CP = { dropPct: 15, windowS: 10, creatorSellSol: 0.3, holderSellFrac: 0.4, holderSellMinSol: 0.5 };
@@ -36,6 +36,7 @@ export const TESTS = [
   { strat: "copy_r40", rule: "Control: copy the winners, RugRadar score 40 or lower, normal sell rules", startedAt: "2026-10-15T11:20:00Z" },
   { strat: "copy_v2", rule: "Buy only with 2+ winner wallets, 12+ buyers, RugRadar under 50; normal sell rules", startedAt: "2026-10-16T04:52:07Z" },
   { strat: "copy_v2ff", rule: "Same entry as v2; sell after 90 s if never above break-even; stop loss 20%", startedAt: "2026-10-16T04:52:07Z" },
+  { strat: "copy_v2cs", rule: "Same entry as v2; skip the coin if the creator sold any amount before we buy; sell at once if the creator sells any amount after we buy; normal sell rules otherwise", startedAt: "" },
   { strat: "copy_v2cp", rule: "Same entry as v2; also sell at once on a 15%+ drop within about 10 s, when the creator sells 0.3+ SOL, or when a top-5 early buyer sells 40%+ of what they bought (0.5+ SOL); normal stop too", startedAt: "" },
 ];
 const VARIANT_CFG: Record<string, Partial<Cfg>> = { copy_v2ff: { stallS: 90, sl: -0.2 } }; // max RugRadar score allowed
@@ -204,8 +205,8 @@ async function rugSnapshotNow(mint: string) {
 
 async function manage(p: Pos) {
   const cfg = cfgOf(p.strat);
-  const isCp = p.strat.split("@")[0] === "copy_v2cp";
-  const tr = await trades(p.mint, isCp ? 30 : 5);
+  const isCp = p.strat.split("@")[0] === "copy_v2cp", isCs = p.strat.split("@")[0] === "copy_v2cs";
+  const tr = await trades(p.mint, isCp || isCs ? 30 : 5);
   const price = tr?.[0] ? Number(tr[0].priceSol) : null;
   const holdS = (Date.now() - p.entryAt) / 1000;
   let cpReason: string | null = null;
@@ -226,6 +227,10 @@ async function manage(p: Pos) {
   }
   if (price) { p.lastMarkRoi = (price / p.entryPriceSol) - 1; if (p.lastMarkRoi > p.peakRoi) { p.peakRoi = p.lastMarkRoi; p.peakAt = Date.now(); } }
   const r = p.lastMarkRoi;
+  if (isCs && tr) { // creator-sell guard (paper test): any creator sell after our entry -> exit now
+    const creator = seen.get(p.mint)?.creator;
+    if (creator && tr.some((t) => t.type === "sell" && t.userAddress === creator && Date.parse(t.timestamp) >= p.entryAt)) cpReason = "creator_sold_exit";
+  }
   let reason: string | null = p.forceExit ?? cpReason;
   // Oct 15: mark is vs our all-in buy price, so selling costs (~1.25% + sell fees) still apply; keep every profit exit above break-even
   const be = (p.bePct ?? 5) / 100, arm = Math.max(cfg.trailArm, be + cfg.trail + 0.02), tp = Math.max(cfg.tp, be + 0.1);
@@ -374,7 +379,8 @@ async function scanCandidates() {
       if (momentum || f.winnerBuyers.length >= 1 && !f.devSold) {
         c.checked.add("copy"); const rug = await rugSnapshot(c.mint); bump("copy.rugChecks");
         const v2ok = f.winnerBuyers.length >= V2.minWinners && f.uniqueBuyers >= V2.minBuyers && rug?.riskScore != null && rug.riskScore <= V2.maxRug;
-        for (const s of V2_STRATS) { if (v2ok) await enter(s, c, { ...f, ageS: Math.round(age), rule: "v2_two_winner_wallets", rug, rugMax: V2.maxRug }); else bump(`${s}.filteredOut`); }
+        const devSoldBefore = f.devSold || Number(rug?.buyer?.devSells ?? 0) > 0 || rug?.buyer?.creatorFirstSellAfterSec != null;
+        for (const s of V2_STRATS) { if (s === "copy_v2cs" && v2ok && devSoldBefore) { bump("copy_v2cs.skippedCreatorSold"); continue; } if (v2ok) await enter(s, c, { ...f, ageS: Math.round(age), rule: "v2_two_winner_wallets", rug, rugMax: V2.maxRug }); else bump(`${s}.filteredOut`); }
         for (const t of RUG_VARIANTS.copy) { if (rug?.riskScore != null && rug.riskScore <= t) await enter(`copy_r${t}`, c, { ...f, ageS: Math.round(age), rule: f.winnerBuyers.length ? "winner_wallet_bought" : "momentum", rug, rugMax: t }); else bump(`copy_r${t}.rejectedByRugRadar`); }
       }
       else if (age > 150) c.checked.add("copy");
@@ -397,7 +403,7 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   if (started || process.env.PAPER_ENABLED === "0") return; started = true;
   rugCheckFn = opts.rugCheck; if (opts.flagged) flagged = opts.flagged;
   await initStore();
-  state = loadState<State>(state); (state as any).cpStartedAt ??= new Date().toISOString(); state.open ??= []; state.counters ??= {}; state.startedAt ??= new Date().toISOString();
+  state = loadState<State>(state); (state as any).cpStartedAt ??= new Date().toISOString(); (state as any).csStartedAt ??= new Date().toISOString(); state.open ??= []; state.counters ??= {}; state.startedAt ??= new Date().toISOString();
   closed = loadTrades().slice(-5000);
   await loadWinners();
   startWs();
@@ -422,7 +428,7 @@ export function paperSummary() {
       totalPnlSol: +pnl.toFixed(4), avgRoi: done.length ? +(done.reduce((a, t) => a + t.roi, 0) / done.length).toFixed(4) : null,
       open: state.open.filter((p) => p.strat === s).map((p) => ({ symbol: p.symbol, mint: p.mint, ageS: Math.round((Date.now() - p.entryAt) / 1000), markRoi: +p.lastMarkRoi.toFixed(3) })) };
   }
-  const tests = TESTS.map((t) => { const start = Date.parse(t.startedAt || (state as any).cpStartedAt || new Date().toISOString());
+  const tests = TESTS.map((t) => { const start = Date.parse(t.startedAt || (t.strat === "copy_v2cs" ? (state as any).csStartedAt : (state as any).cpStartedAt) || new Date().toISOString());
     const xs = closed.filter((x) => x.strat === t.strat && x.result !== "buy_failed" && Date.parse(x.entryAt) >= start); const losses = xs.filter((x) => x.pnlSol <= 0);
     return { ...t, startedAt: new Date(start).toISOString(), trades: xs.length, totalPnlSol: +xs.reduce((a, x) => a + x.pnlSol, 0).toFixed(4), avgRoi: xs.length ? +(xs.reduce((a, x) => a + x.roi, 0) / xs.length).toFixed(4) : null,
       winRate: xs.length ? +(xs.filter((x) => x.pnlSol > 0).length / xs.length).toFixed(3) : null, avgLossRoi: losses.length ? +(losses.reduce((a, x) => a + x.roi, 0) / losses.length).toFixed(4) : null }; });
