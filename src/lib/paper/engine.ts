@@ -12,7 +12,7 @@ const loopLag = monitorEventLoopDelay({ resolution: 20 }); loopLag.enable();
 import { getProgramDerivedAddress, getAddressEncoder, address } from "@solana/kit";
 import { familyOf, type Family } from "./family.js";
 import { namedWallet, type Named } from "./named.js";
-import { privateSignals, noteLaunchMeta, type Priv } from "./private-signals.js";
+import { privateSignals, noteLaunchMeta, launchMeta, type Priv } from "./private-signals.js";
 import { initStore, loadState, loadTrades, appendTrade, saveState, storeStatus, loadFile, writeFile } from "./store.js";
 
 const SOL = "So11111111111111111111111111111111111111112";
@@ -22,7 +22,7 @@ const SIZE_SOL = Number(process.env.PAPER_SIZE_SOL ?? 0.1);
 const RPC = process.env.SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 const BASE_FEE = 5000, ATA_RENT = 2039280;
 export type Strat = string; // "sniper", or "<copy|edge>_r<maxRugScore>" threshold variants
-type Base = "copy" | "sniper" | "edge";
+type Base = "copy" | "sniper" | "edge" | "inflow";
 // Oct 15 re-tune: copy_r40 stays as the CONTROL; r25/r60 retired (same coins, no better on held-out trades); edge keeps r25 only.
 export const RUG_VARIANTS: Record<"copy" | "edge", number[]> = { copy: [40], edge: [25] };
 /** Oct 15 test variants (see "What we learned"). v2 = entry filter that held up on held-out trades; v2ff = v2 + faster exits (untested idea). */
@@ -37,10 +37,11 @@ export const TESTS = [
   { strat: "copy_v2", rule: "Buy only with 2+ winner wallets, 12+ buyers, RugRadar under 50; normal sell rules", startedAt: "2026-10-16T04:52:07Z" },
   { strat: "copy_v2ff", rule: "Same entry as v2; sell after 90 s if never above break-even; stop loss 20%", startedAt: "2026-10-16T04:52:07Z" },
   { strat: "copy_v2cs", rule: "Same entry as v2; skip the coin if the creator sold any amount before we buy; sell at once if the creator sells any amount after we buy; normal sell rules otherwise", startedAt: "" },
+  { strat: "inflow_v1", rule: "Buy 0.2 SOL 30-60 s after launch when 5+ SOL net has flowed in, the creator has not sold and no single buyer made more than half of the early buying; sell at once when the creator or a followed winning wallet sells, otherwise after 5 minutes; -25% stop as backstop", startedAt: "" },
   { strat: "copy_v2cp", rule: "Same entry as v2; also sell at once on a 15%+ drop within about 10 s, when the creator sells 0.3+ SOL, or when a top-5 early buyer sells 40%+ of what they bought (0.5+ SOL); normal stop too", startedAt: "" },
 ];
 const VARIANT_CFG: Record<string, Partial<Cfg>> = { copy_v2ff: { stallS: 90, sl: -0.2 } }; // max RugRadar score allowed
-export const STRATS: Strat[] = ["sniper", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...V2_STRATS, ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
+export const STRATS: Strat[] = ["sniper", "inflow_v1", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...V2_STRATS, ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
 const baseOf = (s: Strat) => s.split(/[_@]/)[0] as Base;
 type Cfg = { size: number; prio: number; tip: number; buyFail: number; sellFail: number; maxOpen: number; tp: number; trailArm: number; trail: number; sl: number; maxHoldS: number; stallS: number; maxBePct: number };
 export const cfgOf = (s: Strat): Cfg => ({ ...CFG[baseOf(s)], ...(VARIANT_CFG[s.split("@")[0]] ?? {}) });
@@ -50,6 +51,8 @@ export const CFG: Record<Base, Cfg> = {
   // copy: rules inferred from profitable early wallets (enter ~20-180 s, ~0.5 SOL, hold ~5-20 min, take profit / trail)
   copy: { size: 0.2, stallS: 300, maxBePct: 8, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.3, maxHoldS: 600 },
   // edge: momentum + RugRadar low risk only
+  // Oct 16 inflow_v1 (private test from the RED-PUMP / RPC backtest): exits are creator sell, followed-wallet sell, 5-min time stop, -25% backstop; no take-profit/trailing
+  inflow: { size: 0.2, stallS: 1e9, maxBePct: 8, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1e9, trailArm: 1e9, trail: 1, sl: -0.25, maxHoldS: 300 },
   edge: { size: 0.1, stallS: 300, maxBePct: 8, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 900 },
 };
 type Pos = { id: string; strat: Strat; mint: string; symbol: string; entryAt: number; entryAgeS: number; latencyMs: number; costLamports: number; tokens: string; entryPriceSol: number;
@@ -205,8 +208,8 @@ async function rugSnapshotNow(mint: string) {
 
 async function manage(p: Pos) {
   const cfg = cfgOf(p.strat);
-  const isCp = p.strat.split("@")[0] === "copy_v2cp", isCs = p.strat.split("@")[0] === "copy_v2cs";
-  const tr = await trades(p.mint, isCp || isCs ? 30 : 5);
+  const isCp = p.strat.split("@")[0] === "copy_v2cp", isCs = p.strat.split("@")[0] === "copy_v2cs", isIn = p.strat === "inflow_v1";
+  const tr = await trades(p.mint, isCp || isCs || isIn ? 30 : 5);
   const price = tr?.[0] ? Number(tr[0].priceSol) : null;
   const holdS = (Date.now() - p.entryAt) / 1000;
   let cpReason: string | null = null;
@@ -230,6 +233,11 @@ async function manage(p: Pos) {
   if (isCs && tr) { // creator-sell guard (paper test): any creator sell after our entry -> exit now
     const creator = seen.get(p.mint)?.creator;
     if (creator && tr.some((t) => t.type === "sell" && t.userAddress === creator && Date.parse(t.timestamp) >= p.entryAt)) cpReason = "creator_sold_exit";
+  }
+  if (isIn && tr) { // inflow_v1: creator sells or a followed winning wallet sells after our entry -> exit now
+    const creator = seen.get(p.mint)?.creator;
+    for (const t of tr) { if (t.type !== "sell" || Date.parse(t.timestamp) < p.entryAt) continue;
+      if (creator && t.userAddress === creator) { cpReason ??= "creator_sold_exit"; } else if (winners.has(t.userAddress)) cpReason ??= "winner_wallet_sold_exit"; }
   }
   let reason: string | null = p.forceExit ?? cpReason;
   // Oct 15: mark is vs our all-in buy price, so selling costs (~1.25% + sell fees) still apply; keep every profit exit above break-even
@@ -369,8 +377,24 @@ async function scanCandidates() {
     const age = (now - c.createdMs) / 1000;
     const wantCopy = age <= 180 && !c.checked.has("copy");
     const wantEdge = age >= 120 && !c.checked.has("edge");
-    if (!wantCopy && !wantEdge) continue;
+    const wantInflow = age >= 30 && age <= 75 && !c.checked.has("inflow");
+    if (!wantCopy && !wantEdge && !wantInflow) continue;
     const tr = await trades(c.mint, 100); if (!tr) continue;
+    if (wantInflow) { // Oct 16 private test: flow in the first 60 s after launch
+      const early = tr.filter((t) => Date.parse(t.timestamp) - c.createdMs <= 60_000);
+      const buys = early.filter((t) => t.type === "buy"), sells = early.filter((t) => t.type === "sell");
+      const sol = (xs: any[]) => xs.reduce((a, t) => a + Number(t.amountSol || 0), 0);
+      const net = sol(buys) - sol(sells), by: Record<string, number> = {}; for (const t of buys) by[t.userAddress] = (by[t.userAddress] ?? 0) + Number(t.amountSol || 0);
+      const top = Math.max(0, ...Object.values(by)), topShare = sol(buys) > 0 ? top / sol(buys) : 1;
+      const creatorSold = tr.some((t) => t.type === "sell" && t.userAddress === c.creator);
+      if (net >= 5 && !creatorSold && topShare <= 0.5) {
+        c.checked.add("inflow");
+        const devBuy = [...tr].reverse().find((t) => t.type === "buy" && t.userAddress === c.creator); const m = launchMeta(c.mint);
+        await enter("inflow_v1", c, { ageS: Math.round(age), rule: "inflow_5sol_60s", netInflowSol: +net.toFixed(2), topBuyerSharePct: Math.round(topShare * 100), earlyBuyers: Object.keys(by).length,
+          privateInflow: { telegram: m ? !!m.telegram : null, allThreeSocials: m ? m.socials === 3 : null, creatorFirstBuySol: devBuy ? +Number(devBuy.amountSol || 0).toFixed(3) : null, creatorFirstBuy1SolPlus: devBuy ? Number(devBuy.amountSol || 0) >= 1 : null } });
+      } else { bump(net < 5 ? "inflow_v1.lowInflow" : creatorSold ? "inflow_v1.creatorSold" : "inflow_v1.concentrated"); if (age > 60) c.checked.add("inflow"); }
+      if (!wantCopy && !wantEdge) continue;
+    }
     const f = flow(tr, c.creator);
     // edge looks later (2-10 min) when sell flow is normal, so it uses a looser flow test; RugRadar is its main filter
     const edgeFlow = f.uniqueBuyers >= 20 && f.buySol >= f.sellSol && !f.devSold && (f.mcapUsd ?? 0) >= 7000 && (f.mcapUsd ?? 0) <= 80000;
@@ -403,7 +427,7 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   if (started || process.env.PAPER_ENABLED === "0") return; started = true;
   rugCheckFn = opts.rugCheck; if (opts.flagged) flagged = opts.flagged;
   await initStore();
-  state = loadState<State>(state); (state as any).cpStartedAt ??= new Date().toISOString(); (state as any).csStartedAt ??= new Date().toISOString(); state.open ??= []; state.counters ??= {}; state.startedAt ??= new Date().toISOString();
+  state = loadState<State>(state); (state as any).cpStartedAt ??= new Date().toISOString(); (state as any).csStartedAt ??= new Date().toISOString(); (state as any).inflowStartedAt ??= new Date().toISOString(); state.open ??= []; state.counters ??= {}; state.startedAt ??= new Date().toISOString();
   closed = loadTrades().slice(-5000);
   await loadWinners();
   startWs();
@@ -428,7 +452,7 @@ export function paperSummary() {
       totalPnlSol: +pnl.toFixed(4), avgRoi: done.length ? +(done.reduce((a, t) => a + t.roi, 0) / done.length).toFixed(4) : null,
       open: state.open.filter((p) => p.strat === s).map((p) => ({ symbol: p.symbol, mint: p.mint, ageS: Math.round((Date.now() - p.entryAt) / 1000), markRoi: +p.lastMarkRoi.toFixed(3) })) };
   }
-  const tests = TESTS.map((t) => { const start = Date.parse(t.startedAt || (t.strat === "copy_v2cs" ? (state as any).csStartedAt : (state as any).cpStartedAt) || new Date().toISOString());
+  const tests = TESTS.map((t) => { const start = Date.parse(t.startedAt || (t.strat === "inflow_v1" ? (state as any).inflowStartedAt : t.strat === "copy_v2cs" ? (state as any).csStartedAt : (state as any).cpStartedAt) || new Date().toISOString());
     const xs = closed.filter((x) => x.strat === t.strat && x.result !== "buy_failed" && Date.parse(x.entryAt) >= start); const losses = xs.filter((x) => x.pnlSol <= 0);
     return { ...t, startedAt: new Date(start).toISOString(), trades: xs.length, totalPnlSol: +xs.reduce((a, x) => a + x.pnlSol, 0).toFixed(4), avgRoi: xs.length ? +(xs.reduce((a, x) => a + x.roi, 0) / xs.length).toFixed(4) : null,
       winRate: xs.length ? +(xs.filter((x) => x.pnlSol > 0).length / xs.length).toFixed(3) : null, avgLossRoi: losses.length ? +(losses.reduce((a, x) => a + x.roi, 0) / losses.length).toFixed(4) : null }; });

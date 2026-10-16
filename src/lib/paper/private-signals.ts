@@ -35,12 +35,13 @@ export function noteLaunchMeta(mint: string, uri: string | undefined) {
       if (!j) return;
       const img = String(j.image ?? "").replace(/^https?:\/\/[^/]+\/ipfs\//, "").slice(0, 120);
       const x = String(j.twitter ?? "").toLowerCase().replace(/^https?:\/\/(www\.)?(x|twitter)\.com\//, "").replace(/[?#].*$/, "").slice(0, 120);
-      metaCache.set(mint, { socials: [j.twitter, j.website, j.telegram].filter((v) => v && String(v).length > 3).length, xIsPost: x ? /\/status\//.test(x) : null,
+      metaCache.set(mint, { telegram: !!(j.telegram && String(j.telegram).length > 3), socials: [j.twitter, j.website, j.telegram].filter((v) => v && String(v).length > 3).length, xIsPost: x ? /\/status\//.test(x) : null,
         imageReused: img ? bump(imageSeen, img) : 0, xReused: x ? bump(xSeen, x) : 0 });
       if (metaCache.size > 4000) metaCache.delete(metaCache.keys().next().value!);
     } finally { metaPending--; }
   }).catch(() => {});
 }
+export const launchMeta = (mint: string) => metaCache.get(mint) ?? null;
 let chain: Promise<unknown> = Promise.resolve();
 export function privateSignals(mint: string, createdMs: number, creator: string, trades: any[] | null,
   dev: { launches24h: number; priorTracked: number; priorGraduated: number; priorDead: number }): Promise<Priv> {
