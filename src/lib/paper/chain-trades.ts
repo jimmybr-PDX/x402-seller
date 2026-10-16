@@ -11,7 +11,7 @@ const RPC = process.env.SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 const WS_URLS = [process.env.SOLANA_WS_URL, "wss://api.mainnet-beta.solana.com", "wss://solana-rpc.publicnode.com"].filter(Boolean) as string[];
 const TD = createHash("sha256").update("event:TradeEvent").digest().subarray(0, 8);
 const b58 = getAddressDecoder(), enc = getAddressEncoder();
-const MAX = Number(process.env.PAPER_CHAIN_MAX_COINS ?? 80);
+const MAX = Number(process.env.PAPER_CHAIN_MAX_COINS ?? 40);
 export type T = { type: "buy" | "sell"; userAddress: string; amountSol: number; priceSol: number; timestamp: string; tx: string; slotIndexId: string };
 type Coin = { mint: string; curve: string; trades: T[]; until: number; pinned: number; sub: number | null; reqId: number | null; added: number };
 const coins = new Map<string, Coin>(), bySub = new Map<number, string>(), byReq = new Map<number, string>();
@@ -36,7 +36,7 @@ function connect() {
       if (b58.decode(b.subarray(8, 40)) !== m) continue;
       const sol = Number(b.readBigUInt64LE(40)) / 1e9, buy = b[56] === 1, user = b58.decode(b.subarray(57, 89)), ts = Number(b.readBigInt64LE(89)), vs = Number(b.readBigUInt64LE(97)), vt = Number(b.readBigUInt64LE(105));
       c.trades.unshift({ type: buy ? "buy" : "sell", userAddress: user, amountSol: sol, priceSol: vt > 0 ? (vs / 1e9) / (vt / 1e6) : 0, timestamp: new Date(ts * 1000).toISOString(), tx: String(v.signature ?? ""), slotIndexId: String(j.params?.result?.context?.slot ?? "").padStart(13, "0") });
-      if (c.trades.length > 400) c.trades.length = 400; chainStat.tradesSeen++; }
+      if (c.trades.length > 150) c.trades.length = 150; chainStat.tradesSeen++; }
   } catch {} };
   w.onclose = () => { if (ws === w) { ws = null; wsIdx++; for (const c of coins.values()) { c.sub = null; c.reqId = null; } bySub.clear(); byReq.clear(); if (on) setTimeout(connect, 3000).unref?.(); } };
   w.onerror = () => {};
