@@ -5,6 +5,7 @@
  * Load control: at most MAX coins tracked at once; open positions pinned, coins that passed early filters kept longer, others dropped after ~2 min.
  */
 import { createHash } from "node:crypto";
+import { rpcUrl, heliusWsUrl, budgetOk, noteWs, noteWsConnect, isHeliusUrl } from "./helius.js";
 import { address, getAddressDecoder, getAddressEncoder, getProgramDerivedAddress } from "@solana/kit";
 const RPC = process.env.SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 const WS_URLS = [process.env.SOLANA_WS_URL, "wss://api.mainnet-beta.solana.com", "wss://solana-rpc.publicnode.com"].filter(Boolean) as string[];
@@ -21,10 +22,13 @@ function send(o: unknown) { try { if (ws?.readyState === 1) ws.send(JSON.stringi
 function subscribe(c: Coin) { if (c.sub != null || c.reqId != null || ws?.readyState !== 1) return; c.reqId = ++reqN; byReq.set(c.reqId, c.mint); send({ jsonrpc: "2.0", id: c.reqId, method: "logsSubscribe", params: [{ mentions: [c.curve] }, { commitment: "confirmed" }] }); }
 function connect() {
   const W = (globalThis as any).WebSocket; if (!W || ws) return;
-  const url = WS_URLS[wsIdx % WS_URLS.length]; chainStat.rpc = url.replace(/\?.*$/, ""); chainStat.connects++;
+  // trade streams are heavy (~1+ GB/day), so public RPCs come first; Helius only as last resort while the budget allows
+  const hw = heliusWsUrl(); const list = hw && budgetOk(5000) ? [...WS_URLS, hw] : WS_URLS;
+  const url = list[wsIdx % list.length]; const helius = isHeliusUrl(url); chainStat.rpc = helius ? "Helius websocket" : url.replace(/\?.*$/, ""); chainStat.connects++; if (helius) noteWsConnect();
   const w = new W(url); ws = w;
   w.onopen = () => { for (const c of coins.values()) { c.sub = null; c.reqId = null; subscribe(c); } };
   w.onmessage = (ev: any) => { try {
+    if (helius) { noteWs(String(ev.data).length); if (!budgetOk(500)) { try { w.close(); } catch {} return; } }
     const j = JSON.parse(String(ev.data));
     if (j.id && byReq.has(j.id)) { const m = byReq.get(j.id)!; byReq.delete(j.id); const c = coins.get(m); if (c && typeof j.result === "number") { c.sub = j.result; c.reqId = null; bySub.set(j.result, m); } return; }
     const v = j.params?.result?.value; const m = bySub.get(j.params?.subscription); if (!v?.logs || !m) return; const c = coins.get(m); if (!c) return;
@@ -56,7 +60,7 @@ export async function curveState(mints: string[]) {
   const now = Date.now(), need = mints.filter((m) => !(priceCache.get(m) && now - priceCache.get(m)!.at < 3000));
   for (let i = 0; i < need.length; i += 50) {
     const part = need.slice(i, i + 50); const keys = await Promise.all(part.map((m) => coins.get(m)?.curve ?? curveOf(m)));
-    const r: any = await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getMultipleAccounts", params: [keys, { encoding: "base64", commitment: "confirmed" }] }), signal: AbortSignal.timeout(5000) }).then((x) => x.json()).catch(() => null);
+    const r: any = await fetch(rpcUrl(), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getMultipleAccounts", params: [keys, { encoding: "base64", commitment: "confirmed" }] }), signal: AbortSignal.timeout(5000) }).then((x) => x.json()).catch(() => null);
     const vals = r?.result?.value; if (!Array.isArray(vals)) continue;
     part.forEach((m, k) => { const b = Buffer.from(vals[k]?.data?.[0] ?? "", "base64"); if (b.length < 49) { priceCache.set(m, { at: now, v: null }); return; }
       const vtok = b.readBigUInt64LE(8), vsol = b.readBigUInt64LE(16); priceCache.set(m, { at: now, v: { priceSol: Number(vtok) > 0 ? (Number(vsol) / 1e9) / (Number(vtok) / 1e6) : 0, vsol, vtok, complete: b[48] === 1 } }); chainStat.priced++; });

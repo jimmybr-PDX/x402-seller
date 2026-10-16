@@ -12,6 +12,7 @@ const loopLag = monitorEventLoopDelay({ resolution: 20 }); loopLag.enable();
 import { getProgramDerivedAddress, getAddressEncoder, getAddressDecoder, address } from "@solana/kit";
 import { familyOf, type Family } from "./family.js";
 import { namedWallet, type Named } from "./named.js";
+import { rpcUrl, heliusWsUrl, isHeliusUrl, noteWs, noteWsConnect, budgetOk, heliusStatus, loadHelius, heliusDaily, heliusEnabled } from "./helius.js";
 import { track, pin, chainTrades, curveState, setOn, isOn, chainStat } from "./chain-trades.js";
 import { privateSignals, noteLaunchMeta, launchMeta, type Priv } from "./private-signals.js";
 import { initStore, loadState, loadTrades, appendTrade, saveState, storeStatus, loadFile, writeFile } from "./store.js";
@@ -109,7 +110,7 @@ async function quote(input: string, output: string, amount: string | number): Pr
 async function curveSell(mint: string, tokens: bigint): Promise<bigint | null> {
   try {
     const [pda] = await getProgramDerivedAddress({ programAddress: address("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), seeds: ["bonding-curve", getAddressEncoder().encode(address(mint))] });
-    const r: any = await (await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [pda, { encoding: "base64" }] }), signal: AbortSignal.timeout(5000) })).json();
+    const r: any = await (await fetch(rpcUrl(), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [pda, { encoding: "base64" }] }), signal: AbortSignal.timeout(5000) })).json();
     const b = Buffer.from(r?.result?.value?.data?.[0] ?? "", "base64"); if (b.length < 49 || b[48] === 1) return null;
     const vtok = b.readBigUInt64LE(8), vsol = b.readBigUInt64LE(16);
     return (vsol * tokens / (vtok + tokens)) * 9875n / 10000n;
@@ -411,29 +412,37 @@ const PUMP_MINT_AUTH = "TSLvdd1pWpHVjahSpsvCXUbgwsL3JAcvokwaKt1eokM";
 const CHAIN_WS = [process.env.SOLANA_WS_URL, "wss://api.mainnet-beta.solana.com", "wss://solana-rpc.publicnode.com"].filter(Boolean) as string[];
 const CREATE_DISC = createHash("sha256").update("event:CreateEvent").digest().subarray(0, 8);
 export const feed = { lastWsAt: 0, lastWsMsgAt: 0, lastPollAt: 0, lastChainAt: 0, chainNew: 0, chainOn: false, chainUrl: "", chainSwitches: 0 };
-let chainWs: any = null, chainIdx = 0;
+let chainWs: any = null, chainIdx = 0, heliusWsFails = 0;
+const heliusWsBad = () => heliusWsFails >= 3;
 const b58 = getAddressDecoder();
 export function chainStart() {
-  const W = (globalThis as any).WebSocket; if (!W || chainWs) return;
-  const url = CHAIN_WS[chainIdx % CHAIN_WS.length]; feed.chainUrl = url.replace(/\?.*$/, ""); feed.chainOn = true; feed.chainSwitches++;
+  const W = (globalThis as any).WebSocket; if (!W || chainWs) return; const openedAt = Date.now();
+  // Oct 16: Helius websocket first (cheap here: only pump.fun create transactions, ~2-4k credits/day), public RPCs as fallback
+  const hw = heliusWsUrl(); const list = hw && budgetOk(2000) && !heliusWsBad() ? [hw, ...CHAIN_WS] : CHAIN_WS;
+  const url = list[chainIdx % list.length]; const helius = isHeliusUrl(url); feed.chainUrl = helius ? "Helius websocket" : url.replace(/\?.*$/, ""); feed.chainOn = true; feed.chainSwitches++; if (helius) noteWsConnect();
   try {
     const w = new W(url); chainWs = w;
     w.onopen = () => w.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "logsSubscribe", params: [{ mentions: [PUMP_MINT_AUTH] }, { commitment: "confirmed" }] }));
     w.onmessage = (ev: any) => { try {
+      if (helius) noteWs(String(ev.data).length);
       const logs: string[] | undefined = JSON.parse(String(ev.data)).params?.result?.value?.logs; if (!logs) return;
       for (const l of logs) { if (!l.startsWith("Program data: ")) continue; const b = Buffer.from(l.slice(14), "base64"); if (b.length < 120 || !b.subarray(0, 8).equals(CREATE_DISC)) continue;
         let o = 8; const rs = () => { const n = b.readUInt32LE(o); o += 4; const v = b.subarray(o, o + n).toString("utf8"); o += n; return v; };
         const name = rs(), symbol = rs(), uri = rs(); const mint = b58.decode(b.subarray(o, o + 32)); o += 64; const user = b58.decode(b.subarray(o, o + 32));
         onNewCoin({ mint, symbol, name, creator: user, created_timestamp: Date.now() - 1000, uri }, "chain"); }
     } catch {} };
-    w.onclose = () => { if (chainWs === w) { chainWs = null; chainIdx++; } };
+    w.onopen = ((o) => () => { if (helius) heliusWsFails = 0; o?.(); })(w.onopen);
+    w.onclose = () => { if (helius && Date.now() - openedAt < 30_000) heliusWsFails++; if (chainWs === w) { chainWs = null; chainIdx = helius ? chainIdx : chainIdx + 1; if (helius && heliusWsFails >= 3) chainIdx++; } };
     w.onerror = () => {};
   } catch { chainWs = null; chainIdx++; }
 }
 function chainStop() { feed.chainOn = false; if (chainWs) { const w = chainWs; chainWs = null; try { w.close(); } catch {} } }
 async function feedWatch() {
   const now = Date.now(), stale = now - feed.lastWsAt > 60_000 && now - feed.lastPollAt > 60_000;
-  if (stale) chainStart(); else if (chainWs && now - Math.max(feed.lastWsAt, feed.lastPollAt) < 30_000) chainStop();
+  // With Helius available the chain feed stays on all the time (fastest launch detection); it drops to public RPCs when the daily budget runs low
+  const keepOn = heliusEnabled() && budgetOk(2000);
+  if (chainWs && feed.chainUrl === "Helius websocket" && !budgetOk(500)) chainStop();
+  if (stale || keepOn) chainStart(); else if (chainWs && now - Math.max(feed.lastWsAt, feed.lastPollAt) < 30_000) chainStop();
 }
 export const activeFeed = () => { const now = Date.now(); return { active: [now - feed.lastWsAt < 60_000 && "PumpPortal websocket", now - feed.lastPollAt < 60_000 && "pump.fun list", feed.chainOn && "Solana chain backup"].filter(Boolean),
   pumpPortalLastCoinSAgo: feed.lastWsAt ? Math.round((now - feed.lastWsAt) / 1000) : null, pumpFunListLastSAgo: feed.lastPollAt ? Math.round((now - feed.lastPollAt) / 1000) : null,
@@ -523,12 +532,12 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   if (process.env.PAPER_FORCE_CHAIN === "1") setOn(true); // test switch
   const loop = async (fn: () => Promise<unknown>, ms: number) => { for (;;) { await new Promise((r) => setImmediate(r)); try { await fn(); } catch (e) { lastErr = String((e as Error).message ?? e).slice(0, 160); } await sleep(ms); } };
   process.once("SIGTERM", () => { saveState(state, "paper: flush on shutdown").catch(() => {}); });
-  sc = loadFile<Sc[]>("scorecard.json", []); nlog = loadFile("names.json", {}); creatorMints = loadFile("creators.json", {}); devStats = loadFile("devstats.json", {});
+  loadHelius((state as any).heliusDaily); sc = loadFile<Sc[]>("scorecard.json", []); nlog = loadFile("names.json", {}); creatorMints = loadFile("creators.json", {}); devStats = loadFile("devstats.json", {});
   if (!sc.length) for (const t of closed) if (t.rug?.riskScore != null && !sc.some((x) => x.mint === t.mint)) sc.push({ mint: t.mint, symbol: t.symbol, checkedAt: Date.parse(t.entryAt), score: t.rug.riskScore, level: t.rug.riskLevel, priceSol: t.entryPriceSol, liqUsd: t.rug.facts?.liquidityUsd ?? null, backfilled: true, after: {} });
   loop(scRecheck, 60_000);
   loop(pollNew, 6000); loop(rpcPing, 60_000); loop(scanCandidates, 8000); loop(scanInflow, 4000); loop(feedWatch, 15_000);
-  loop(async () => { for (const p of [...state.open]) { await manage(p); await new Promise((r) => setImmediate(r)); } }, 5_000); // Oct 15: 10 s -> 5 s price checks
-  loop(async () => { for (const [n, o] of [["scorecard.json", sc], ["names.json", nlog], ["creators.json", creatorMints], ["devstats.json", devStats]] as const) { writeFile(n, o); await new Promise((r) => setImmediate(r)); } if (dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
+  loop(async () => { if (isOn() && state.open.length) await curveState([...new Set(state.open.map((p) => p.mint))]).catch(() => null); /* one batched price read for all open positions */ for (const p of [...state.open]) { await manage(p); await new Promise((r) => setImmediate(r)); } }, 5_000); // Oct 15: 10 s -> 5 s price checks
+  loop(async () => { for (const [n, o] of [["scorecard.json", sc], ["names.json", nlog], ["creators.json", creatorMints], ["devstats.json", devStats]] as const) { writeFile(n, o); await new Promise((r) => setImmediate(r)); } (state as any).heliusDaily = heliusDaily; if (dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
 }
 
 export function paperSummary() {
@@ -546,7 +555,7 @@ export function paperSummary() {
     const xs = closed.filter((x) => x.strat === t.strat && x.result !== "buy_failed" && Date.parse(x.entryAt) >= start); const losses = xs.filter((x) => x.pnlSol <= 0);
     return { ...t, startedAt: new Date(start).toISOString(), trades: xs.length, totalPnlSol: +xs.reduce((a, x) => a + x.pnlSol, 0).toFixed(4), avgRoi: xs.length ? +(xs.reduce((a, x) => a + x.roi, 0) / xs.length).toFixed(4) : null,
       winRate: xs.length ? +(xs.filter((x) => x.pnlSol > 0).length / xs.length).toFixed(3) : null, avgLossRoi: losses.length ? +(losses.reduce((a, x) => a + x.roi, 0) / losses.length).toFixed(4) : null }; });
-  return { dataSource: dataSource(), feed: activeFeed(), inflowDiag, paused: PAUSED, tests, testDecisionRule: TEST_RULE, paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL (control and v2 tests), edge-finder 0.1 SOL; sniper paused (was 0.4 SOL)", startedAt: state.startedAt, strategies: by,
+  return { helius: heliusStatus(), dataSource: dataSource(), feed: activeFeed(), inflowDiag, paused: PAUSED, tests, testDecisionRule: TEST_RULE, paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL (control and v2 tests), edge-finder 0.1 SOL; sniper paused (was 0.4 SOL)", startedAt: state.startedAt, strategies: by,
     latency: { precheckRecent: preLog.slice(-30), eventLoopDelayMs: { p50: Math.round(loopLag.percentile(50) / 1e6), p99: Math.round(loopLag.percentile(99) / 1e6), max: Math.round(loopLag.max / 1e6) }, sniperPrecheckMedianMs: med(preMs), sniperPrecheckP90Ms: preMs.length ? [...preMs].sort((a, b) => a - b)[Math.floor(preMs.length * 0.9)] : 0, medianDetectMs: med(lat.detectMs), detectNote: "websocket launches have no on-chain timestamp in the feed; counted as 1000 ms (conservative floor). Poll-detected launches are measured.", medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
     counters: state.counters, store: storeStatus(), websocket: !!ws, winnersTracked: winners.size, lastError: lastErr,
     recent: closed.slice(-40).reverse().map(({ signals, rug, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, precheckMs: signals?.precheck?.ms ?? null, rugMax: signals?.rugMax ?? null, rugLevel: rug?.riskLevel ?? null })) };
