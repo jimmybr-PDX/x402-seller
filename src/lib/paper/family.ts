@@ -56,7 +56,7 @@ function siblings(parent: string): Promise<string[]> {
   return p;
 }
 export const MAX_HOPS = 5, FANOUT_TX = 200; // keep tracing while the trail is clean; stop at exchanges, busy or fan-out wallets
-export type Family = { hopsReached: number; stopReason: string; ruggerHop: number | null; creator: string; hops: { wallet: string; label: string | null; sol: number | null }[]; origin: string; familyWallets: number; familyCoinsBefore: number; familyRugs: number; familyTracked: number; knownRugger: boolean; serialRugger: boolean; ms: number; rpcCalls: number };
+export type Family = { hopsReached: number; stopReason: string; ruggerHop: number | null; creator: string; hops: { wallet: string; label: string | null; sol: number | null }[]; origin: string; familyWallets: number; familyCoinsBefore: number; familyRugs: number; familyTracked: number; knownRugger: boolean; serialRugger: boolean; siblings?: string[]; ms: number; rpcCalls: number };
 export type FamilyCtx = { coinsBy: (wallet: string) => { mint: string; t: number }[]; rugged: (mint: string) => boolean | null; flagged: (wallet: string) => boolean };
 // Load control (Oct 15): at most 2 creator-family traces run at once; the rest queue.
 let slots = 2; const waiters: (() => void)[] = [];
@@ -90,7 +90,7 @@ export function familyOf(creator: string, beforeMs: number, ctx: FamilyCtx): Pro
     const knownRugger = fam.some((w) => ctx.flagged(w));
     if (knownRugger && origin === "fresh wallet chain") origin = "known rugger in family";
     const familyRugs = verdicts.filter(Boolean).length;
-    return { hopsReached: hops.length, stopReason, ruggerHop, creator, hops, origin, familyWallets: fam.length, familyCoinsBefore: coins.length, familyRugs, familyTracked: verdicts.length, knownRugger, serialRugger: knownRugger || familyRugs >= 2, ms: Date.now() - t0, rpcCalls: reqs - r0 };
+    return { hopsReached: hops.length, stopReason, ruggerHop, creator, hops, origin, familyWallets: fam.length, familyCoinsBefore: coins.length, familyRugs, familyTracked: verdicts.length, knownRugger, serialRugger: knownRugger || familyRugs >= 2, siblings: sibs.slice(0, 8), ms: Date.now() - t0, rpcCalls: reqs - r0 };
   });
   famCache.set(creator, { at: Date.now(), p }); if (famCache.size > 5000) famCache.delete(famCache.keys().next().value!);
   return p;

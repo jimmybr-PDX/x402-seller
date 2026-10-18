@@ -24,7 +24,7 @@ const SIZE_SOL = Number(process.env.PAPER_SIZE_SOL ?? 0.1);
 const RPC = process.env.SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 const BASE_FEE = 5000, ATA_RENT = 2039280;
 export type Strat = string; // "sniper", or "<copy|edge>_r<maxRugScore>" threshold variants
-type Base = "copy" | "sniper" | "edge" | "inflow";
+type Base = "copy" | "sniper" | "edge" | "inflow" | "early";
 // Oct 15 re-tune: copy_r40 stays as the CONTROL; r25/r60 retired (same coins, no better on held-out trades); edge keeps r25 only.
 export const RUG_VARIANTS: Record<"copy" | "edge", number[]> = { copy: [40], edge: [25] };
 /** Oct 15 test variants (see "What we learned"). v2 = entry filter that held up on held-out trades; v2ff = v2 + faster exits (untested idea). */
@@ -40,11 +40,17 @@ export const TESTS = [
   { strat: "copy_v2ff", rule: "Same entry as v2; sell after 90 s if never above break-even; stop loss 20%", startedAt: "2026-10-16T04:52:07Z" },
   { strat: "copy_v2cs", rule: "Same entry as v2; skip the coin if the creator sold any amount before we buy; sell at once if the creator sells any amount after we buy; normal sell rules otherwise", startedAt: "" },
   { strat: "inflow_v1", rule: "Buy 0.2 SOL 30-60 s after launch when 5+ SOL net has flowed in, the creator has not sold and no single buyer made more than half of the early buying; sell at once when the creator or a followed winning wallet sells, otherwise after 5 minutes; -25% stop as backstop", startedAt: "" },
+  { strat: "early_v1", rule: "Oct 18 test: buy 0.2 SOL the moment the launch shows up on the Helius/Solana chain feed when the creator's first buy is 1+ SOL, the creator has not sold and no other buyer has more than half of the non-creator buying seen so far; normal copy sell rules; latency recorded (feed receive -> decision -> simulated fill, plus launch block time -> fill when the block time is known)", startedAt: "2026-10-18T22:00:00Z" },
+  { strat: "tp20", rule: "Oct 18 test: same entry as the control (copy_r40); take profit at +20%, trailing stop (arms at +10%, sells 8 points below the high; both kept above break-even), other sell rules as the control", startedAt: "2026-10-18T22:00:00Z" },
+  { strat: "inflow_tp", rule: "Oct 18 test: same entry as inflow_v1; exits are tp20's (take profit +20%, trailing stop, control's stop loss / stall / time stop) instead of inflow_v1's creator-sell and 5-min exits", startedAt: "2026-10-18T22:00:00Z" },
   { strat: "copy_v2cp", rule: "Same entry as v2; also sell at once on a 15%+ drop within about 10 s, when the creator sells 0.3+ SOL, or when a top-5 early buyer sells 40%+ of what they bought (0.5+ SOL); normal stop too", startedAt: "" },
 ];
-const VARIANT_CFG: Record<string, Partial<Cfg>> = { copy_v2ff: { stallS: 90, sl: -0.2 } }; // max RugRadar score allowed
-export const STRATS: Strat[] = ["sniper", "inflow_v1", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...V2_STRATS, ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
-const baseOf = (s: Strat) => s.split(/[_@]/)[0] as Base;
+export const TP20: Partial<Cfg> = { tp: 0.2, trailArm: 0.1, trail: 0.08, sl: -0.3, stallS: 300, maxHoldS: 600 };
+const VARIANT_CFG: Record<string, Partial<Cfg>> = { copy_v2ff: { stallS: 90, sl: -0.2 }, tp20: TP20, inflow_tp: TP20 }; // max RugRadar score allowed
+export const STRATS: Strat[] = ["sniper", "inflow_v1", "early_v1", "tp20", "inflow_tp", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...V2_STRATS, ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
+// Oct 18: new tests whose names don't start with their base (cost model / size come from the base)
+const BASE_OF: Record<string, Base> = { early_v1: "early", tp20: "copy", inflow_tp: "inflow" };
+const baseOf = (s: Strat) => (BASE_OF[s.split("@")[0]] ?? s.split(/[_@]/)[0]) as Base;
 type Cfg = { size: number; prio: number; tip: number; buyFail: number; sellFail: number; maxOpen: number; tp: number; trailArm: number; trail: number; sl: number; maxHoldS: number; stallS: number; maxBePct: number };
 export const cfgOf = (s: Strat): Cfg => ({ ...CFG[baseOf(s)], ...(VARIANT_CFG[s.split("@")[0]] ?? {}) });
 export const CFG: Record<Base, Cfg> = {
@@ -55,6 +61,8 @@ export const CFG: Record<Base, Cfg> = {
   // edge: momentum + RugRadar low risk only
   // Oct 16 inflow_v1 (private test from the RED-PUMP / RPC backtest): exits are creator sell, followed-wallet sell, 5-min time stop, -25% backstop; no take-profit/trailing
   inflow: { size: 0.2, stallS: 1e9, maxBePct: 8, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1e9, trailArm: 1e9, trail: 1, sl: -0.25, maxHoldS: 300 },
+  // Oct 18 early_v1: copy's cost model and sell rules, 0.2 SOL
+  early: { size: 0.2, stallS: 300, maxBePct: 8, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.3, maxHoldS: 600 },
   edge: { size: 0.1, stallS: 300, maxBePct: 8, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 900 },
 };
 type Pos = { id: string; strat: Strat; mint: string; symbol: string; entryAt: number; entryAgeS: number; latencyMs: number; costLamports: number; tokens: string; entryPriceSol: number;
@@ -186,7 +194,7 @@ export const GOOD_DEV_MULTS: number[] = []; // Oct 15: retired; "known good dev"
 async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs: number }, signals: any, mult = 1) {
   const SIZE = +(CFG[baseOf(strat)].size * mult).toFixed(4); // copy 0.2 SOL, sniper/edge 0.1 SOL; trusted-dev multipliers on top
   if (mult === 1) { // trusted-dev coin: also open bigger test positions, tracked as their own variants ("<strategy>@2x")
-    const fam = await Promise.race([familyFor(c.mint) ?? Promise.resolve(null), sleep(baseOf(strat) === "sniper" ? 0 : 1000).then(() => null)]).catch(() => null);
+    const fam = await Promise.race([familyFor(c.mint) ?? Promise.resolve(null), sleep(baseOf(strat) === "sniper" || baseOf(strat) === "early" ? 0 : 1000).then(() => null)]).catch(() => null);
     const tr = trustFor(c.mint, fam as any); if (fam) signals = { ...signals, familyKnown: fam };
     if (tr?.knownGood) for (const m of GOOD_DEV_MULTS) enter(`${strat}@${m}x`, c, { ...signals, trust: tr }, m).catch(() => {});
     if (tr) signals = { ...signals, trust: tr };
@@ -195,7 +203,7 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
   if (state.open.filter((p) => p.strat === strat).length >= cfg.maxOpen) { bump(`${strat}.skipFull`); return; }
   if (state.open.some((p) => p.strat === strat && p.mint === c.mint)) return;
   const tDecide = Date.now();
-  const q1 = await quote(SOL, c.mint, Math.round(SIZE * LAMPORTS));
+  const q1 = await buyQuote(strat, c.mint, Math.round(SIZE * LAMPORTS));
   if (!q1) { bump(`${strat}.noBuyRoute`); return; }
   // Oct 15: skip when costs alone need more than maxBePct to break even (fixed fees + ~2.5% pump.fun + price impact)
   const fixedRT = (2 * (BASE_FEE + cfg.prio + cfg.tip) + BASE_FEE) / LAMPORTS;
@@ -204,7 +212,7 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
   const famNow = signals.trust ? null : null; void famNow;
   if (signals.family?.serialRugger || signals.familyKnown?.serialRugger) { bump(`${strat}.skippedSerialRugger`); return; }
   const lms = execLatencyMs(); await sleep(lms);
-  const q2 = await quote(SOL, c.mint, Math.round(SIZE * LAMPORTS)); // price at simulated landing
+  const q2 = await buyQuote(strat, c.mint, Math.round(SIZE * LAMPORTS)); // price at simulated landing
   const fill = q2 && q2.out < q1.out ? q2.out : q1.out; // worse of the two (never flatter)
   const fees = BASE_FEE + cfg.prio + cfg.tip;
   const id = `${strat}:${c.mint}`;
@@ -228,10 +236,44 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
     pos.named = await namedWallet(cr, f?.hops?.[0]?.wallet ?? null); dirty = true; })().catch(() => {});
   // Private creator-family trace: async for the sniper (never on its critical path); copy/edge wait up to 1 s, else it fills in later.
   const famP = familyFor(c.mint);
-  if (famP) { famP.then((f) => { pos.family = f; dirty = true; }).catch(() => {}); if (baseOf(strat) !== "sniper") await Promise.race([famP, sleep(1000)]).catch(() => {}); }
+  if (famP) { famP.then((f) => { pos.family = f; noteFunding(f); dirty = true; }).catch(() => {}); if (baseOf(strat) !== "sniper" && baseOf(strat) !== "early") await Promise.race([famP, sleep(1000)]).catch(() => {}); }
   // Record RugRadar's full signals at the moment of the buy, for every strategy (sniper: right after, never delays entry).
   if (!signals.rug) pendingRug.set(pos.id, rugSnapshot(c.mint).then((r) => { pos.rug = r; dirty = true; pendingRug.delete(pos.id); if (strat === "sniper" && r?.riskLevel === "high") pos.forceExit = "rugradar_high_risk_after_entry"; return r; }));
   else pos.rug = signals.rug;
+  if (strat === "early_v1" && signals.slot) launchBlockTime(signals.slot).then((bt) => { if (bt) { pos.signals.launchBlockTimeMs = bt; pos.signals.launchToFillMs = pos.entryAt - bt; pos.signals.launchToFillNote = "block time has 1 s resolution"; dirty = true; } }).catch(() => {});
+}
+/** Oct 18: early_v1 may buy before Jupiter routes a brand-new coin; then price against the bonding curve (same constant-product math as quote()). Other strategies unchanged. */
+async function buyQuote(strat: Strat, mint: string, lamports: number) {
+  const q = await quote(SOL, mint, lamports); if (q || strat !== "early_v1" || noRouteFlag) return q;
+  const cs = (await curveState([mint]).catch(() => ({} as any)))[mint]; if (!cs || cs.complete) return null;
+  const amt = BigInt(lamports), net = amt * 99n / 100n, out = cs.vtok * net / (cs.vsol + net), spot = Number(cs.vtok) / Number(cs.vsol) * Number(amt);
+  return { out, impact: spot > 0 ? Math.max(0, 1 - Number(out) / spot) : 0 };
+}
+/** Launch block time from a free public RPC (never Helius credits). */
+async function launchBlockTime(slot: number): Promise<number | null> {
+  for (let i = 0; i < 3; i++) { await sleep(4000);
+    const r: any = await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getBlockTime", params: [slot] }), signal: AbortSignal.timeout(4000) }).then((x) => x.json()).catch(() => null);
+    if (typeof r?.result === "number") return r.result * 1000; }
+  return null;
+}
+// ---------------- PRIVATE "coinFactoryFunder" flag (paper trades only; never part of RugRadar) ----------------
+// A wallet (creator or a funder up its chain) that funded 5+ different coin creators within 24 h. Counts come from our own creator-family
+// traces (each traced creator's funding chain) plus the funder's sampled recent transfers that went to wallets we saw launch a coin. Lower bound.
+export const COIN_FACTORY = { minCreators: 5, windowMs: 86_400_000, names: ["helpmegetcamaro"] };
+const fundedBy = new Map<string, Map<string, number>>(); // funder -> creator -> when seen
+function noteFunded(funder: string, creator: string, at: number) { if (!funder || !creator || funder === creator) return; let m = fundedBy.get(funder); if (!m) { m = new Map(); fundedBy.set(funder, m); if (fundedBy.size > 20000) fundedBy.delete(fundedBy.keys().next().value!); } m.set(creator, at); if (m.size > 200) m.delete(m.keys().next().value!); }
+const launchedRecently = (w: string, now: number) => (creatorMints[w] ?? []).some(([, t]) => now - t < COIN_FACTORY.windowMs);
+function noteFunding(f: Family | null | undefined) {
+  if (!f?.creator) return; const now = Date.now(); const chain = [f.creator, ...(f.hops ?? []).filter((h) => !h.label).map((h) => h.wallet)];
+  if (chain[1]) noteFunded(chain[1], chain[0]!, now); // the direct funder of a coin creator
+  for (const w of (f as any).siblings ?? []) if (chain[1] && launchedRecently(w, now)) noteFunded(chain[1], w, now);
+}
+export function coinFactoryOf(f: Family | null | undefined, named: Named | null | undefined) {
+  const now = Date.now(); const wallets = f ? [f.creator, ...(f.hops ?? []).filter((h) => !h.label).map((h) => h.wallet)] : [];
+  let best: { wallet: string; fundedCreators24h: number } | null = null;
+  for (const w of wallets) { const n = [...(fundedBy.get(w)?.values() ?? [])].filter((t) => now - t < COIN_FACTORY.windowMs).length; if (!best || n > best.fundedCreators24h) best = { wallet: w, fundedCreators24h: n }; }
+  const nm = JSON.stringify(named ?? "").toLowerCase(); const byName = COIN_FACTORY.names.find((x) => nm.includes(x)) ?? null;
+  return { flag: (best?.fundedCreators24h ?? 0) >= COIN_FACTORY.minCreators || !!byName, wallet: best?.wallet ?? null, fundedCreators24h: best?.fundedCreators24h ?? 0, knownName: byName, traced: !!f };
 }
 const pendingRug = new Map<string, Promise<any>>();
 let rugChain: Promise<unknown> = Promise.resolve();
@@ -361,7 +403,7 @@ async function close(p: Pos, reason: string, outLamports: bigint, fees: number) 
   const t = { id: p.id, strat: p.strat, mint: p.mint, symbol: p.symbol, result: pnl > 0 ? "win" : "loss", exitReason: reason,
     entryAt: new Date(p.entryAt).toISOString(), exitAt: new Date().toISOString(), holdS: Math.round((Date.now() - p.entryAt) / 1000), entryAgeS: p.entryAgeS, latencyMs: p.latencyMs,
     sizeSol: p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */, sizeMult: p.sizeMult ?? 1, costSol: +(p.costLamports / LAMPORTS).toFixed(6), proceedsSol: +(proceeds / LAMPORTS).toFixed(6), pnlSol: +pnl.toFixed(6), roi: +(pnl / (p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */)).toFixed(4),
-    entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, priv: p.priv ?? null, named: p.named ?? null, dataSource: (p as any).dataSource ?? null, trust: trustFor(p.mint, p.family), feesPaid, breakEvenPct };
+    entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, priv: p.priv ?? null, named: p.named ?? null, dataSource: (p as any).dataSource ?? null, trust: trustFor(p.mint, p.family), coinFactoryFunder: coinFactoryOf(p.family, p.named), feesPaid, breakEvenPct };
   state.open = state.open.filter((x) => x !== p); closed.push(t); if (closed.length > 2500) closed.splice(0, 500); appendTrade(t); dirty = true; bump(`${p.strat}.exits`);
 }
 
@@ -423,13 +465,15 @@ export function chainStart() {
   try {
     const w = new W(url); chainWs = w;
     w.onopen = () => w.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "logsSubscribe", params: [{ mentions: [PUMP_MINT_AUTH] }, { commitment: "confirmed" }] }));
-    w.onmessage = (ev: any) => { try {
+    w.onmessage = (ev: any) => { const recvMs = Date.now(); try {
       if (helius) noteWs(String(ev.data).length);
       const logs: string[] | undefined = JSON.parse(String(ev.data)).params?.result?.value?.logs; if (!logs) return;
       for (const l of logs) { if (!l.startsWith("Program data: ")) continue; const b = Buffer.from(l.slice(14), "base64"); if (b.length < 120 || !b.subarray(0, 8).equals(CREATE_DISC)) continue;
         let o = 8; const rs = () => { const n = b.readUInt32LE(o); o += 4; const v = b.subarray(o, o + n).toString("utf8"); o += n; return v; };
         const name = rs(), symbol = rs(), uri = rs(); const mint = b58.decode(b.subarray(o, o + 32)); o += 64; const user = b58.decode(b.subarray(o, o + 32));
-        onNewCoin({ mint, symbol, name, creator: user, created_timestamp: Date.now() - 1000, uri }, "chain"); }
+        const slot = Number(JSON.parse(String(ev.data)).params?.result?.context?.slot ?? 0) || null;
+        onNewCoin({ mint, symbol, name, creator: user, created_timestamp: Date.now() - 1000, uri }, "chain");
+        earlyV1(mint, symbol, user, logs, slot, helius ? "Helius websocket" : feed.chainUrl, recvMs); }
     } catch {} };
     w.onopen = ((o) => () => { if (helius) heliusWsFails = 0; o?.(); })(w.onopen);
     w.onclose = () => { if (helius && Date.now() - openedAt < 30_000) heliusWsFails++; if (chainWs === w) { chainWs = null; chainIdx = helius ? chainIdx : chainIdx + 1; if (helius && heliusWsFails >= 3) chainIdx++; } };
@@ -459,6 +503,33 @@ function startWs() {
     ws.onerror = (ev: any) => { wsDiag.lastError = String(ev?.message ?? ev?.error?.message ?? "error").slice(0, 80); };
   } catch { ws = null; }
 }
+/** Oct 18 early_v1: decide on the chain create event itself (no extra RPC call). The creator's first buy is the TradeEvent in the same
+ * transaction. "No buyer over 50%" = no single non-creator wallet holds more than half of the non-creator buy SOL seen so far
+ * (launch transaction + any trades already visible); the creator is covered by the 1 SOL rule. */
+const TRADE_DISC = createHash("sha256").update("event:TradeEvent").digest().subarray(0, 8);
+const earlyDone = new Set<string>();
+export const earlyDiag = { events: 0, entries: 0, noCreatorBuy: 0, smallCreatorBuy: 0, creatorSold: 0, concentrated: 0, decideMsRecent: [] as number[] };
+function earlyV1(mint: string, symbol: string, creator: string, logs: string[], slot: number | null, source: string, recvMs: number) {
+  if (earlyDone.has(mint)) return; earlyDone.add(mint); if (earlyDone.size > 5000) earlyDone.delete(earlyDone.values().next().value!);
+  earlyDiag.events++;
+  const ev: { user: string; sol: number; buy: boolean }[] = [];
+  for (const l of logs) { if (!l.startsWith("Program data: ")) continue; const b = Buffer.from(l.slice(14), "base64"); if (b.length < 129 || !b.subarray(0, 8).equals(TRADE_DISC)) continue;
+    try { if (b58.decode(b.subarray(8, 40)) !== mint) continue; ev.push({ user: b58.decode(b.subarray(57, 89)), sol: Number(b.readBigUInt64LE(40)) / 1e9, buy: b[56] === 1 }); } catch {} }
+  const vis = (chainTrades(mint, 100) ?? []).map((t) => ({ user: t.userAddress, sol: Number(t.amountSol || 0), buy: t.type === "buy" }));
+  const all = [...ev, ...vis];
+  const first = ev.find((e) => e.buy && e.user === creator);
+  if (!first) { earlyDiag.noCreatorBuy++; bump("early_v1.noCreatorBuy"); return; }
+  if (first.sol < 1) { earlyDiag.smallCreatorBuy++; bump("early_v1.smallCreatorBuy"); return; }
+  if (all.some((e) => !e.buy && e.user === creator)) { earlyDiag.creatorSold++; bump("early_v1.creatorSold"); return; }
+  const by: Record<string, number> = {}; for (const e of all) if (e.buy && e.user !== creator) by[e.user] = (by[e.user] ?? 0) + e.sol;
+  const tot = Object.values(by).reduce((a, x) => a + x, 0), top = Math.max(0, ...Object.values(by)), topShare = tot > 0 ? top / tot : 0;
+  if (Object.keys(by).length >= 2 && topShare > 0.5) { earlyDiag.concentrated++; bump("early_v1.concentrated"); return; }
+  const c = seen.get(mint); const createdMs = c?.createdMs ?? recvMs - 1000;
+  const decideMs = Date.now() - recvMs; earlyDiag.decideMsRecent.push(decideMs); if (earlyDiag.decideMsRecent.length > 30) earlyDiag.decideMsRecent.shift();
+  earlyDiag.entries++;
+  enter("early_v1", { mint, symbol: String(symbol ?? "").slice(0, 16), createdMs }, { rule: "early_creator_buy_1sol", source, slot, feedRecvAt: new Date(recvMs).toISOString(), recvToDecideMs: decideMs,
+    creatorFirstBuySol: +first.sol.toFixed(3), otherBuyersSeen: Object.keys(by).length, topOtherBuyerSharePct: Math.round(topShare * 100), latencyNote: "latencyMs = decision -> simulated landing (measured RPC round-trips + 1 slot); launchToFillMs = launch block time -> fill" }).catch((e) => { lastErr = String(e).slice(0, 120); });
+}
 /** Oct 16 inflow_v1: its own fast loop (the copy scan waits on RugRadar snapshots and would miss the 30-60 s window). */
 const inflowDiag = { scans: 0, lastCands: 0, seen: 0, noTrades: 0, lastScanAt: "" };
 async function scanInflow() {
@@ -477,8 +548,10 @@ async function scanInflow() {
       if (net >= 5 && !creatorSold && topShare <= 0.5) {
         c.checked.add("inflow");
         const devBuy = [...tr].reverse().find((t) => t.type === "buy" && t.userAddress === c.creator); const m = launchMeta(c.mint);
-        await enter("inflow_v1", c, { ageS: Math.round(age), rule: "inflow_5sol_60s", netInflowSol: +net.toFixed(2), topBuyerSharePct: Math.round(topShare * 100), earlyBuyers: Object.keys(by).length,
-          privateInflow: { telegram: m ? !!m.telegram : null, allThreeSocials: m ? m.socials === 3 : null, creatorFirstBuySol: devBuy ? +Number(devBuy.amountSol || 0).toFixed(3) : null, creatorFirstBuy1SolPlus: devBuy ? Number(devBuy.amountSol || 0) >= 1 : null } });
+        const sigIn = { ageS: Math.round(age), rule: "inflow_5sol_60s", netInflowSol: +net.toFixed(2), topBuyerSharePct: Math.round(topShare * 100), earlyBuyers: Object.keys(by).length,
+          privateInflow: { telegram: m ? !!m.telegram : null, allThreeSocials: m ? m.socials === 3 : null, creatorFirstBuySol: devBuy ? +Number(devBuy.amountSol || 0).toFixed(3) : null, creatorFirstBuy1SolPlus: devBuy ? Number(devBuy.amountSol || 0) >= 1 : null } };
+        enter("inflow_tp", c, { ...sigIn, entryOf: "inflow_v1" }).catch(() => {}); // Oct 18: same entry, tp20 exits
+        await enter("inflow_v1", c, sigIn);
       } else { bump(net < 5 ? "inflow_v1.lowInflow" : creatorSold ? "inflow_v1.creatorSold" : "inflow_v1.concentrated"); if (age > 60) c.checked.add("inflow"); }
   }
 }
@@ -503,7 +576,7 @@ async function scanCandidates() {
         const v2ok = f.winnerBuyers.length >= V2.minWinners && f.uniqueBuyers >= V2.minBuyers && rug?.riskScore != null && rug.riskScore <= V2.maxRug;
         const devSoldBefore = f.devSold || Number(rug?.buyer?.devSells ?? 0) > 0 || rug?.buyer?.creatorFirstSellAfterSec != null;
         for (const s of V2_STRATS) { if (s === "copy_v2cs" && v2ok && devSoldBefore) { bump("copy_v2cs.skippedCreatorSold"); continue; } if (v2ok) await enter(s, c, { ...f, ageS: Math.round(age), rule: "v2_two_winner_wallets", rug, rugMax: V2.maxRug }); else bump(`${s}.filteredOut`); }
-        for (const t of RUG_VARIANTS.copy) { if (rug?.riskScore != null && rug.riskScore <= t) await enter(`copy_r${t}`, c, { ...f, ageS: Math.round(age), rule: f.winnerBuyers.length ? "winner_wallet_bought" : "momentum", rug, rugMax: t }); else bump(`copy_r${t}.rejectedByRugRadar`); }
+        for (const t of RUG_VARIANTS.copy) { if (t === 40) { if (rug?.riskScore != null && rug.riskScore <= 40) enter("tp20", c, { ...f, ageS: Math.round(age), rule: f.winnerBuyers.length ? "winner_wallet_bought" : "momentum", rug, rugMax: 40, entryOf: "copy_r40" }).catch(() => {}); else bump("tp20.rejectedByRugRadar"); } /* Oct 18: tp20 = control's entry, started alongside it */ if (rug?.riskScore != null && rug.riskScore <= t) await enter(`copy_r${t}`, c, { ...f, ageS: Math.round(age), rule: f.winnerBuyers.length ? "winner_wallet_bought" : "momentum", rug, rugMax: t }); else bump(`copy_r${t}.rejectedByRugRadar`); }
       }
       else if (age > 150) c.checked.add("copy");
     }
@@ -555,7 +628,7 @@ export function paperSummary() {
     const xs = closed.filter((x) => x.strat === t.strat && x.result !== "buy_failed" && Date.parse(x.entryAt) >= start); const losses = xs.filter((x) => x.pnlSol <= 0);
     return { ...t, startedAt: new Date(start).toISOString(), trades: xs.length, totalPnlSol: +xs.reduce((a, x) => a + x.pnlSol, 0).toFixed(4), avgRoi: xs.length ? +(xs.reduce((a, x) => a + x.roi, 0) / xs.length).toFixed(4) : null,
       winRate: xs.length ? +(xs.filter((x) => x.pnlSol > 0).length / xs.length).toFixed(3) : null, avgLossRoi: losses.length ? +(losses.reduce((a, x) => a + x.roi, 0) / losses.length).toFixed(4) : null }; });
-  return { helius: heliusStatus(), dataSource: dataSource(), feed: activeFeed(), inflowDiag, paused: PAUSED, tests, testDecisionRule: TEST_RULE, paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL (control and v2 tests), edge-finder 0.1 SOL; sniper paused (was 0.4 SOL)", startedAt: state.startedAt, strategies: by,
+  return { helius: heliusStatus(), dataSource: dataSource(), feed: activeFeed(), inflowDiag, earlyDiag, coinFactoryFunder: { rule: `private paper flag: a creator or funder that funded ${COIN_FACTORY.minCreators}+ coin creators in 24 h (lower bound from our traces), or a known coin-factory name`, flaggedTrades: closed.filter((t) => t.coinFactoryFunder?.flag).length, fundersTracked: fundedBy.size }, paused: PAUSED, tests, testDecisionRule: TEST_RULE, paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL (control and v2 tests), edge-finder 0.1 SOL; sniper paused (was 0.4 SOL)", startedAt: state.startedAt, strategies: by,
     latency: { precheckRecent: preLog.slice(-30), eventLoopDelayMs: { p50: Math.round(loopLag.percentile(50) / 1e6), p99: Math.round(loopLag.percentile(99) / 1e6), max: Math.round(loopLag.max / 1e6) }, sniperPrecheckMedianMs: med(preMs), sniperPrecheckP90Ms: preMs.length ? [...preMs].sort((a, b) => a - b)[Math.floor(preMs.length * 0.9)] : 0, medianDetectMs: med(lat.detectMs), detectNote: "websocket launches have no on-chain timestamp in the feed; counted as 1000 ms (conservative floor). Poll-detected launches are measured.", medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
     counters: state.counters, store: storeStatus(), websocket: !!ws, winnersTracked: winners.size, lastError: lastErr,
     recent: closed.slice(-40).reverse().map(({ signals, rug, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, precheckMs: signals?.precheck?.ms ?? null, rugMax: signals?.rugMax ?? null, rugLevel: rug?.riskLevel ?? null })) };
@@ -625,7 +698,7 @@ async function scRecord(mint: string, r: any) {
   scDirty = true;
   const row = sc[sc.length - 1]; const cr = seen.get(mint)?.creator; if (cr) noteDev(cr, r);
   row.trust = trustFor(mint, null);
-  familyFor(mint)?.then((f) => { row.family = f; row.trust = trustFor(mint, f); scDirty = true; }).catch(() => {});
+  familyFor(mint)?.then((f) => { noteFunding(f); row.family = f; row.trust = trustFor(mint, f); scDirty = true; }).catch(() => {});
 }
 async function scRecheck() {
   const now = Date.now(); let n = 0;
