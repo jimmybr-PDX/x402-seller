@@ -92,10 +92,10 @@ h1{color:#46DC64;font-size:44px;margin:4px 0;text-align:center;text-shadow:0 0 1
 .banner{background:#0f2a1a;border:2px solid #46DC64;border-radius:12px;padding:14px 18px;margin-bottom:18px;box-shadow:0 0 18px rgba(70,220,100,.35);text-align:center}.banner b{color:#46DC64;font-size:22px}
 .btn{display:inline-block;background:#46DC64;color:#0A1630;font-weight:800;padding:10px 20px;border-radius:8px;text-decoration:none;border:0;font-size:16px;cursor:pointer}
 input,select{font-size:16px;padding:10px;border-radius:8px;border:1px solid #2b3d6b;background:#0A1630;color:#E8EEF8}#tok{width:100%;box-sizing:border-box;margin:8px 0}
-.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.score{font-size:48px;font-weight:800}.low{color:#46DC64}.medium{color:#F7931A}.high{color:#ff5a5a}ul{padding-left:20px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.score{font-size:48px;font-weight:800}.low{color:#46DC64}.medium{color:#F7931A}.high{color:#ff5a5a}ul{padding-left:20px}pre{background:#0A1630;color:#F7931A;padding:10px;border-radius:8px;overflow-x:auto;font-size:13px;white-space:pre}.agents table{width:100%;border-collapse:collapse;font-size:14px}.agents td{padding:5px 4px;border-bottom:1px solid #1d2f5c;vertical-align:top}
 .locked{border:1px dashed #46DC64;border-radius:10px;padding:12px 16px;margin:14px 0;background:#0d1b3a}.locked table{width:100%;border-collapse:collapse}.locked td{padding:5px 4px;border-bottom:1px solid #1d2f5c;color:#6f7f9c}.locked td.v{text-align:right;letter-spacing:2px}.locked .how{font-size:14px;color:#9fb0cc;margin-top:10px}.wpay{border:1px solid #2b3d6b;border-radius:10px;padding:10px 12px;margin:8px 0 12px;background:#12224a}.wpay .pack{margin:4px 6px 4px 0;font-size:15px;padding:8px 14px}.btn:disabled{background:#3b4a6b;color:#9fb0cc;cursor:not-allowed}.wstat{margin-top:8px;color:#E8EEF8}.locked .how a:not(.btn){color:#46DC64}.wstat code{display:block;background:#0A1630;padding:8px;border-radius:6px;margin:6px 0}</style></head>
 <body><main>
-<div class="banner"><b>${sp}</b><div style="margin:6px 0 10px"><b>${RUG_EDGE.replace("$0.01", "$" + p)}</b><br>Same $${p} per check, buy 1 to 1,000. Agents send the key as X-RugRadar-Key.</div><a class="btn" href="#credits">Buy credits</a></div>
+<div class="banner"><b>${sp}</b><div style="margin:6px 0 10px"><b>${RUG_EDGE.replace("$0.01", "$" + p)}</b><br>Same $${p} per check, buy 1 to 1,000. Agents send the key as X-RugRadar-Key.</div><a class="btn" href="#credits">Buy credits</a> <a class="btn" href="#agents" style="background:#2b3d6b;color:#E8EEF8">For bots &amp; agents</a></div>
 <div class="c"><img class="logo" src="/rugradar/rug-radar-512.png" alt="RugRadar emblem" width="150" height="150"><h1>RugRadar</h1>
 <p style="font-size:19px">Free rug check and honeypot checker: paste a token address, get a 0-100 risk score with plain reasons, plus what buyers actually ask: did the dev sell, how much did snipers and bundles take, can you sell, is the volume real.</p></div>
 <section class="box" aria-label="Token checker"><form id="f"><label for="tok"><b>Token address</b> (Solana mint or 0x contract)</label>
@@ -108,7 +108,7 @@ input,select{font-size:16px;padding:10px;border-radius:8px;border:1px solid #2b3
 <h2>RugCheck alternative: what RugRadar shows that RugCheck doesn't</h2><div class="box">Tested on Oct 14, 2026 with the same 5 Solana tokens (a fresh pump.fun launch, a known rug, a mid-cap meme, an established token, and one with mint and freeze authority). RugCheck's free report covered 14 of our 30 buyer signals; RugRadar covered 28. Only RugRadar showed: dev sold % of what they bought, sniper share in the first 10 seconds, launch-block bundle share, a live can-you-sell quote with price impact, the creator's past launches and our bad-deployer list, market cap and liquidity vs market cap, 24h volume, buys, sells and traders, price, holder and liquidity change, a bot-trading (organic) score, social links, a plain buyer summary, a confidence rating, and 4 EVM chains. RugCheck still shows two things we don't: an insider-network graph and an "already rugged" flag.</div>
 ${WATCH_SECTION}
 <h2 id="credits">Prepaid credits</h2><div class="box">$${p} per check, no discount, 1 to 1,000 credits. Pay once with any x402 client: <code>GET ${U}/credits/buy?credits=${UNLOCK_CREDITS}</code> ($${(UNLOCK_CREDITS * Number(p)).toFixed(2)}, unlocks ${UNLOCK_CREDITS} full reports) or <code>GET ${U}/credits/buy?credits=100</code> ($1.00). You get a secret key once; paste it above or send it as <code>X-RugRadar-Key</code>. Free balance: <code>${U}/credits/balance</code>.</div>
-<h2>Rug pull checker API for AI agents (x402 + MCP)</h2><div class="box">HTTP: <code>GET ${U}/rug-check?token=&lt;address&gt;&amp;chain=solana</code> ($${p} via x402; also /token-safety and /honeypot-check).<br>MCP (streamable HTTP): <code>${U}/mcp</code> with tools rug_check, token_safety, honeypot_check.</div>
+${agentsSection(U, p)}
 <h2>FAQ</h2>${faq.map(([q, a]) => `<h3 style="font-size:17px;margin:14px 0 4px">${q}</h3><p style="margin:0">${a}</p>`).join("")}
 <p class="c"><small>${DISCLAIMER} RugRadar flags high-risk patterns; it never labels people.</small></p>
 <script>
@@ -167,6 +167,43 @@ f.addEventListener('submit',async e=>{e.preventDefault();out.textContent='Checki
 }
 
 
+
+// ---------- "For bots & agents" section (static, no extra requests) ----------
+const escH = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+export const EXAMPLE_MINT = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
+export function agentSnippets(U: string) {
+  return {
+    mcpConfig: `{ "mcpServers": { "rugradar": { "url": "${U}/mcp" } } }`,
+    mcpList: `curl -s ${U}/mcp -H 'content-type: application/json' \\\n  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`,
+    x402: `# 1) call without payment -> HTTP 402 + PAYMENT-REQUIRED header (base64 JSON)\ncurl -s -o /dev/null -D - "${U}/rug-check?token=${EXAMPLE_MINT}" \\\n  | grep -i '^payment-required:' | cut -d' ' -f2 | tr -d '\\r' | base64 -d\n# 2) pick an accepts[] entry (USDC on Solana/Base/...), sign it, retry with header PAYMENT-SIGNATURE\n#    (any x402 client does steps 1-2: @x402/fetch, @x402/axios, x402 Python, CDP Agentic Wallet)`,
+    credits: `# buy 10 credits once (x402, $0.10) -> {"key":"rr_..."}; or buy with Phantom/Solflare on this page\ncurl -s -H "X-RugRadar-Key: rr_YOURKEY" "${U}/rug-check?token=${EXAMPLE_MINT}"\ncurl -s -H "X-RugRadar-Key: rr_YOURKEY" ${U}/credits/balance\n# 24h watch with credits (5 credits):\ncurl -s -X POST ${U}/rugradar/watch -H "X-RugRadar-Key: rr_YOURKEY" \\\n  -H 'content-type: application/json' -d '{"token":"<mint>","hours":"24","webhook":"https://you.example/hook"}'`,
+    node: `const crypto = require("crypto");\n// raw = exact request body string, header = X-RugRadar-Signature, secret = whsec_... from the watch\nfunction verify(raw, header, secret) {\n  const m = /^t=(\\d+),v1=([0-9a-f]{64})$/.exec(header || ""); if (!m) return false;\n  if (Math.abs(Date.now() / 1000 - Number(m[1])) > 300) return false;\n  const want = crypto.createHmac("sha256", secret).update(m[1] + "." + raw).digest();\n  return crypto.timingSafeEqual(want, Buffer.from(m[2], "hex"));\n}`,
+    python: `import hmac, hashlib, re, time\ndef verify(raw: bytes, header: str, secret: str) -> bool:\n    m = re.fullmatch(r"t=(\\d+),v1=([0-9a-f]{64})", header or "")\n    if not m or abs(time.time() - int(m[1])) > 300: return False\n    want = hmac.new(secret.encode(), m[1].encode() + b"." + raw, hashlib.sha256).hexdigest()\n    return hmac.compare_digest(want, m[2])`,
+  };
+}
+function agentsSection(U: string, p: string) {
+  const c = agentSnippets(U), pre = (t: string) => `<pre>${escH(t)}</pre>`;
+  const tools: [string, string, string][] = [
+    ["rug_check", "0-100 rug risk score, plain danger warnings and a buyer summary (Solana incl. pump.fun, BNB, Base, Ethereum, Arbitrum)", `$${p}`],
+    ["token_safety", "Same engine, token-safety wording: authorities, holders, liquidity, dev history, snipers, bundles", `$${p}`],
+    ["honeypot_check", "Can I sell it? Sell quote / simulated sell and tax, freeze authority", `$${p}`],
+    ["watch_token", "Watch one Solana token; signed webhook alert on dev sells, liquidity drop, new mint/freeze authority, score jump, can't sell", "$0.05 / 24h, $0.10 / 48h"],
+  ];
+  const eps: [string, string][] = [
+    [`GET /rug-check?token=&lt;mint|0x&gt;[&amp;chain=]`, `$${p}`], [`GET /token-safety?token=…`, `$${p}`], [`GET /honeypot-check?token=…`, `$${p}`],
+    [`GET /watch?token=&lt;mint&gt;&amp;hours=24|48&amp;webhook=&lt;https url&gt;`, "$0.05 (24h) / $0.10 (48h)"], [`GET /credits/buy?credits=N`, `$${p} per credit (1-1000)`],
+  ];
+  const row = (cells: string[]) => `<tr>${cells.map((x) => `<td>${x}</td>`).join("")}</tr>`;
+  return `<h2 id="agents">For bots &amp; agents (MCP + x402)</h2><div class="box agents">
+<p><b>MCP server</b> (streamable HTTP, JSON): <code>${U}/mcp</code>. Add it to any MCP client:</p>${pre(c.mcpConfig)}
+<table>${tools.map(([n, d, pr]) => row([`<code>${n}</code>`, escH(d), pr])).join("")}</table>
+<p>Pass a credit key (<code>api_key</code> or header <code>X-RugRadar-Key</code>); without one, a tool returns the x402 payment requirement. List tools:</p>${pre(c.mcpList)}
+<p><b>x402 endpoints</b> (USDC on Solana, Base, Polygon, Arbitrum and more; no signup):</p><table>${eps.map(([e, pr]) => row([`<code>${e}</code>`, pr])).join("")}</table>
+<p>The 402 flow:</p>${pre(c.x402)}
+<p><b>Credit keys</b> skip the x402 round trip:</p>${pre(c.credits)}
+<p><b>Webhook signature</b>: header <code>X-RugRadar-Signature: t=&lt;unix&gt;,v1=&lt;hex&gt;</code>, HMAC-SHA256 of <code>t + "." + rawBody</code> with your watch secret. Node:</p>${pre(c.node)}<p>Python:</p>${pre(c.python)}
+<p><small>Discovery: <a href="/.well-known/x402">/.well-known/x402</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a>. Danger warnings only; heuristic, may be wrong, not financial advice.</small></p></div>`;
+}
 /** Watch + Alert section (client JS has no template interpolation on purpose). */
 const WATCH_SECTION = String.raw`<h2 id="watch">Watch + Alert: get pinged if it turns into a rug</h2><section class="box" aria-label="Watch a token">
 <p style="margin-top:0">We re-check one Solana token about every 10 minutes for 24 h (<b>$0.05</b>, 5 credits) or 48 h (<b>$0.10</b>, 10 credits) and alert you when the <b>dev sells</b>, <b>liquidity drops 30%+</b>, <b>mint or freeze authority appears</b>, the <b>risk score jumps 20+ points</b>, or it <b>can't be sold</b>. Each alert is sent once.</p>

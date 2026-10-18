@@ -169,11 +169,17 @@ const PAID = {
   "/token-safety": RUG_PRICE,
   "/honeypot-check": RUG_PRICE,
   "/credits/buy": RUG_PRICE,
-  "/watch": "$0.10",
+  "/watch": "$0.05", // 24h; 48h = $0.10 (see priceFor)
 } as const;
 /** Paid paths that also accept POST (JSON body). */
 const POST_OK = new Set<string>(["/search"]);
 type PaidPath = keyof typeof PAID;
+/** Actual price of this request (for the daily spend cap and settlement log): /watch by plan, /credits/buy by count. */
+function priceFor(p: PaidPath, req: Request): string {
+  if (p === "/watch") return `$${WATCH_PLANS[planOf(req.query.hours ?? "24") ?? "24"].priceUsd}`;
+  if (p === "/credits/buy") { const n = Math.floor(Number(req.query.credits ?? 1)); return `$${((Number.isFinite(n) && n >= 1 && n <= 1000 ? n : 1) * parsePriceUsd(RUG_PRICE)).toFixed(2)}`; }
+  return PAID[p];
+}
 
 const FAIL_WINDOW_MS = 10 * 60 * 1000;
 const FAIL_THRESHOLD = 3;
@@ -336,7 +342,7 @@ async function main() {
   app.use((req: Request, res: Response, next: NextFunction) => {
     const p = req.path as PaidPath;
     if (!(p in PAID) || !(req.method === "GET" || (req.method === "POST" && POST_OK.has(p)))) return next();
-    const price = PAID[p];
+    const price = priceFor(p, req);
     const hasPayment = !!(req.header("payment-signature") || req.header("x-payment"));
     if (hasPayment) {
       if (circuitOpen()) {
@@ -1325,6 +1331,8 @@ async function main() {
         url: `${PUBLIC_URL}${p}`,
         price: PAID[p],
         priceUsd: parsePriceUsd(PAID[p]),
+        ...(p === "/watch" ? { prices: { "hours=24": "$0.05", "hours=48": "$0.10" }, priceNote: "24h watch $0.05, 48h watch $0.10 (hours=24|48)" } : {}),
+        ...(p === "/credits/buy" ? { priceNote: `${RUG_PRICE} per credit; total = credits x ${RUG_PRICE}` } : {}),
         network: NETWORKS[0],
         networks: NETWORKS,
         asset: "USDC",
@@ -1427,6 +1435,8 @@ async function main() {
       `- GET ${PUBLIC_URL}/rug-check?token=<mint|0x>  (${RUG_PRICE}) — RugRadar Solana rug check / rug pull checker (also BNB, Base, Ethereum, Arbitrum via chain=): 0-100 risk score, plain reasons, buyer summary, and 45+ data points (dev sold %, snipers, bundles, live can-you-sell, creator history). Alias: mint=. Heuristic; not financial advice. Failed calls free.`,
       `- GET ${PUBLIC_URL}/token-safety?token=<mint|0x>  (${RUG_PRICE}) — same RugRadar engine as /rug-check, listed for token safety / memecoin safety / honeypot search terms. Optional chain=.`,
       `- GET ${PUBLIC_URL}/honeypot-check?token=<mint|0x>  (${RUG_PRICE}) — honeypot check: can I sell this token? Simulated buy/sell + tax on EVM; live sell quote + freeze authority on Solana. Optional chain=.`,
+      `- GET ${PUBLIC_URL}/watch?token=<solana mint>&hours=24|48&webhook=<https url>  ($0.05 for 24h, $0.10 for 48h) — RugRadar Watch + Alert: re-checked ~every 10 min; HMAC-signed webhook alert (X-RugRadar-Signature) when the dev sells, liquidity drops 30%+, mint/freeze authority appears, risk score jumps 20+, or it can't be sold. Credit keys: POST /rugradar/watch with X-RugRadar-Key (5 / 10 credits).`,
+      `- MCP (streamable HTTP): ${PUBLIC_URL}/mcp — tools rug_check, token_safety, honeypot_check ($0.01 each), watch_token ($0.05/24h, $0.10/48h). Bots & agents guide: ${PUBLIC_URL}/rugradar#agents`,
       `- GET ${PUBLIC_URL}/credits/buy?credits=N  (${RUG_PRICE} each) — RugRadar prepaid credits (1-1000): returns a secret key once; send X-RugRadar-Key to skip x402 (~1.8x faster). Balance: /credits/balance.`,
       "",
       "## How to pay",
@@ -1440,7 +1450,7 @@ async function main() {
       `- ${PUBLIC_URL}/openapi.json — OpenAPI 3.1 with x-payment-info`,
       `- ${PUBLIC_URL}/.well-known/x402 — x402 discovery document`,
       `- ${PUBLIC_URL}/health — status`,
-      `- ${PUBLIC_URL}/rugradar — free RugRadar landing page (human UI + free checks)`,
+      `- ${PUBLIC_URL}/rugradar — free RugRadar landing page (human UI + free checks); for bots & agents: ${PUBLIC_URL}/rugradar#agents`,
       "",
       "## Example",
       `curl -i "${PUBLIC_URL}/report?q=What+is+the+Model+Context+Protocol%3F"   # 402 challenge`,
@@ -1719,6 +1729,21 @@ async function main() {
             ],
             ...payRug(RUG_PRICE),
             responses: { "200": { description: "Risk score and sellability signals", content: { "application/json": { schema: r["GET /honeypot-check"].extensions.bazaar.schema.properties.output.properties.example, example: r["GET /honeypot-check"].extensions.bazaar.info.output.example } } }, ...errs },
+          },
+        },
+        "/watch": {
+          get: {
+            operationId: "watchToken",
+            summary: "RugRadar Watch + Alert: 24h ($0.05) or 48h ($0.10) watch on one Solana token, signed webhook alerts",
+            description: r["GET /watch"].description,
+            tags: ["RugRadar"],
+            parameters: [
+              qp("token", { type: "string", minLength: 32, maxLength: 44 }, true, "Solana mint address"),
+              qp("hours", { type: "string", enum: ["24", "48"] }, false, "24 ($0.05, default) or 48 ($0.10)"),
+              qp("webhook", { type: "string" }, true, "https URL for signed JSON POST alerts (X-RugRadar-Signature)"),
+            ],
+            "x-payment-info": { ...payRug("$0.05")["x-payment-info"], price: { mode: "dynamic", currency: "USD", min: "0.05", max: "0.10", note: "hours=24: 0.05, hours=48: 0.10" } },
+            responses: { "200": { description: "Watch started (secret returned once)", content: { "application/json": { example: r["GET /watch"].extensions.bazaar.info.output.example } } }, ...errs },
           },
         },
       },
