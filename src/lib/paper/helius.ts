@@ -23,12 +23,18 @@ export function budgetOk(reserve = 0) {
 const calls: number[] = [];
 function rateOk() { const now = Date.now(); while (calls.length && now - calls[0] > 1000) calls.shift(); return calls.length < 8; }
 /** RPC URL for one HTTP call: Helius when budget and rate allow, else the public RPC. Counts the credit. */
-export function rpcUrl(): string {
+let publicBadUntil = 0;
+/** Oct 18: the public RPC just failed (error / rate limit): use Helius for the next 60 s. */
+export function markPublicBad() { publicBadUntil = Date.now() + 60_000; }
+/** RPC URL for one HTTP call. preferPublic (free-feed mode): the free public RPC first, Helius only while it is failing. */
+export function rpcUrl(preferPublic = false): string {
+  if (preferPublic && Date.now() >= publicBadUntil) return PUBLIC_HTTP;
   if (KEY && budgetOk() && rateOk()) { calls.push(Date.now()); today().http++; return `https://mainnet.helius-rpc.com/?api-key=${KEY}`; }
   if (KEY) today().fallbacks++; return PUBLIC_HTTP;
 }
 export const heliusWsUrl = () => (KEY ? `wss://mainnet.helius-rpc.com/?api-key=${KEY}` : null);
 export const isHeliusUrl = (u: string) => u.includes("helius-rpc.com");
+export const PUBLIC_RPC_HTTP = PUBLIC_HTTP;
 export function noteWs(bytes: number) { today().wsBytes += bytes; }
 export function noteWsConnect() { today().wsConnects++; }
 export function heliusStatus() {

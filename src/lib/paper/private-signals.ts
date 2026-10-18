@@ -35,7 +35,7 @@ export function noteLaunchMeta(mint: string, uri: string | undefined) {
       if (!j) return;
       const img = String(j.image ?? "").replace(/^https?:\/\/[^/]+\/ipfs\//, "").slice(0, 120);
       const x = String(j.twitter ?? "").toLowerCase().replace(/^https?:\/\/(www\.)?(x|twitter)\.com\//, "").replace(/[?#].*$/, "").slice(0, 120);
-      metaCache.set(mint, { telegram: !!(j.telegram && String(j.telegram).length > 3), socials: [j.twitter, j.website, j.telegram].filter((v) => v && String(v).length > 3).length, xIsPost: x ? /\/status\//.test(x) : null,
+      metaCache.set(mint, { twitter: !!(j.twitter && String(j.twitter).length > 3), website: !!(j.website && String(j.website).length > 3), descLen: String(j.description ?? "").length, telegram: !!(j.telegram && String(j.telegram).length > 3), socials: [j.twitter, j.website, j.telegram].filter((v) => v && String(v).length > 3).length, xIsPost: x ? /\/status\//.test(x) : null,
         imageReused: img ? bump(imageSeen, img) : 0, xReused: x ? bump(xSeen, x) : 0 });
       if (metaCache.size > 4000) metaCache.delete(metaCache.keys().next().value!);
     } finally { metaPending--; }

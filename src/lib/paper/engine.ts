@@ -12,10 +12,12 @@ const loopLag = monitorEventLoopDelay({ resolution: 20 }); loopLag.enable();
 import { getProgramDerivedAddress, getAddressEncoder, getAddressDecoder, address } from "@solana/kit";
 import { familyOf, type Family } from "./family.js";
 import { namedWallet, type Named } from "./named.js";
-import { rpcUrl, heliusWsUrl, isHeliusUrl, noteWs, noteWsConnect, budgetOk, heliusStatus, loadHelius, heliusDaily, heliusEnabled } from "./helius.js";
+import { rpcUrl, heliusWsUrl, isHeliusUrl, noteWs, noteWsConnect, budgetOk, heliusStatus, loadHelius, heliusDaily, heliusEnabled, markPublicBad } from "./helius.js";
 import { track, pin, chainTrades, curveState, setOn, isOn, chainStat } from "./chain-trades.js";
 import { privateSignals, noteLaunchMeta, launchMeta, type Priv } from "./private-signals.js";
-import { initStore, loadState, loadTrades, appendTrade, saveState, storeStatus, loadFile, writeFile } from "./store.js";
+import { initStore, loadState, loadTrades, appendTrade, saveState, storeStatus, loadFile, writeFile, appendLine, takeHistoryDirty } from "./store.js";
+import { noteCoinTrades, noteLaunch, marketTick, flushHistory, histStat } from "./history.js";
+import { freeFeedOn, freeFeedStatus } from "./free-feed.js";
 
 const SOL = "So11111111111111111111111111111111111111112";
 const UA = { "user-agent": "Mozilla/5.0 (paper-trader)", accept: "application/json" };
@@ -43,13 +45,15 @@ export const TESTS = [
   { strat: "early_v1", rule: "Oct 18 test: buy 0.2 SOL the moment the launch shows up on the Helius/Solana chain feed when the creator's first buy is 1+ SOL, the creator has not sold and no other buyer has more than half of the non-creator buying seen so far; normal copy sell rules; latency recorded (feed receive -> decision -> simulated fill, plus launch block time -> fill when the block time is known)", startedAt: "2026-10-18T22:00:00Z" },
   { strat: "tp20", rule: "Oct 18 test: same entry as the control (copy_r40); take profit at +20%, trailing stop (arms at +10%, sells 8 points below the high; both kept above break-even), other sell rules as the control", startedAt: "2026-10-18T22:00:00Z" },
   { strat: "inflow_tp", rule: "Oct 18 test: same entry as inflow_v1; exits are tp20's (take profit +20%, trailing stop, control's stop loss / stall / time stop) instead of inflow_v1's creator-sell and 5-min exits", startedAt: "2026-10-18T22:00:00Z" },
+  { strat: "inflow_fx25", rule: "Oct 18 test: same entries as inflow_v1 (opened alongside it, only when inflow_v1 has room); sell at 25 s after entry if the price has never been above break-even (+3.5% incl. fees); otherwise inflow_v1's exits", startedAt: "2026-10-18T23:00:00Z" },
   { strat: "copy_v2cp", rule: "Same entry as v2; also sell at once on a 15%+ drop within about 10 s, when the creator sells 0.3+ SOL, or when a top-5 early buyer sells 40%+ of what they bought (0.5+ SOL); normal stop too", startedAt: "" },
 ];
 export const TP20: Partial<Cfg> = { tp: 0.2, trailArm: 0.1, trail: 0.08, sl: -0.3, stallS: 300, maxHoldS: 600 };
-const VARIANT_CFG: Record<string, Partial<Cfg>> = { copy_v2ff: { stallS: 90, sl: -0.2 }, tp20: TP20, inflow_tp: TP20 }; // max RugRadar score allowed
-export const STRATS: Strat[] = ["sniper", "inflow_v1", "early_v1", "tp20", "inflow_tp", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...V2_STRATS, ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
+export const FX25 = { afterS: 25, bePct: 3.5 };
+const VARIANT_CFG: Record<string, Partial<Cfg>> = { copy_v2ff: { stallS: 90, sl: -0.2 }, tp20: TP20, inflow_tp: TP20, inflow_fx25: { maxOpen: 99 } /* entries gated by inflow_v1's room, so the two see the same coins */ }; // max RugRadar score allowed
+export const STRATS: Strat[] = ["sniper", "inflow_v1", "early_v1", "tp20", "inflow_tp", "inflow_fx25", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...V2_STRATS, ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
 // Oct 18: new tests whose names don't start with their base (cost model / size come from the base)
-const BASE_OF: Record<string, Base> = { early_v1: "early", tp20: "copy", inflow_tp: "inflow" };
+const BASE_OF: Record<string, Base> = { early_v1: "early", tp20: "copy", inflow_tp: "inflow", inflow_fx25: "inflow" };
 const baseOf = (s: Strat) => (BASE_OF[s.split("@")[0]] ?? s.split(/[_@]/)[0]) as Base;
 type Cfg = { size: number; prio: number; tip: number; buyFail: number; sellFail: number; maxOpen: number; tp: number; trailArm: number; trail: number; sl: number; maxHoldS: number; stallS: number; maxBePct: number };
 export const cfgOf = (s: Strat): Cfg => ({ ...CFG[baseOf(s)], ...(VARIANT_CFG[s.split("@")[0]] ?? {}) });
@@ -66,7 +70,7 @@ export const CFG: Record<Base, Cfg> = {
   edge: { size: 0.1, stallS: 300, maxBePct: 8, prio: 1_000_000, tip: 0, buyFail: 0.05, sellFail: 0.05, maxOpen: 3, tp: 1.0, trailArm: 0.3, trail: 0.25, sl: -0.25, maxHoldS: 900 },
 };
 type Pos = { id: string; strat: Strat; mint: string; symbol: string; entryAt: number; entryAgeS: number; latencyMs: number; costLamports: number; tokens: string; entryPriceSol: number;
-  forceExit?: string; bePct?: number; buyDriftLamports?: number; sellDriftLamports?: number; buyFeeLamports?: number; sizeSol?: number; sizeMult?: number; family?: Family | null; priv?: Priv | null; named?: Named | null; marks?: [number, number][]; cpTop?: Record<string, number>; cpSeen?: string[]; peakAt?: number; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
+  forceExit?: string; bePct?: number; buyDriftLamports?: number; sellDriftLamports?: number; buyFeeLamports?: number; sizeSol?: number; sizeMult?: number; family?: Family | null; priv?: Priv | null; named?: Named | null; marks?: [number, number][]; cpTop?: Record<string, number>; cpSeen?: string[]; peakAt?: number; minP?: number; minAt?: number; at?: Record<string, [number, number]>; path?: [number, number][]; peakRoi: number; lastMarkRoi: number; sellFails: number; noRouteSince: number | null; rug: any; signals: any };
 type State = { v: 1; open: Pos[]; counters: Record<string, number>; startedAt: string };
 let state: State = { v: 1, open: [], counters: {}, startedAt: new Date().toISOString() };
 let closed: any[] = [];
@@ -118,7 +122,9 @@ async function quote(input: string, output: string, amount: string | number): Pr
 async function curveSell(mint: string, tokens: bigint): Promise<bigint | null> {
   try {
     const [pda] = await getProgramDerivedAddress({ programAddress: address("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), seeds: ["bonding-curve", getAddressEncoder().encode(address(mint))] });
-    const r: any = await (await fetch(rpcUrl(), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [pda, { encoding: "base64" }] }), signal: AbortSignal.timeout(5000) })).json();
+    const ask = (u: string) => fetch(u, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [pda, { encoding: "base64" }] }), signal: AbortSignal.timeout(5000) }).then((x) => x.json()).catch(() => null);
+    const u0 = rpcUrl(freeFeedOn()); let r: any = await ask(u0); // Oct 18: free public RPC first in free-feed mode
+    if (r?.result === undefined && !isHeliusUrl(u0)) { markPublicBad(); r = await ask(rpcUrl(true)); }
     const b = Buffer.from(r?.result?.value?.data?.[0] ?? "", "base64"); if (b.length < 49 || b[48] === 1) return null;
     const vtok = b.readBigUInt64LE(8), vsol = b.readBigUInt64LE(16);
     return (vsol * tokens / (vtok + tokens)) * 9875n / 10000n;
@@ -167,15 +173,18 @@ function apiResult(ok: boolean) {
   else if (isOn() && apiWin.length >= 20 && apiWin.slice(-20).every(Boolean) && Date.now() > swapBlockedUntil + 300_000) setOn(false); // off only after 20 clean probes and 5 min without a 429
 }
 const FORCE_CHAIN = process.env.PAPER_FORCE_CHAIN === "1"; // test switch: use only the Solana backup
-async function trades(mint: string, limit = 100): Promise<any[] | null> {
+export const SWAP_API_PER_MIN = Number(process.env.PAPER_SWAPAPI_PER_MIN ?? 25);
+/** Oct 18: every trade list the bots pull is also kept for the durable coin-trades history (no extra lookups). */
+async function trades(mint: string, limit = 100): Promise<any[] | null> { const r = await tradesLive(mint, limit); if (r) noteCoinTrades(mint, r); return r; }
+async function tradesLive(mint: string, limit = 100): Promise<any[] | null> {
   if (FORCE_CHAIN) { const c = chainTrades(mint, limit); if (!c) track(mint, 120).catch(() => {}); return c; }
   // pump.fun said "slow down" (429 + Retry-After): respect it, use only the Solana backup until then
   if (Date.now() < swapBlockedUntil) { const c = chainTrades(mint, limit); if (!c) track(mint, 120).catch(() => {}); return c; }
-  // stay under pump.fun's limit: at most 90 trade lookups a minute from us; above that, the Solana backup answers
+  // stay under pump.fun's limit: Oct 18 at most ~25 trade lookups a minute from us (was 90); above that, the Solana backup answers
   const now = Date.now(); while (apiCalls.length && now - apiCalls[0] > 60_000) apiCalls.shift();
-  if (apiCalls.length >= 90) { setOn(true); const c = chainTrades(mint, limit); if (!c) track(mint, 120).catch(() => {}); return c; }
-  apiCalls.push(now);
+  if (apiCalls.length >= SWAP_API_PER_MIN) { setOn(true); const c = chainTrades(mint, limit); if (!c) track(mint, 120).catch(() => {}); return c; }
   if (isOn() && chainTrades(mint, 0) && probeN++ % 4 !== 0) return chainTrades(mint, limit); // backup on: only probe the API on every 4th call
+  apiCalls.push(now); if (limit >= 100) await sleep(Math.floor(Math.random() * 400)); // Oct 18: jitter on scan lookups (open-position price checks are never delayed)
   const d = await getJ(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=${limit}`, 5000);
   const tr = d?.trades ?? null; apiResult(tr != null);
   if (tr != null) return tr;
@@ -290,7 +299,7 @@ async function rugSnapshotNow(mint: string) {
 
 async function manage(p: Pos) {
   const cfg = cfgOf(p.strat);
-  const isCp = p.strat.split("@")[0] === "copy_v2cp", isCs = p.strat.split("@")[0] === "copy_v2cs", isIn = p.strat === "inflow_v1";
+  const isCp = p.strat.split("@")[0] === "copy_v2cp", isCs = p.strat.split("@")[0] === "copy_v2cs", isIn = p.strat === "inflow_v1" || p.strat === "inflow_fx25"; // Oct 18: inflow_fx25 keeps inflow_v1's exits
   const tr = await trades(p.mint, isCp || isCs || isIn ? 30 : 5);
   let price = tr?.[0] ? Number(tr[0].priceSol) : null;
   if (isOn()) { const cs = (await curveState([p.mint]))[p.mint]; if (cs && !cs.complete && cs.priceSol > 0) price = cs.priceSol; }
@@ -311,7 +320,7 @@ async function manage(p: Pos) {
     }
     p.cpSeen = [...seenSet].slice(-200);
   }
-  if (price) { p.lastMarkRoi = (price / p.entryPriceSol) - 1; if (p.lastMarkRoi > p.peakRoi) { p.peakRoi = p.lastMarkRoi; p.peakAt = Date.now(); } }
+  if (price) { p.lastMarkRoi = (price / p.entryPriceSol) - 1; if (p.lastMarkRoi > p.peakRoi) { p.peakRoi = p.lastMarkRoi; p.peakAt = Date.now(); } notePriceMark(p, price); }
   const r = p.lastMarkRoi;
   if (isCs && tr) { // creator-sell guard (paper test): any creator sell after our entry -> exit now
     const creator = seen.get(p.mint)?.creator;
@@ -323,6 +332,7 @@ async function manage(p: Pos) {
       if (creator && t.userAddress === creator) { cpReason ??= "creator_sold_exit"; } else if (winners.has(t.userAddress)) cpReason ??= "winner_wallet_sold_exit"; }
   }
   let reason: string | null = p.forceExit ?? cpReason;
+  if (!reason && p.strat === "inflow_fx25" && holdS >= FX25.afterS && p.peakRoi * 100 <= FX25.bePct) reason = "fx25_never_above_breakeven"; // Oct 18 test
   // Oct 15: mark is vs our all-in buy price, so selling costs (~1.25% + sell fees) still apply; keep every profit exit above break-even
   const be = (p.bePct ?? 5) / 100, arm = Math.max(cfg.trailArm, be + cfg.trail + 0.02), tp = Math.max(cfg.tp, be + 0.1);
   if (reason) {}
@@ -403,7 +413,8 @@ async function close(p: Pos, reason: string, outLamports: bigint, fees: number) 
   const t = { id: p.id, strat: p.strat, mint: p.mint, symbol: p.symbol, result: pnl > 0 ? "win" : "loss", exitReason: reason,
     entryAt: new Date(p.entryAt).toISOString(), exitAt: new Date().toISOString(), holdS: Math.round((Date.now() - p.entryAt) / 1000), entryAgeS: p.entryAgeS, latencyMs: p.latencyMs,
     sizeSol: p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */, sizeMult: p.sizeMult ?? 1, costSol: +(p.costLamports / LAMPORTS).toFixed(6), proceedsSol: +(proceeds / LAMPORTS).toFixed(6), pnlSol: +pnl.toFixed(6), roi: +(pnl / (p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */)).toFixed(4),
-    entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, priv: p.priv ?? null, named: p.named ?? null, dataSource: (p as any).dataSource ?? null, trust: trustFor(p.mint, p.family), coinFactoryFunder: coinFactoryOf(p.family, p.named), feesPaid, breakEvenPct };
+    entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, priv: p.priv ?? null, named: p.named ?? null, dataSource: (p as any).dataSource ?? null, trust: trustFor(p.mint, p.family), coinFactoryFunder: coinFactoryOf(p.family, p.named), feesPaid, breakEvenPct, ...markFields(p) };
+  followCheckpoints(p);
   state.open = state.open.filter((x) => x !== p); closed.push(t); if (closed.length > 2500) closed.splice(0, 500); appendTrade(t); dirty = true; bump(`${p.strat}.exits`);
 }
 
@@ -442,8 +453,20 @@ function onNewCoin(c: any, via: string) {
     })().catch((e) => { lastErr = String(e).slice(0, 120); });
   }
 }
+/** Oct 18: pump.fun's coin list is a fallback only: polled at most every 30-60 s, only while PumpPortal and the chain feed are both
+ * quiet (no fresh launch for 60+ s), and not for 10-15 min after a Cloudflare 403/429. */
+export const pollDiag = { polls: 0, skippedFeedsLive: 0, skippedBackoff: 0, backoffUntil: null as string | null };
+let pollNextAt = 0, pollBlockedUntil = 0;
 async function pollNew() {
+  const now = Date.now();
+  if (now < pollBlockedUntil) { pollDiag.skippedBackoff++; return; }
+  if (now - feed.lastWsAt < 60_000 || now - feed.lastChainAt < 60_000) { pollDiag.skippedFeedsLive++; return; }
+  if (now < pollNextAt) return;
+  pollNextAt = now + 30_000 + Math.floor(Math.random() * 30_000); pollDiag.polls++;
+  const before = pumpDiag["frontend-api coins list"]?.fail ?? 0;
   const d = await getJ("https://frontend-api-v3.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC&includeNsfw=true");
+  const last = pumpDiag["frontend-api coins list"];
+  if (!d && (last?.fail ?? 0) > before && /^(403|429)$/.test(String(last?.last?.code))) { pollBlockedUntil = Date.now() + 600_000 + Math.floor(Math.random() * 300_000); pollDiag.backoffUntil = new Date(pollBlockedUntil).toISOString(); }
   for (const c of (d ?? []).reverse()) onNewCoin(c, "poll");
 }
 let ws: any = null; let wsBackoff = 30_000;
@@ -460,7 +483,8 @@ const b58 = getAddressDecoder();
 export function chainStart() {
   const W = (globalThis as any).WebSocket; if (!W || chainWs) return; const openedAt = Date.now();
   // Oct 16: Helius websocket first (cheap here: only pump.fun create transactions, ~2-4k credits/day), public RPCs as fallback
-  const hw = heliusWsUrl(); const list = hw && budgetOk(2000) && !heliusWsBad() ? [hw, ...CHAIN_WS] : CHAIN_WS;
+  // Oct 18: free-feed mode (default for 5 days): public Solana websockets only; Helius only while the free feeds have dropped
+  const hw = heliusWsUrl(); const list = hw && budgetOk(2000) && !heliusWsBad() && (!freeFeedOn() || freeFeedDropped()) ? [hw, ...CHAIN_WS] : CHAIN_WS;
   const url = list[chainIdx % list.length]; const helius = isHeliusUrl(url); feed.chainUrl = helius ? "Helius websocket" : url.replace(/\?.*$/, ""); feed.chainOn = true; feed.chainSwitches++; if (helius) noteWsConnect();
   try {
     const w = new W(url); chainWs = w;
@@ -484,20 +508,27 @@ function chainStop() { feed.chainOn = false; if (chainWs) { const w = chainWs; c
 async function feedWatch() {
   const now = Date.now(), stale = now - feed.lastWsAt > 60_000 && now - feed.lastPollAt > 60_000;
   // With Helius available the chain feed stays on all the time (fastest launch detection); it drops to public RPCs when the daily budget runs low
-  const keepOn = heliusEnabled() && budgetOk(2000);
+  // free-feed mode: keep the chain feed on (public websockets, free) so early_v1 still sees every launch; Helius only as fallback
+  const keepOn = freeFeedOn() ? true : heliusEnabled() && budgetOk(2000);
   if (chainWs && feed.chainUrl === "Helius websocket" && !budgetOk(500)) chainStop();
+  if (chainWs && feed.chainUrl === "Helius websocket" && freeFeedOn() && !freeFeedDropped()) { chainStop(); chainIdx = 0; } // free feed is back: leave Helius
   if (stale || keepOn) chainStart(); else if (chainWs && now - Math.max(feed.lastWsAt, feed.lastPollAt) < 30_000) chainStop();
 }
+/** Free feed dropped = no fresh launch from PumpPortal / pump.fun list or a public chain websocket for 2+ minutes. */
+const feedStartMs = Date.now();
+/** Never true in the first 3 minutes after a start (feeds are still connecting); then both free feeds must have been silent 2+ min. */
+const freeFeedDropped = () => { const now = Date.now(); if (now - feedStartMs < 180_000) return false;
+  return now - Math.max(feed.lastWsAt, feed.lastPollAt, feedStartMs) > 120_000 && (feed.chainUrl === "Helius websocket" || now - Math.max(feed.lastChainAt, feedStartMs) > 120_000); };
 export const activeFeed = () => { const now = Date.now(); return { active: [now - feed.lastWsAt < 60_000 && "PumpPortal websocket", now - feed.lastPollAt < 60_000 && "pump.fun list", feed.chainOn && "Solana chain backup"].filter(Boolean),
   pumpPortalLastCoinSAgo: feed.lastWsAt ? Math.round((now - feed.lastWsAt) / 1000) : null, pumpFunListLastSAgo: feed.lastPollAt ? Math.round((now - feed.lastPollAt) / 1000) : null,
-  chainBackup: { on: feed.chainOn, rpc: feed.chainUrl || null, lastCoinSAgo: feed.lastChainAt ? Math.round((now - feed.lastChainAt) / 1000) : null, newCoinsFromBackup: feed.chainNew, connects: feed.chainSwitches } }; };
+  freeFeed: { ...freeFeedStatus(), freeFeedDroppedNow: freeFeedDropped() }, pumpFunListPoll: pollDiag, swapApiCapPerMin: SWAP_API_PER_MIN, chainBackup: { on: feed.chainOn, rpc: feed.chainUrl || null, lastCoinSAgo: feed.lastChainAt ? Math.round((now - feed.lastChainAt) / 1000) : null, newCoinsFromBackup: feed.chainNew, connects: feed.chainSwitches } }; };
 function startWs() {
   const W = (globalThis as any).WebSocket; if (!W) return;
   try {
     ws = new W("wss://pumpportal.fun/api/data");
     ws.onopen = () => { wsDiag.opens++; wsBackoff = 30_000; ws.send(JSON.stringify({ method: "subscribeNewToken" })); };
     ws.onmessage = (ev: any) => { feed.lastWsMsgAt = Date.now();
-       try { const m = JSON.parse(String(ev.data)); if (m.mint && m.txType === "create") onNewCoin({ mint: m.mint, symbol: m.symbol, name: m.name, creator: m.traderPublicKey, created_timestamp: Date.now() - 1000, devBuyPct: m.initialBuy != null ? Number(m.initialBuy) / 1e7 : null, uri: m.uri }, "ws"); } catch {} };
+       try { const m = JSON.parse(String(ev.data)); if (m.mint && m.txType === "create") noteLaunch(m); if (m.mint && m.txType === "create") onNewCoin({ mint: m.mint, symbol: m.symbol, name: m.name, creator: m.traderPublicKey, created_timestamp: Date.now() - 1000, devBuyPct: m.initialBuy != null ? Number(m.initialBuy) / 1e7 : null, uri: m.uri }, "ws"); } catch {} };
     // PumpPortal bans clients that reconnect too often (bans last ~1 h): back off 30 s -> 10 min
     ws.onclose = (ev: any) => { ws = null; wsDiag.closes++; wsDiag.lastClose = { at: new Date().toISOString(), code: ev?.code ?? null }; setTimeout(startWs, wsBackoff).unref?.(); wsBackoff = Math.min(600_000, wsBackoff * 2); };
     ws.onerror = (ev: any) => { wsDiag.lastError = String(ev?.message ?? ev?.error?.message ?? "error").slice(0, 80); };
@@ -551,6 +582,7 @@ async function scanInflow() {
         const sigIn = { ageS: Math.round(age), rule: "inflow_5sol_60s", netInflowSol: +net.toFixed(2), topBuyerSharePct: Math.round(topShare * 100), earlyBuyers: Object.keys(by).length,
           privateInflow: { telegram: m ? !!m.telegram : null, allThreeSocials: m ? m.socials === 3 : null, creatorFirstBuySol: devBuy ? +Number(devBuy.amountSol || 0).toFixed(3) : null, creatorFirstBuy1SolPlus: devBuy ? Number(devBuy.amountSol || 0) >= 1 : null } };
         enter("inflow_tp", c, { ...sigIn, entryOf: "inflow_v1" }).catch(() => {}); // Oct 18: same entry, tp20 exits
+        if (state.open.filter((p) => p.strat === "inflow_v1").length < cfgOf("inflow_v1").maxOpen && !state.open.some((p) => p.strat === "inflow_v1" && p.mint === c.mint)) enter("inflow_fx25", c, { ...sigIn, entryOf: "inflow_v1" }).catch(() => {}); // Oct 18: same entries as inflow_v1, 25 s break-even exit
         await enter("inflow_v1", c, sigIn);
       } else { bump(net < 5 ? "inflow_v1.lowInflow" : creatorSold ? "inflow_v1.creatorSold" : "inflow_v1.concentrated"); if (age > 60) c.checked.add("inflow"); }
   }
@@ -604,13 +636,15 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   startWs();
   if (process.env.PAPER_FORCE_CHAIN === "1") setOn(true); // test switch
   const loop = async (fn: () => Promise<unknown>, ms: number) => { for (;;) { await new Promise((r) => setImmediate(r)); try { await fn(); } catch (e) { lastErr = String((e as Error).message ?? e).slice(0, 160); } await sleep(ms); } };
-  process.once("SIGTERM", () => { saveState(state, "paper: flush on shutdown").catch(() => {}); });
+  process.once("SIGTERM", () => { flushHistory(launchMeta, true); saveState(state, "paper: flush on shutdown").catch(() => {}); });
   loadHelius((state as any).heliusDaily); sc = loadFile<Sc[]>("scorecard.json", []); nlog = loadFile("names.json", {}); creatorMints = loadFile("creators.json", {}); devStats = loadFile("devstats.json", {});
   if (!sc.length) for (const t of closed) if (t.rug?.riskScore != null && !sc.some((x) => x.mint === t.mint)) sc.push({ mint: t.mint, symbol: t.symbol, checkedAt: Date.parse(t.entryAt), score: t.rug.riskScore, level: t.rug.riskLevel, priceSol: t.entryPriceSol, liqUsd: t.rug.facts?.liquidityUsd ?? null, backfilled: true, after: {} });
   loop(scRecheck, 60_000);
-  loop(pollNew, 6000); loop(rpcPing, 60_000); loop(scanCandidates, 8000); loop(scanInflow, 4000); loop(feedWatch, 15_000);
+  loop(() => marketTick(() => ({ chainTradesSeenTotal: chainStat.tradesSeen, seenCoins: seen.size, openPositions: state.open.length, feeds: activeFeed().active })), 60_000); // Oct 18: market snapshot
+  loop(async () => { flushHistory(launchMeta); }, 600_000); // Oct 18: history batch files every 10 min
+  loop(pollNew, 5000); loop(rpcPing, 60_000); loop(scanCandidates, 8000); loop(scanInflow, 4000); loop(feedWatch, 15_000);
   loop(async () => { if (isOn() && state.open.length) await curveState([...new Set(state.open.map((p) => p.mint))]).catch(() => null); /* one batched price read for all open positions */ for (const p of [...state.open]) { await manage(p); await new Promise((r) => setImmediate(r)); } }, 5_000); // Oct 15: 10 s -> 5 s price checks
-  loop(async () => { for (const [n, o] of [["scorecard.json", sc], ["names.json", nlog], ["creators.json", creatorMints], ["devstats.json", devStats]] as const) { writeFile(n, o); await new Promise((r) => setImmediate(r)); } (state as any).heliusDaily = heliusDaily; if (dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
+  loop(async () => { for (const [n, o] of [["scorecard.json", sc], ["names.json", nlog], ["creators.json", creatorMints], ["devstats.json", devStats]] as const) { writeFile(n, o); await new Promise((r) => setImmediate(r)); } (state as any).heliusDaily = heliusDaily; if (takeHistoryDirty() || dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
 }
 
 export function paperSummary() {
@@ -630,8 +664,8 @@ export function paperSummary() {
       winRate: xs.length ? +(xs.filter((x) => x.pnlSol > 0).length / xs.length).toFixed(3) : null, avgLossRoi: losses.length ? +(losses.reduce((a, x) => a + x.roi, 0) / losses.length).toFixed(4) : null }; });
   return { helius: heliusStatus(), dataSource: dataSource(), feed: activeFeed(), inflowDiag, earlyDiag, coinFactoryFunder: { rule: `private paper flag: a creator or funder that funded ${COIN_FACTORY.minCreators}+ coin creators in 24 h (lower bound from our traces), or a known coin-factory name`, flaggedTrades: closed.filter((t) => t.coinFactoryFunder?.flag).length, fundersTracked: fundedBy.size }, paused: PAUSED, tests, testDecisionRule: TEST_RULE, paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL (control and v2 tests), edge-finder 0.1 SOL; sniper paused (was 0.4 SOL)", startedAt: state.startedAt, strategies: by,
     latency: { precheckRecent: preLog.slice(-30), eventLoopDelayMs: { p50: Math.round(loopLag.percentile(50) / 1e6), p99: Math.round(loopLag.percentile(99) / 1e6), max: Math.round(loopLag.max / 1e6) }, sniperPrecheckMedianMs: med(preMs), sniperPrecheckP90Ms: preMs.length ? [...preMs].sort((a, b) => a - b)[Math.floor(preMs.length * 0.9)] : 0, medianDetectMs: med(lat.detectMs), detectNote: "websocket launches have no on-chain timestamp in the feed; counted as 1000 ms (conservative floor). Poll-detected launches are measured.", medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
-    counters: state.counters, store: storeStatus(), websocket: !!ws, winnersTracked: winners.size, lastError: lastErr,
-    recent: closed.slice(-40).reverse().map(({ signals, rug, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, precheckMs: signals?.precheck?.ms ?? null, rugMax: signals?.rugMax ?? null, rugLevel: rug?.riskLevel ?? null })) };
+    counters: state.counters, store: storeStatus(), history: histStat, websocket: !!ws, winnersTracked: winners.size, lastError: lastErr,
+    recent: closed.slice(-40).reverse().map(({ signals, rug, markPath, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, precheckMs: signals?.precheck?.ms ?? null, rugMax: signals?.rugMax ?? null, rugLevel: rug?.riskLevel ?? null })) };
 }
 export const paperTrades = () => closed;
 /** Smallest buy where fixed network + priority fees stay under ~5% of the trade, given pump.fun's ~2.5% round-trip fee (slippage excluded; it grows with size). */
@@ -713,3 +747,31 @@ async function scRecheck() {
   }
 }
 export const isRugged = (a?: After) => !!a && ((a.changePct != null && a.changePct <= -90) || a.sellable === false || (a.graduated && a.liqUsd != null && a.liqUsd < 500));
+
+// ---------------- Oct 18: per-trade price marks for offline exit replay (paper only; uses prices manage() already reads) ----------------
+export const CHECKPOINTS = [10, 20, 30, 60];
+const p5 = (x: number) => Number(x.toPrecision(5));
+function notePriceMark(p: Pos, price: number) {
+  const now = Date.now(), s = Math.round((now - p.entryAt) / 100) / 10;
+  if (p.minP == null || price < p.minP) { p.minP = price; p.minAt = now; }
+  const at = (p.at ??= {}); for (const k of CHECKPOINTS) if (!at[k] && s >= k) at[k] = [s, p5(price)];
+  const path = (p.path ??= []); const last = path[path.length - 1];
+  if (!last || s - last[0] >= (s <= 120 ? 4.5 : 29.5)) { path.push([s, p5(price)]); if (path.length > 80) path.splice(24, 1); } // ~5 s steps for 2 min, then 30 s
+}
+function markFields(p: Pos) {
+  const roi = (x: number) => +((x / p.entryPriceSol) - 1).toFixed(4);
+  return { minPriceSol: p.minP != null ? p5(p.minP) : null, minMarkRoi: p.minP != null ? roi(p.minP) : null, minAfterS: p.minAt ? Math.round((p.minAt - p.entryAt) / 100) / 10 : null,
+    priceAfter: Object.fromEntries(CHECKPOINTS.map((k) => { const v = p.at?.[k]; return [String(k), v ? { atS: v[0], priceSol: v[1], roi: roi(v[1]) } : null]; })),
+    markPath: p.path ?? [], marksNote: "marks every ~5 s (manage loop); priceAfter = first mark at/after each checkpoint; checkpoints after the exit go to data/trade-marks.jsonl" };
+}
+/** Checkpoints (10/20/30/60 s after entry) not reached before the exit: sample once each later and log to data/trade-marks.jsonl. */
+function followCheckpoints(p: Pos) {
+  for (const k of CHECKPOINTS) {
+    if (p.at?.[k]) continue; const wait = p.entryAt + k * 1000 - Date.now(); if (wait < -5000) continue;
+    setTimeout(async () => { try {
+      const tr = await tradesLive(p.mint, 5); let price = tr?.[0] ? Number(tr[0].priceSol) : null;
+      if (isOn()) { const cs = (await curveState([p.mint]))[p.mint]; if (cs && !cs.complete && cs.priceSol > 0) price = cs.priceSol; }
+      if (price) appendLine("trade-marks.jsonl", { id: p.id, strat: p.strat, mint: p.mint, entryAt: new Date(p.entryAt).toISOString(), checkpointS: k, atS: Math.round((Date.now() - p.entryAt) / 100) / 10, priceSol: p5(price), roi: +((price / p.entryPriceSol) - 1).toFixed(4), afterExit: true });
+    } catch {} }, Math.max(0, wait)).unref?.();
+  }
+}

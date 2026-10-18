@@ -2,12 +2,15 @@
  * Paper-trader persistence. Durable: private GitHub repo (PAPER_STORE_REPO, e.g. git@github.com:jimmybr-PDX/paper-trader.git)
  * written over git+SSH with a repo-scoped deploy key (PAPER_STORE_SSH_KEY_B64). Fallback: local files (PAPER_DIR).
  * Files: data/state.json (open positions + counters), data/trades.jsonl (one closed paper trade per line, append-only).
+ * Oct 18 history (batched, one new file per batch so each commit only adds small blobs): data/coin-trades/<day>/<time>.jsonl.gz,
+ * data/launches/<day>/<time>.jsonl.gz, data/market/<day>/<time>.jsonl, data/trade-marks.jsonl (post-exit price checkpoints).
  */
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { gzipSync } from "node:zlib";
 const run = promisify(execFile);
 
 let mode: "github" | "file" | "unavailable" = "unavailable";
@@ -54,3 +57,19 @@ export async function saveState(state: unknown, msg: string) {
 
 export function loadFile<T>(name: string, fallback: T): T { try { return JSON.parse(fs.readFileSync(path.join(dir, "data", name), "utf8")); } catch { return fallback; } }
 export function writeFile(name: string, obj: unknown) { if (mode === "unavailable") return; fs.writeFileSync(path.join(dir, "data", name), JSON.stringify(obj) + "\n"); }
+/** Oct 18: append one JSON line to a data/ file (small, append-only logs). */
+export function appendLine(name: string, obj: unknown) { if (mode === "unavailable") return; fs.appendFileSync(path.join(dir, "data", name), JSON.stringify(obj) + "\n"); }
+/** Oct 18: write one batch of JSON lines as a new file under data/<kind>/<UTC day>/<HHMMSS>[.gz]. Returns the relative path or null. */
+export function writeBatch(kind: string, rows: unknown[], gzip = true, now = new Date()): string | null {
+  if (mode === "unavailable" || !rows.length) return null;
+  const iso = now.toISOString(), day = iso.slice(0, 10), t = iso.slice(11, 19).replace(/:/g, "");
+  const rel = path.join(kind, day, `${t}.jsonl${gzip ? ".gz" : ""}`), full = path.join(dir, "data", rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const body = rows.map((r) => JSON.stringify(r)).join("\n") + "\n";
+  fs.writeFileSync(full, gzip ? gzipSync(body, { level: 6 }) : body); historyDirty = true;
+  return rel;
+}
+let historyDirty = false;
+/** True once after history files were written (so the save loop commits them even when no trade changed). */
+export function takeHistoryDirty() { const d = historyDirty; historyDirty = false; return d; }
+export const storeDir = () => dir;
