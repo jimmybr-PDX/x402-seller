@@ -1,5 +1,5 @@
 /**
- * RugRadar web surface: branded landing page with a free web checker (3 free checks per visitor, limited by IP
+ * RugRadar web surface: branded landing page with a free web checker (1 free limited check per visitor, limited by IP
  * and cookie), sitemap.xml, and an MCP server (streamable HTTP, JSON responses) at /mcp.
  */
 import { RUG_EDGE } from "./rug-extra.js";
@@ -11,7 +11,26 @@ export type WebDeps = {
   rugCheck: (t: string, chain: string) => Promise<any>;
   spend: (k: string) => Promise<number | null>; refund: (k: string) => Promise<void>;
 };
-export const FREE_PER_VISITOR = 3;
+export const FREE_PER_VISITOR = 1;
+export const FREE_COPY = "1 free limited check per visitor, then credits for the full report.";
+const LIMITED_CHECKS = new Set(["mint_authority", "freeze_authority", "mint_function", "holders", "liquidity", "age"]);
+export const LOCKED_SIGNALS = ["exact dev-sold %", "sniper share", "launch-bundle share", "can-you-sell quote with price impact", "creator's past launches", "organic/bot score", "full buyer summary"];
+/** Free web check: basic score from mint/freeze authority, top-holder concentration, age and liquidity only. Paid paths never call this. */
+export function limitedReport(full: any) {
+  const f = full?.facts ?? {};
+  const checks = (Array.isArray(full?.checks) ? full.checks : []).filter((c: any) => LIMITED_CHECKS.has(c?.check)).map((c: any) => ({ check: c.check, points: c.points, detail: c.detail }));
+  const score = Math.min(100, checks.reduce((a: number, c: any) => a + (Number(c.points) || 0), 0));
+  const level = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
+  const pick = (k: string) => (f[k] === undefined ? null : f[k]);
+  return {
+    product: "RugRadar", report: "limited", chain: full?.chain ?? null, token: full?.token ?? null, riskScore: score, riskLevel: level, scoring: "basic score (mint/freeze authority, top holders, age, liquidity)",
+    verdict: level === "high" ? "Multiple high-risk patterns found." : level === "medium" ? "Some high-risk patterns found." : "No major high-risk patterns found in the basic checks.",
+    reasons: checks.filter((c: any) => c.points > 0).map((c: any) => c.detail), checks,
+    facts: { mintAuthority: pick("mintAuthority"), freezeAuthority: pick("freezeAuthority"), top1Pct: pick("top1Pct"), top10Pct: pick("top10Pct"), holderCount: pick("holderCount"), ageHours: pick("ageHours"), liquidityUsd: pick("liquidityUsd") },
+    lockedSignals: LOCKED_SIGNALS, unlock: "Credits unlock the full report (paste a credit key above, or send X-RugRadar-Key).",
+    disclaimer: full?.disclaimer ?? DISCLAIMER, generatedAt: full?.generatedAt ?? new Date().toISOString(),
+  };
+}
 const FREE_DAILY_CAP = Number(process.env.RUGRADAR_FREE_DAILY_CAP ?? 500);
 const DISCLAIMER = "Automated heuristic, may be wrong. Not financial advice. Do your own research.";
 
@@ -43,7 +62,7 @@ function page(d: WebDeps) {
   const sp = d.speed ? `Prepaid credits: ~${d.speed.creditS}s per check vs ~${d.speed.paidS}s pay-per-call: ${d.speed.x}x faster` : "Prepaid credits: pay once, then check with just a key";
   const faq = [
     ["How is RugRadar different from RugCheck?", "In a side-by-side test on 5 Solana tokens RugRadar returned 28 of 30 buyer signals vs 14 for RugCheck's free report, including dev-sold %, sniper and bundle share, a live sell test, volume vs market cap and a bot-trading score, and it also covers Base, BNB, Ethereum and Arbitrum."],
-    ["Is RugRadar free?", `Yes for people: ${FREE_PER_VISITOR} free web checks per visitor. After that, prepaid credits cost $${p} per check (buy 1 to 1,000). Agents pay $${p} per call via x402 or use a credit key.`],
+    ["Is RugRadar free?", `People get ${FREE_COPY} The free check shows a basic risk score, mint/freeze authority, top-holder concentration, token age and liquidity. Prepaid credits cost $${p} per full check (buy 1 to 1,000). Agents pay $${p} per call via x402 or use a credit key.`],
     ["Which chains does the rug check support?", "Solana (including pump.fun tokens), BNB Chain (four.meme), Base, Ethereum and Arbitrum."],
     ["What does the honeypot check look at?", "On EVM chains a simulated buy and sell (can you sell, buy/sell tax) plus owner powers like mint, pause and blacklist. On Solana, active freeze or mint authority, holder concentration, liquidity, token age and the deployer's earlier launches."],
     ["Is a low score a guarantee?", DISCLAIMER],
@@ -55,7 +74,7 @@ function page(d: WebDeps) {
   ];
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RugRadar: Free Solana Rug Check & Honeypot Checker (Token Safety Score)</title>
-<meta name="description" content="Free rug pull checker and honeypot check for new tokens on Solana (pump.fun), BNB, Base, Ethereum and Arbitrum. Paste a token address, get a 0-100 risk score with plain reasons. ${FREE_PER_VISITOR} free checks.">
+<meta name="description" content="Free rug pull checker and honeypot check for new tokens on Solana (pump.fun), BNB, Base, Ethereum and Arbitrum. Paste a token address, get a 0-100 risk score with plain reasons. 1 free limited check per visitor.">
 <link rel="canonical" href="${U}/rugradar"><link rel="icon" href="/favicon.ico"><link rel="icon" type="image/png" sizes="32x32" href="/rugradar/rug-radar-32.png"><link rel="apple-touch-icon" href="/rugradar/rug-radar-192.png">
 <meta property="og:type" content="website"><meta property="og:title" content="RugRadar: free rug check & honeypot checker"><meta property="og:description" content="0-100 token risk score with plain reasons. Solana, BNB, Base, Ethereum, Arbitrum."><meta property="og:url" content="${U}/rugradar"><meta property="og:image" content="${U}/rugradar/preview-label.png"><meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">${JSON.stringify(ld).replace(/</g, "\\u003c")}</script>
@@ -74,7 +93,7 @@ input,select{font-size:16px;padding:10px;border-radius:8px;border:1px solid #2b3
 <input id="tok" name="token" required autocomplete="off" spellcheck="false" placeholder="e.g. JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN">
 <div class="row"><label for="chain">Chain</label><select id="chain">${CHAINS.map((c) => `<option value="${c}">${c === "bnb" ? "BNB (BSC)" : c[0]!.toUpperCase() + c.slice(1)}</option>`).join("")}</select>
 <input id="key" placeholder="Credit key (optional)" autocomplete="off" style="flex:1;min-width:180px"><button class="btn" id="go">Check token</button></div>
-<small id="quota">${FREE_PER_VISITOR} free checks per visitor, then credits.</small></form><div id="out" aria-live="polite"></div></section>
+<small id="quota">${FREE_COPY}</small></form><div id="out" aria-live="polite"></div></section>
 <h2>Free Solana rug check (incl. pump.fun)</h2><p>Mint and freeze authority, top-holder share, liquidity, token age, and the deployer wallet's earlier launches that died or never graduated, plus a funding wallet linked to earlier high-risk patterns.</p>
 <h2>Honeypot check for BNB, Base, Ethereum and Arbitrum</h2><p>A simulated buy and sell shows whether you can sell and the real buy/sell tax, plus owner powers such as mint, pause and blacklist. Established, exchange-listed tokens are weighted accordingly.</p>
 <h2>RugCheck alternative: what RugRadar shows that RugCheck doesn't</h2><div class="box">Tested on Oct 14, 2026 with the same 5 Solana tokens (a fresh pump.fun launch, a known rug, a mid-cap meme, an established token, and one with mint and freeze authority). RugCheck's free report covered 14 of our 30 buyer signals; RugRadar covered 28. Only RugRadar showed: dev sold % of what they bought, sniper share in the first 10 seconds, launch-block bundle share, a live can-you-sell quote with price impact, the creator's past launches and our bad-deployer list, market cap and liquidity vs market cap, 24h volume, buys, sells and traders, price, holder and liquidity change, a bot-trading (organic) score, social links, a plain buyer summary, a confidence rating, and 4 EVM chains. RugCheck still shows two things we don't: an insider-network graph and an "already rugged" flag.</div>
@@ -98,7 +117,7 @@ f.addEventListener('submit',async e=>{e.preventDefault();out.textContent='Checki
  const ul=el('ul');(j.reasons&&j.reasons.length?j.reasons:['No major high-risk patterns found.']).forEach(x=>ul.append(el('li',null,x)));out.append(ul);
  if(j.unknownSignals&&j.unknownSignals.length)out.append(el('p',null,'Unknown (scored neutral): '+j.unknownSignals.join(', ')));
  out.append(el('small',null,j.disclaimer||${JSON.stringify(DISCLAIMER)}));
- if(j.free_checks_left!=null)q.textContent=j.free_checks_left+' free check(s) left. Then buy credits.';if(j.credits_remaining!=null)q.textContent=j.credits_remaining+' credit(s) left on your key.';
+ if(j.lockedSignals){out.append(el('p',null,'Limited free report. Locked: '+j.lockedSignals.join(', ')+'.'));const a=el('a','btn','Buy credits for the full report');a.href='#credits';out.append(a)}if(j.free_checks_left!=null)q.textContent=j.free_checks_left>0?j.free_checks_left+' free limited check(s) left.':'Free check used. Credits unlock the full report.';if(j.credits_remaining!=null)q.textContent=j.credits_remaining+' credit(s) left on your key.';
  }catch(err){out.textContent='Network error, try again.'}finally{go.disabled=false}});
 </script></main></body></html>`;
 }
@@ -144,11 +163,11 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     if (!vid) { vid = randomBytes(16).toString("base64url"); res.append("Set-Cookie", `rr_vid=${vid}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax; Secure`); }
     const ip = ipOf(req), a = freeAllowance(ip, vid);
     if (!a.ok) {
-      const msg = a.reason === "slow_down" ? "One check every few seconds, please." : a.reason === "daily_free_cap" ? "Today's free checks are used up. Buy credits to keep checking." : `You've used your ${FREE_PER_VISITOR} free checks. Buy credits ($${d.priceUsd} each) to keep checking.`;
+      const msg = a.reason === "slow_down" ? "One check every few seconds, please." : a.reason === "daily_free_cap" ? "Today's free checks are used up. Buy credits to keep checking." : `You've used your free limited check. Buy credits ($${d.priceUsd} each) for the full report.`;
       res.status(a.reason === "slow_down" ? 429 : 402).json({ error: a.reason, message: msg, buyCredits: `${d.publicUrl}/credits/buy?credits=100` }); return;
     }
     useFree(ip, vid);
-    try { res.json({ ...(await d.rugCheck(token, chain)), free_checks_left: a.left }); }
+    try { res.json({ ...limitedReport(await d.rugCheck(token, chain)), free_checks_left: a.left }); }
     catch (e) { refundFree(ip, vid); res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
   });
   app.get("/sitemap.xml", (_req, res) => {
