@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { paperSummary, paperTrades, CFG, minSizes } from "./engine.js";
 import { registerScorecard } from "./scorecard-page.js";
+import { isAdmin, redact, PRIVATE_RULE } from "./privacy.js";
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 let solUsd: { v: number | null; at: number } = { v: null, at: 0 };
 /** Live SOL/USD from Jupiter's free price API, cached 5 minutes. */
@@ -24,9 +25,11 @@ const secs = (n?: number) => (n == null ? "-" : n < 120 ? `${n} seconds` : `${(n
 const th = (label: string, tip: string) => `<th tabindex="0" data-tip="${esc(tip)}">${label} &#9432;</th>`;
 export function registerPaper(app: Express) {
   registerScorecard(app);
-  app.get("/paper.json", (_req, res) => { res.set("Cache-Control", "no-store").json(paperSummary()); });
-  app.get("/paper/trades.json", (_req, res) => { res.set("Cache-Control", "no-store").json(paperTrades().slice(-500)); });
-  app.get("/paper", async (_req, res) => {
+  // Oct 18: public = performance only (private signals stripped); full data with X-Paper-Admin-Key or from the private paper store
+  app.get("/paper.json", (req, res) => { res.set("Cache-Control", "no-store").json(isAdmin(req) ? paperSummary() : redact(paperSummary())); });
+  app.get("/paper/trades.json", (req, res) => { const t = paperTrades().slice(-500); res.set("Cache-Control", "no-store").json(isAdmin(req) ? t : redact(t)); });
+  app.get("/paper", async (req, res) => {
+    if (!isAdmin(req)) { res.set("Cache-Control", "no-store").type("html").send(publicPage(redact(paperSummary()) as any, await solPrice())); return; }
     const s = paperSummary(); const p = await solPrice();
     const all = paperTrades();
     const rows = Object.entries(s.strategies).map(([k, v]: any) => {
@@ -61,4 +64,21 @@ export function registerPaper(app: Express) {
 <h2>Recent trades</h2><table><tr>${th("Time (UTC)", "When the trade closed (UTC time).")}${th("Strategy", "Which pretend trading approach made the trade.")}${th("Coin", "The coin traded. Click to see its chart.")}${th("Result", "Profit, loss, or buy failed.")}${th("Why it sold", "Which sell rule triggered.")}${th("Coin age when bought", "How old the coin was when we bought.")}${th("Held for", "How long we held before selling.")}${th("Buy size", "Pretend SOL put in, and how many times the normal size (bigger test buys only on known good dev coins).")}${th("Fees paid", "Estimated total costs: pump.fun fee on buy and sell (about 1.25% each), network fee, priority fee and tip, and slippage (price moving against us while the trade lands). Already included in profit/loss.")}${th("Break-even gain needed", "How much the price had to rise just to cover this trade's fees.")}${th("Bought for (SOL)", "SOL spent on this trade, including fees and the token account deposit.")}${th("Sold for (SOL)", "SOL we got back after fees, deposit refunded.")}${th("Profit/loss (SOL)", "Sold for minus bought for.")}${th("Profit/loss (USD)", "Same, in US dollars at today's SOL price.")}${th("Gain/loss %", "Profit or loss as a % of the trade size, after all fees.")}${th("Best gain while held", "Highest % the price was above our buy price while we held it (before selling costs).")}${th("Best gain reached after", "How long after buying the best gain happened.")}${th("Gain at sell time", "Price change vs our buy price when we decided to sell (before selling costs).")}${th("RugRadar risk score (0 safe - 100 risky)", "RugRadar's risk score when we bought. Higher = riskier.")}${th("Sniper pre-check time", "How long the sniper's quick safety check took before buying.")}</tr>${rec}</table>
 <p>"Bought for" includes fees and the token account deposit; "Sold for" is what came back after fees, with the deposit refunded. <a href="/paper/rugradar">RugRadar scorecard</a> &middot; <a href="/paper.json">Raw data</a> &middot; <a href="/paper/trades.json">All trades</a></p>`);
   });
+}
+
+/** Oct 18: public paper page: results only, no private signals, rules or research notes. */
+function publicPage(s: any, p: number | null) {
+  const label = (k: string) => { const t = (s.tests ?? []).find((x: any) => x.strat === k); return t && t.rule !== PRIVATE_RULE ? t.rule : k; };
+  const tests = (s.tests ?? []).map((t: any) => `<tr><td><b>${esc(t.strat)}</b></td><td>${esc(t.rule)}</td><td>${esc(String(t.startedAt).slice(0, 16).replace("T", " "))}</td><td>${t.trades}</td><td>${sol(t.totalPnlSol)}</td><td>${pct(t.avgRoi)}</td><td>${t.winRate == null ? "-" : (t.winRate * 100).toFixed(1) + "%"}</td></tr>`).join("");
+  const rows = Object.entries(s.strategies ?? {}).map(([k, v]: any) => `<tr><td><b>${esc(k)}</b></td><td>${v.closedTrades}</td><td>${v.wins}</td><td>${v.winRate == null ? "-" : (v.winRate * 100).toFixed(1) + "%"}</td><td>${sol(v.totalPnlSol)} SOL</td><td>${usd(v.totalPnlSol, p)}</td><td>${pct(v.avgRoi)}</td><td>${v.open.length}</td></tr>`).join("");
+  const rec = (s.recent ?? []).map((t: any) => `<tr><td>${esc(t.exitAt ?? t.entryAt).slice(5, 16).replace("T", " ")}</td><td>${esc(t.strat)}</td><td><a href="https://dexscreener.com/solana/${esc(t.mint)}">${esc(t.symbol || String(t.mint).slice(0, 6))}</a></td><td>${t.result === "win" ? "Profit" : t.result === "loss" ? "Loss" : "Buy failed (fees lost)"}</td><td>${esc(reason(t.exitReason))}</td><td>${secs(t.holdS)}</td><td>${sol(t.pnlSol)} SOL</td><td>${pct(t.roi)}</td></tr>`).join("");
+  void label;
+  return `<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width"><meta http-equiv=refresh content=60><title>Paper trader</title>
+<style>body{font:14px system-ui;margin:16px;max-width:1100px}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px 6px;text-align:left}.w{background:#fff3cd;padding:8px}th{background:#f7f7f7}</style>
+<h1>Paper trader (pretend money only)</h1><p class=w><b>PAPER TRADING ONLY.</b> No wallet, no keys, no real trades. Results include fees, measured delay and simulated failed buys/sells. Strategy rules and signals are private; this page shows results only.</p>
+<p>Running since ${esc(s.startedAt).replace("T", " ").slice(0, 16)} UTC &middot; SOL price used: ${p ? "$" + p.toFixed(2) : "unavailable"}</p>
+<h2>Tests</h2><table><tr><th>Test</th><th>Rule</th><th>Started (UTC)</th><th>Trades</th><th>Profit/loss (SOL)</th><th>Average per trade</th><th>Win rate</th></tr>${tests}</table>
+<h2>Totals by strategy</h2><table><tr><th>Strategy</th><th>Finished trades</th><th>Profitable</th><th>Win rate</th><th>Profit/loss (SOL)</th><th>Profit/loss (USD)</th><th>Average per trade</th><th>Open now</th></tr>${rows}</table>
+<h2>Recent trades</h2><table><tr><th>Time (UTC)</th><th>Strategy</th><th>Coin</th><th>Result</th><th>Why it sold</th><th>Held for</th><th>Profit/loss</th><th>Return</th></tr>${rec}</table>
+<p><a href="/paper/rugradar">RugRadar scorecard</a> &middot; <a href="/paper.json">Raw data</a> &middot; <a href="/paper/trades.json">Trades</a></p>`;
 }

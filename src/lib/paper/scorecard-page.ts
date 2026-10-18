@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { scorecard, isRugged, paperTrades } from "./engine.js";
 import { PRIV_BUCKETS } from "./private-signals.js";
+import { isAdmin, redact } from "./privacy.js";
 export function namedStats() {
   const sc = new Map(scorecard().map((x) => [x.mint, x])); const all = paperTrades().filter((t) => t.named && t.result !== "buy_failed");
   const B: [string, (n: any) => boolean][] = [["Creator has a public name", (n) => n.named && n.who === "creator"], ["Only the first funder has a name", (n) => n.named && n.who === "funder"], ["Any name (creator or funder)", (n) => n.named], ["No name found", (n) => !n.named]];
@@ -42,8 +43,10 @@ export function scorecardStats() {
     rugRateByLevel: Object.fromEntries(["10m", "1h", "24h"].map((k) => [k, Object.fromEntries(LV.map((l) => [l, outcome(by[l], k)]))])) };
 }
 export function registerScorecard(app: Express) {
-  app.get("/paper/rugradar.json", (_req, res) => { res.set("Cache-Control", "no-store").json({ namedWallet: namedStats(), privateSignals: privStats(), stats: scorecardStats(), coins: scorecard().slice(-1000) }); });
-  app.get("/paper/rugradar", (_req, res) => {
+  // Oct 18: public = RugRadar score vs outcome only; private signals (names, family, named wallets, trust, private buckets) need X-Paper-Admin-Key
+  app.get("/paper/rugradar.json", (req, res) => { res.set("Cache-Control", "no-store").json(isAdmin(req) ? { namedWallet: namedStats(), privateSignals: privStats(), stats: scorecardStats(), coins: scorecard().slice(-1000) } : redact({ stats: scorecardStats(), coins: scorecard().slice(-1000) })); });
+  app.get("/paper/rugradar", (req, res) => {
+    const admin = isAdmin(req);
     const st = scorecardStats(); const xs = scorecard();
     const k = (x: any) => (x.after["1h"] ? "1h" : x.after["10m"] ? "10m" : null);
     // scatter: score (x) vs % change at the latest re-check (y, clamped -100..+300)
@@ -54,6 +57,18 @@ export function registerScorecard(app: Express) {
     const bars = (["10m", "1h", "24h"] as const).map((w, wi) => LV.map((l, li) => { const o = (st.rugRateByLevel as any)[w][l]; const rate = o.checked ? o.rugged / o.checked : 0; const x = 50 + wi * 200 + li * 55, h = rate * 200;
       return `<rect x="${x}" y="${230 - h}" width="45" height="${h}" fill="${COL[l]}"/><text x="${x + 22}" y="${225 - h}" font-size="11" text-anchor="middle">${o.checked ? Math.round(rate * 100) + "%" : "n/a"}</text><text x="${x + 22}" y="246" font-size="10" text-anchor="middle">${l} (${o.checked})</text>`; }).join("") + `<text x="${50 + wi * 200 + 80}" y="264" font-size="12" text-anchor="middle"><tspan font-weight="bold">${w === "10m" ? "after 10 minutes" : w === "1h" ? "after 1 hour" : "after 24 hours"}</tspan></text>`).join("");
     const histRow = (h: number[]) => h.map((v) => `<td>${v}</td>`).join("");
+    if (!admin) { // Oct 18: public scorecard = RugRadar score vs what happened; no private signals
+      const out = (x: any, w: string) => { const a = x.after[w]; return a ? `${a.changePct == null ? "?" : (a.changePct > 0 ? "+" : "") + a.changePct + "%"}${isRugged(a) ? " <b>RUGGED</b>" : ""}${a.sellable === false ? " (can't sell)" : ""}` : "waiting"; };
+      const prow = xs.slice(-200).reverse().map((x) => `<tr><td>${new Date(x.checkedAt).toISOString().slice(5, 16).replace("T", " ")}</td><td><a href="https://dexscreener.com/solana/${esc(x.mint)}">${esc(x.symbol || x.mint.slice(0, 6))}</a></td><td>${x.score}</td><td style="color:${COL[x.level]}">${x.level}</td><td>${out(x, "10m")}</td><td>${out(x, "1h")}</td><td>${out(x, "24h")}</td></tr>`).join("");
+      res.set("Cache-Control", "no-store").type("html").send(`<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width"><meta http-equiv=refresh content=120><title>RugRadar scorecard</title>
+<style>body{font:14px system-ui;margin:16px;max-width:1100px}table{border-collapse:collapse}td,th{border-bottom:1px solid #ddd;padding:4px 6px;text-align:left}th{background:#f7f7f7}</style>
+<h1>RugRadar scorecard</h1><p>Every coin RugRadar checked for the paper trader: its risk score when checked, then what happened 10 minutes, 1 hour and 24 hours later. "Rugged" = price fell 90%+, could no longer be sold, or the pool was emptied (under $500 left). <a href="/paper">Back to paper trades</a> &middot; <a href="/paper/rugradar.json">Raw data</a></p>
+<h2>Summary</h2><p>Coins checked: <b>${st.totalChecks}</b> &middot; high risk: <b>${st.pct.high}%</b> (${st.counts.high}) &middot; medium: <b>${st.pct.medium}%</b> (${st.counts.medium}) &middot; low: <b>${st.pct.low}%</b> (${st.counts.low})</p>
+<table><tr><th>Score range</th>${Array.from({ length: 10 }, (_, i) => `<th>${i * 10}-${i * 10 + 9}</th>`).join("")}</tr><tr><td>Failed (high risk)</td>${histRow(st.scoreHistogram10pt.failedHigh)}</tr><tr><td>Passed (low or medium)</td>${histRow(st.scoreHistogram10pt.passedLowOrMedium)}</tr></table>
+<h2>Risk score vs. price change</h2><svg width="${W}" height="${H}" style="border:1px solid #eee">${axes}${dots}</svg>
+<h2>How often coins rugged, by RugRadar rating</h2><svg width="660" height="275" style="border:1px solid #eee">${bars}</svg>
+<h2>Every coin (newest first)</h2><table><tr><th>Checked (UTC)</th><th>Coin</th><th>Risk score</th><th>Rating</th><th>After 10 min</th><th>After 1 hour</th><th>After 24 hours</th></tr>${prow}</table>`); return;
+    }
     const rows = xs.slice(-200).reverse().map((x) => { const c = (w: string) => { const a = x.after[w]; return a ? `${a.changePct == null ? "?" : (a.changePct > 0 ? "+" : "") + a.changePct + "%"}${isRugged(a) ? " <b>RUGGED</b>" : ""}${a.sellable === false ? " (can't sell)" : ""}${a.late ? " (late)" : ""}` : "waiting"; };
       return `<tr><td>${new Date(x.checkedAt).toISOString().slice(5, 16).replace("T", " ")}</td><td><a href="https://dexscreener.com/solana/${esc(x.mint)}">${esc(x.symbol || x.mint.slice(0, 6))}</a></td><td>${x.score}</td><td style="color:${COL[x.level]}">${x.level}${x.backfilled ? " (from trade log)" : ""}</td><td>${x.names ? x.names.sameBefore : "-"}</td><td>${x.names ? x.names.priorRugged + " of " + x.names.priorScored + " we tracked" : "-"}</td><td>${x.names ? (x.names.firstMover ? "First" : "Copycat #" + x.names.rank) + (x.names.trend ? " (trend)" : "") : "-"}</td>${x.family ? `<td>${x.family.hopsReached} (${esc(x.family.stopReason)})</td><td>${esc(x.family.origin)}</td><td>${x.family.familyCoinsBefore}</td><td>${x.family.familyRugs} of ${x.family.familyTracked}</td><td>${x.trust?.knownGood ? "<b>Known good dev</b>: " + esc(x.trust.reason) : "No"}</td><td>${x.family.serialRugger ? "<b>Yes</b>" : "No"}</td>` : `<td>-</td><td>-</td><td>-</td><td>-</td><td>${x.trust?.knownGood ? "<b>Known good dev</b>: " + esc(x.trust.reason) : "-"}</td><td>-</td>`}<td>${c("10m")}</td><td>${c("1h")}</td><td>${c("24h")}</td></tr>`; }).join("");
     res.set("Cache-Control", "no-store").type("html").send(`<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width"><meta http-equiv=refresh content=120><title>RugRadar scorecard</title>
