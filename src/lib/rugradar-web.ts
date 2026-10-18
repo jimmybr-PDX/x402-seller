@@ -91,7 +91,7 @@ h1{color:#46DC64;font-size:44px;margin:4px 0;text-align:center;text-shadow:0 0 1
 .btn{display:inline-block;background:#46DC64;color:#0A1630;font-weight:800;padding:10px 20px;border-radius:8px;text-decoration:none;border:0;font-size:16px;cursor:pointer}
 input,select{font-size:16px;padding:10px;border-radius:8px;border:1px solid #2b3d6b;background:#0A1630;color:#E8EEF8}#tok{width:100%;box-sizing:border-box;margin:8px 0}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.score{font-size:48px;font-weight:800}.low{color:#46DC64}.medium{color:#F7931A}.high{color:#ff5a5a}ul{padding-left:20px}
-.locked{border:1px dashed #46DC64;border-radius:10px;padding:12px 16px;margin:14px 0;background:#0d1b3a}.locked table{width:100%;border-collapse:collapse}.locked td{padding:5px 4px;border-bottom:1px solid #1d2f5c;color:#6f7f9c}.locked td.v{text-align:right;letter-spacing:2px}.locked .how{font-size:14px;color:#9fb0cc;margin-top:10px}</style></head>
+.locked{border:1px dashed #46DC64;border-radius:10px;padding:12px 16px;margin:14px 0;background:#0d1b3a}.locked table{width:100%;border-collapse:collapse}.locked td{padding:5px 4px;border-bottom:1px solid #1d2f5c;color:#6f7f9c}.locked td.v{text-align:right;letter-spacing:2px}.locked .how{font-size:14px;color:#9fb0cc;margin-top:10px}.wpay{border:1px solid #2b3d6b;border-radius:10px;padding:10px 12px;margin:8px 0 12px;background:#12224a}.wpay .pack{margin:4px 6px 4px 0;font-size:15px;padding:8px 14px}.btn:disabled{background:#3b4a6b;color:#9fb0cc;cursor:not-allowed}.wstat{margin-top:8px;color:#E8EEF8}.locked .how a:not(.btn){color:#46DC64}.wstat code{display:block;background:#0A1630;padding:8px;border-radius:6px;margin:6px 0}</style></head>
 <body><main>
 <div class="banner"><b>${sp}</b><div style="margin:6px 0 10px"><b>${RUG_EDGE.replace("$0.01", "$" + p)}</b><br>Same $${p} per check, buy 1 to 1,000. Agents send the key as X-RugRadar-Key.</div><a class="btn" href="#credits">Buy credits</a></div>
 <div class="c"><img class="logo" src="/rugradar/rug-radar-512.png" alt="RugRadar emblem" width="150" height="150"><h1>RugRadar</h1>
@@ -115,14 +115,43 @@ const LOCKED=${JSON.stringify(LOCKED_SIGNALS)},OFFER=${JSON.stringify(unlockOffe
 function lockedPanel(names,o,note){o=o||OFFER;const b=el('div','locked');b.id='unlock';b.append(el('b',null,note||'Full report: locked signals'));
  const tb=el('table');(names&&names.length?names:LOCKED).forEach(n=>{const tr=el('tr');tr.append(el('td',null,'\u{1F512} '+n),el('td','v','\u2022\u2022\u2022'));tb.append(tr)});b.append(tb);
  const a=el('a','btn',o.label);a.href='#credits';a.style.marginTop='12px';a.addEventListener('click',ev=>{ev.preventDefault();h.hidden=false;h.scrollIntoView({block:'nearest'})});b.append(a);
- const h=el('div','how');h.hidden=true;h.append(el('p',null,'1. Buy '+o.credits+' credits ($'+o.priceUsd+') with any x402 client: GET '+o.buy+' (you get a secret key once).'),el('p',null,'2. '+o.useKey),el('p',null,o.agents));const m=el('a',null,'More on prepaid credits');m.href='#credits';h.append(m);b.append(h);return b}
+ const h=el('div','how');h.hidden=true;h.append(walletPacks());h.append(el('p',null,'Other ways (credit key / x402):'),el('p',null,'1. Buy '+o.credits+' credits ($'+o.priceUsd+') with any x402 client: GET '+o.buy+' (you get a secret key once).'),el('p',null,'2. '+o.useKey),el('p',null,o.agents));const m=el('a',null,'More on prepaid credits');m.href='#credits';h.append(m);b.append(h);return b}
+const WALLETS=[],WAPI={register:(...ws)=>{ws.forEach(w=>{if(w&&w.features&&w.features['solana:signAndSendTransaction']&&w.features['standard:connect']&&!WALLETS.includes(w))WALLETS.push(w)});return()=>{}}};
+window.addEventListener('wallet-standard:register-wallet',e=>{try{e.detail(WAPI)}catch(x){}});try{window.dispatchEvent(new CustomEvent('wallet-standard:app-ready',{detail:WAPI}))}catch(x){}
+let PAYCFG=null;const payCfg=fetch('/rugradar/pay/config').then(r=>r.json()).then(j=>PAYCFG=j).catch(()=>null);
+const B58='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+function b58(u){let d=[0];for(const x of u){let c=x;for(let i=0;i<d.length;i++){c+=d[i]*256;d[i]=c%58;c=Math.floor(c/58)}while(c){d.push(c%58);c=Math.floor(c/58)}}let z='';for(const x of u){if(x)break;z+='1'}return z+d.reverse().map(i=>B58[i]).join('').replace(/^1+/,'')}
+const post=(u)=>fetch(u,{method:'POST'}).then(async r=>({ok:r.ok,status:r.status,j:await r.json().catch(()=>({}))}));
+function walletPacks(){const w=el('div','wpay');w.id='wpay';w.append(el('b',null,'Pay with Phantom or Solflare'));
+ const cur=el('select');cur.id='wcur';[['usdc','USDC'],['sol','SOL']].forEach(([v,t])=>{const op=el('option',null,t);op.value=v;cur.append(op)});
+ const row=el('div','row');row.style.margin='8px 0';row.append(el('span',null,'Pay in'),cur);w.append(row);
+ const st=el('div','wstat');const packs=el('div','row');
+ [['10','0.10'],['50','0.40'],['200','1.50']].forEach(([n,usd])=>{const bt=el('button','btn pack',n+' credits \u00b7 $'+usd);bt.type='button';bt.dataset.pack=n;bt.addEventListener('click',()=>buyPack(n,cur.value,st));packs.append(bt)});w.append(packs,st);
+ payCfg.then(c=>{if(!c||!c.enabled){w.querySelectorAll('button.pack').forEach(x=>x.disabled=true);st.textContent='Wallet checkout is coming soon. For now use a credit key or x402 below.'}else st.textContent='One click: your wallet asks you to approve the transfer to '+c.recipient.slice(0,4)+'\u2026'+c.recipient.slice(-4)+'. The key appears here.'});
+ const prev=localStorage.getItem('rr_order');if(prev){const r=el('button','btn',"I've paid \u2014 check my last order");r.type='button';r.style.marginTop='8px';r.addEventListener('click',()=>pollClaim(prev,null,st,10));w.append(r)}
+ return w}
+async function buyPack(pack,cur,st){st.textContent='Creating order...';const o=await post('/rugradar/pay/order?pack='+pack+'&currency='+cur);if(!o.ok){st.textContent=o.j.message||('Error '+o.status);return}
+ const od=o.j;localStorage.setItem('rr_order',od.order);
+ const wal=WALLETS.find(x=>/phantom/i.test(x.name))||WALLETS.find(x=>/solflare/i.test(x.name))||WALLETS[0];
+ if(!wal){st.textContent='';st.append(el('p',null,'Pay '+od.amount+' '+cur.toUpperCase()+' ($'+od.priceUsd+') for '+od.credits+' credits. No browser wallet found: open this in the Phantom or Solflare app, or tap:'));const a=el('a','btn','Open in wallet app');a.href=od.solanaPayUrl;st.append(a);const ck=el('button','btn',"I've paid \u2014 check");ck.type='button';ck.style.marginLeft='8px';ck.addEventListener('click',()=>pollClaim(od.order,null,st,20));st.append(ck);return}
+ try{st.textContent='Approve in '+wal.name+'...';const acc=(await wal.features['standard:connect'].connect()).accounts[0]||wal.accounts[0];
+  const t=await post('/rugradar/pay/tx?order='+encodeURIComponent(od.order)+'&account='+acc.address);if(!t.ok){st.textContent=t.j.message||('Error '+t.status);return}
+  const bytes=Uint8Array.from(atob(t.j.transaction),c=>c.charCodeAt(0));
+  const res=await wal.features['solana:signAndSendTransaction'].signAndSendTransaction({account:acc,transaction:bytes,chain:'solana:mainnet'});
+  const sig=b58((Array.isArray(res)?res[0]:res).signature);st.textContent='Payment sent. Confirming on-chain...';pollClaim(od.order,sig,st,30)}
+ catch(err){st.textContent='Wallet did not send the payment ('+((err&&err.message)||'cancelled')+'). Nothing was charged.'}}
+async function pollClaim(order,sig,st,tries){for(let i=0;i<tries;i++){const c=await post('/rugradar/pay/claim?order='+encodeURIComponent(order)+(sig?'&signature='+sig:''));
+  if(c.ok){localStorage.removeItem('rr_order');st.textContent='';st.append(el('p',null,c.j.credits+' credits added. Your key (shown once, save it):'));const k=el('code',null,c.j.key);st.append(k);document.getElementById('key').value=c.j.key;q.textContent=c.j.credits+' credit(s) on your key. Check a token for the full report.';return}
+  if(c.status===409||c.status===400||c.status===410){if(c.status===409)localStorage.removeItem('rr_order');st.textContent=c.j.message||('Error '+c.status);return}
+  st.textContent=(c.j.message||'Waiting for confirmation...')+' ('+(i+1)+'/'+tries+')';await new Promise(r=>setTimeout(r,3000))}
+ st.append(el('p',null,'Still not confirmed. Your order is saved; use the check button again in a minute.'))}
 document.getElementById('tok').addEventListener('input',e=>{if(e.target.value.trim().startsWith('0x')&&document.getElementById('chain').value==='solana')document.getElementById('chain').value='base'});
 f.addEventListener('submit',async e=>{e.preventDefault();out.textContent='Checking...';go.disabled=true;
  const t=document.getElementById('tok').value.trim(),c=document.getElementById('chain').value,k=document.getElementById('key').value.trim();
  try{const r=k?await fetch('/rug-check?token='+encodeURIComponent(t)+'&chain='+c,{headers:{'X-RugRadar-Key':k}}):await fetch('/rugradar/api/check?token='+encodeURIComponent(t)+'&chain='+c,{method:'POST'});
  const j=await r.json().catch(()=>({}));out.textContent='';
  if(!r.ok){out.append(el('p',null,j.message||(r.status===402&&k?'Credit key not accepted or out of credits.':'Error '+r.status)));if(r.status===402||j.error==='free_checks_used'){out.append(lockedPanel(j.lockedSignals,j.unlockOffer,j.error==='free_checks_used'?'Free check used. The full report includes:':null));if(j.error==='free_checks_used')q.textContent='Free check used. Credits unlock the full report.'}return}
- const s=el('div','score '+j.riskLevel,j.riskScore+'/100');out.append(s,el('p',null,(j.riskLevel||'').toUpperCase()+' risk, confidence '+(j.confidence||'n/a')+'. '+(j.verdict||'')));
+ const s=el('div','score '+j.riskLevel,j.riskScore+'/100');out.append(s,el('p',null,(j.riskLevel||'').toUpperCase()+' risk'+(j.confidence?', confidence '+j.confidence:'')+'. '+(j.verdict||'')));
  if(j.buyerSummary)out.append(el('p',null,j.buyerSummary));
  const B=j.buyer||(j.facts&&j.facts.buyer)||{},F=[['Dev holds %','devHoldingPct'],['Dev sold % of buys','devSoldPctOfBought'],['Snipers % (first 10s)','sniperSupplyPct10s'],['Launch-bundle %','bundledSupplyPctLaunchSlot'],['Can sell ($100 test)','sellRoute'],['Sell price impact %','sellPriceImpactPct'],['Sell tax %','sellTaxPct'],['Market cap $','marketCapUsd'],['Liquidity / mcap %','liquidityToMcapPct'],['24h volume $','volume24hUsd'],['24h buys / sells',null],['Organic trading','organicLabel'],['LP','lpStatus'],['Socials','socials']];
  const tb=el('table');F.forEach(([n,k])=>{let v=k?B[k]:(B.buys24h!=null?B.buys24h+' / '+B.sells24h:null);if(v==null||v==='')return;if(Array.isArray(v))v=v.length?v.join(', '):'none';if(typeof v==='boolean')v=v?'yes':'NO';if(typeof v==='number'&&v>=1000)v=Math.round(v).toLocaleString();const tr=el('tr');tr.append(el('td',null,n),el('td',null,String(v)));tb.append(tr)});if(tb.childNodes.length)out.append(tb);

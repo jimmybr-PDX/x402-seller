@@ -81,6 +81,21 @@ export async function issueKey(n: number, ref: string): Promise<{ key: string; c
     return { key, credits: n };
   });
 }
+/** True when a purchase reference (e.g. a wallet-payment signature) has already been redeemed. Durable, same store as keys. */
+export async function isRedeemed(ref: string): Promise<boolean> { await initCredits(); return ref in data.purchases; }
+/** Issue a key once for a set of purchase refs: throws "already_redeemed" if any ref was used before (checked and written atomically). */
+export async function issueKeyOnce(n: number, refs: string[]): Promise<{ key: string; credits: number }> {
+  await initCredits();
+  if (!canSell()) throw new Error("credit store unavailable");
+  return serial(async () => {
+    if (refs.some((r) => r in data.purchases)) throw new Error("already_redeemed");
+    const key = "rr_" + randomBytes(24).toString("base64url"), h = hashKey(key);
+    data.keys[h] = { credits: n, bought: n, createdAt: new Date().toISOString(), lastUsedAt: null };
+    for (const r of refs) data.purchases[r] = h.slice(0, 12);
+    try { await persist(`wallet buy ${n}`); } catch (e) { delete data.keys[h]; for (const r of refs) delete data.purchases[r]; throw e; }
+    return { key, credits: n };
+  });
+}
 export async function revokeKey(key: string) { await serial(async () => { delete data.keys[hashKey(key)]; await persist("revoke unpaid"); }); }
 /** Spend one credit. Returns remaining credits, or null when the key is unknown or empty. */
 export async function spend(key: string): Promise<number | null> {

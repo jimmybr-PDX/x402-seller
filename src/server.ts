@@ -41,13 +41,14 @@ import { checkX402Endpoint } from "./lib/check.js";
 import { webSearch } from "./lib/search.js";
 import { newsSearch, newsStatus, warmNews } from "./lib/news.js";
 import { PRICE_CHAINS, PRICE_SYMBOLS, PriceInputError, tokenPrice } from "./lib/price.js";
-import { SOLANA_PRICE_SYMBOLS, SolanaInputError, solanaTokenPrice } from "./lib/solana.js";
+import { SOLANA_PRICE_SYMBOLS, SolanaInputError, solanaTokenPrice, rpc as solRpc } from "./lib/solana.js";
 import { WalletInputError, walletBalances } from "./lib/wallet.js";
 import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
 import { rugCheck, flaggedWallets, DISCLAIMER as RUG_DISCLAIMER } from "./lib/rug.js";
 import { registerRugradarWeb } from "./lib/rugradar-web.js";
-import { initCredits, issueKey, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell } from "./lib/credits.js";
+import { initCredits, issueKey, issueKeyOnce, isRedeemed, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell } from "./lib/credits.js";
+import { registerWalletPay, orderSecret, solUsdPublic, type PayDeps } from "./lib/solpay.js";
 import { startSales, salesStats } from "./lib/sales.js";
 import { classify, recordRejection, recordRequest, startTraffic, trafficStats, type Outcome } from "./lib/traffic.js";
 import { statsHtml } from "./lib/stats-page.js";
@@ -1412,6 +1413,16 @@ async function main() {
   app.use("/rugradar", express.static(path.join(__dirname, "assets", "rugradar"), { maxAge: "7d", index: false, redirect: false }));
   app.get("/favicon.ico", (_req, res) => res.sendFile(path.join(__dirname, "assets", "rugradar", "favicon.ico"), { maxAge: "7d" }));
   registerPaper(app);
+  // Wallet checkout (Phantom/Solflare credit packs). Off unless RUGRADAR_WALLET_PAY=1, the credit store is durable and the
+  // order secret is stable. Receiving wallet: RUGRADAR_WALLET_PAY_TO (default: Jimmy's approved Phantom wallet). Free public RPC only.
+  const ORDER = orderSecret();
+  const walletPay: PayDeps = {
+    get enabled() { return process.env.RUGRADAR_WALLET_PAY === "1" && ORDER.durable && canSell(); },
+    recipient: process.env.RUGRADAR_WALLET_PAY_TO?.trim() || "787RZwDGpjmRsG5wgnyBeWQHBuARax8Qo6P7dmDuqKeW",
+    secret: ORDER.secret, rpc: (m, p) => solRpc(m, p, { timeoutMs: 5000, nullIsMiss: m === "getTransaction" }), solUsd: solUsdPublic,
+    issue: (n, refs) => issueKeyOnce(n, refs), isRedeemed: async (r) => { await initCredits(); return isRedeemed(r); },
+  };
+  registerWalletPay(app, walletPay);
   registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), spend, refund });
   app.get("/icon.png", (_req, res) => {
     if (!ICON_PNG) return res.redirect(302, "/icon.svg");

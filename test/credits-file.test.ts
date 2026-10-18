@@ -14,3 +14,11 @@ test("issue, spend to zero, refund, hashes only on disk", async () => {
   assert.ok(!disk.includes(key) && disk.includes(c.hashKey(key)));
   assert.equal(await c.spend("rr_unknown"), null);
 });
+
+test("issueKeyOnce: refs are durable and a second redeem is refused", async () => {
+  const { key, credits } = await c.issueKeyOnce(10, ["wallet:ref:R1", "wallet:sig:S1"]);
+  assert.equal(credits, 10); assert.equal(await c.balance(key), 10);
+  assert.equal(await c.isRedeemed("wallet:sig:S1"), true); assert.equal(await c.isRedeemed("wallet:sig:S2"), false);
+  await assert.rejects(c.issueKeyOnce(10, ["wallet:ref:R2", "wallet:sig:S1"]), /already_redeemed/);
+  assert.ok(fs.readFileSync(f, "utf8").includes("wallet:sig:S1"));
+});
