@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import bs58 from "bs58";
 import { createOrder, claim, buildTx, decodeOrder, encodeOrder, checkTx, PayError, USDC_MINT, type PayDeps } from "../src/lib/solpay.js";
 
-const TO = "787RZwDGpjmRsG5wgnyBeWQHBuARax8Qo6P7dmDuqKeW", OTHER = "3a9DUWEA34ejDaMbWo96gFfuqN2TvojJewUBCA14Dg75", PAYER = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+const TO = "3a9DUWEA34ejDaMbWo96gFfuqN2TvojJewUBCA14Dg75", OTHER = "787RZwDGpjmRsG5wgnyBeWQHBuARax8Qo6P7dmDuqKeW", PAYER = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
 const sig = () => bs58.encode(randomBytes(64));
 function deps(txs: Record<string, any>, byRef: Record<string, string[]>, enabled = true) {
   const redeemed = new Set<string>(); let issued = 0;
@@ -64,6 +64,6 @@ test("disabled flag: no orders, no transactions; tx builder produces a wallet tr
   assert.equal(await code(buildTx(off, o.order, PAYER)), "wallet_pay_disabled");
   assert.equal(await code(createOrder(on, "7", "usdc")), "invalid_pack");
   const t = await buildTx(on, o.order, PAYER); assert.equal(t.encoding, "base64"); const raw = Buffer.from(t.transaction, "base64");
-  const b58 = bs58.encode(raw); assert.ok(raw.length > 150); assert.ok(raw.includes(Buffer.from(bs58.decode(o.reference))), "reference account in tx"); assert.ok(raw.includes(Buffer.from(bs58.decode(TO))) === false, "USDC goes to the ATA, not the owner"); assert.ok(b58.length > 0); assert.ok(raw.includes(Buffer.from(bs58.decode("2Ra4aQkTs3fYZrS8bafnT6LsExhaDbtqai4keRacTbYs"))), "pays the approved USDC ATA");
+  const b58 = bs58.encode(raw); assert.ok(raw.length > 150); assert.ok(raw.includes(Buffer.from(bs58.decode(o.reference))), "reference account in tx"); assert.ok(raw.includes(Buffer.from(bs58.decode(TO))) === false, "USDC goes to the ATA, not the owner"); assert.ok(b58.length > 0); assert.ok(raw.includes(Buffer.from(bs58.decode("BaXAaxFZCSiCSXytiHc4u9HqjL9NMxkcDKgSoeYSpAsk"))), "pays RugRadar's USDC ATA (BaXA…)");
   const ts = await buildTx(on, (await createOrder(on, "10", "sol")).order, PAYER); assert.ok(Buffer.from(ts.transaction, "base64").includes(Buffer.from(bs58.decode(TO))));
 });

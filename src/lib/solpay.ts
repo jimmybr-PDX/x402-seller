@@ -4,7 +4,7 @@
  * carries as a read-only account. The server finds the transaction by reference on free public RPC, checks
  * success, recipient, amount and timing, and issues a credit key exactly once (references and signatures are
  * recorded in the durable credit store). Orders are HMAC-signed tokens, so a restart never loses a paid order.
- * x402 (/credits/buy, /rug-check) is unchanged for agents. Off unless RUGRADAR_WALLET_PAY=1.
+ * x402 (/credits/buy, /rug-check) is unchanged for agents. On unless RUGRADAR_WALLET_PAY=0 (kill switch); pays RugRadar's existing Solana payTo.
  */
 import { createHmac, randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { address, getAddressDecoder, pipe, createTransactionMessage, setTransactionMessageFeePayer, setTransactionMessageLifetimeUsingBlockhash, appendTransactionMessageInstruction, compileTransaction, getBase64EncodedWireTransaction, createNoopSigner, AccountRole, type Address, type Instruction } from "@solana/kit";

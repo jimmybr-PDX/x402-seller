@@ -1413,12 +1413,13 @@ async function main() {
   app.use("/rugradar", express.static(path.join(__dirname, "assets", "rugradar"), { maxAge: "7d", index: false, redirect: false }));
   app.get("/favicon.ico", (_req, res) => res.sendFile(path.join(__dirname, "assets", "rugradar", "favicon.ico"), { maxAge: "7d" }));
   registerPaper(app);
-  // Wallet checkout (Phantom/Solflare credit packs). Off unless RUGRADAR_WALLET_PAY=1, the credit store is durable and the
-  // order secret is stable. Receiving wallet: RUGRADAR_WALLET_PAY_TO (default: Jimmy's approved Phantom wallet). Free public RPC only.
+  // Wallet checkout (Phantom/Solflare credit packs). On (Jimmy confirmed the wallets Oct 18) unless RUGRADAR_WALLET_PAY=0 (kill switch);
+  // also needs a durable credit store and a stable order secret. Receiving wallet = RugRadar's existing Solana payTo (RUG_PAY_TO_SVM,
+  // USDC to its ATA, SOL direct); RUGRADAR_WALLET_PAY_TO overrides. Free public RPC only.
   const ORDER = orderSecret();
   const walletPay: PayDeps = {
-    get enabled() { return process.env.RUGRADAR_WALLET_PAY === "1" && ORDER.durable && canSell(); },
-    recipient: process.env.RUGRADAR_WALLET_PAY_TO?.trim() || "787RZwDGpjmRsG5wgnyBeWQHBuARax8Qo6P7dmDuqKeW",
+    get enabled() { return process.env.RUGRADAR_WALLET_PAY !== "0" && ORDER.durable && canSell(); },
+    recipient: process.env.RUGRADAR_WALLET_PAY_TO?.trim() || RUG_PAY_TO_SVM,
     secret: ORDER.secret, rpc: (m, p) => solRpc(m, p, { timeoutMs: 5000, nullIsMiss: m === "getTransaction" }), solUsd: solUsdPublic,
     issue: (n, refs) => issueKeyOnce(n, refs), isRedeemed: async (r) => { await initCredits(); return isRedeemed(r); },
   };
