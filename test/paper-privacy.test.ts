@@ -5,13 +5,13 @@ import type { AddressInfo } from "node:net";
 import { redact, leaksPrivate, isAdmin, PRIVATE_RULE } from "../src/lib/paper/privacy.js";
 import { registerPaper } from "../src/lib/paper/page.js";
 
-const trade = { id: "inflow_v1:M", strat: "inflow_v1", pnlSol: -0.01, roi: -0.05, exitReason: "stop_loss", family: { creator: "C", hops: [{ wallet: "F" }] }, priv: { meta: 1 }, named: { name: "x.sol" }, trust: { knownGood: true, reason: "Creator had 3 graduate" }, coinFactoryFunder: { flag: true },
+const trade = { id: "inflow_v1:M", strat: "inflow_v1", pnlSol: -0.01, roi: -0.05, exitReason: "winner_wallet_sold_exit", exits: { stop_loss: 1, winner_wallet_sold_exit: 2 }, family: { creator: "C", hops: [{ wallet: "F" }] }, priv: { meta: 1 }, named: { name: "x.sol" }, trust: { knownGood: true, reason: "Creator had 3 graduate" }, coinFactoryFunder: { flag: true },
   signals: { rule: "inflow_5sol_60s", netInflowSol: 7, privateInflow: { telegram: true }, winnerBuyers: ["W"], familyKnown: {}, trust: {}, buySol: 3 }, rug: { riskScore: 20, buyer: { devGraduated: 2, devLaunches: 5, devSoldPctOfBought: 0 } } };
 test("redact strips every private field, keeps performance", () => {
   const r: any = redact({ tests: [{ strat: "inflow_v1", rule: "sell when a followed winning wallet sells", trades: 3 }, { strat: "copy_r40", rule: "Control: copy, RugRadar score 40 or lower", trades: 2 }], counters: { "inflow_v1.lowInflow": 3, "copy.rugChecks": 4 }, winnersTracked: 30, coinFactoryFunder: { flaggedTrades: 1 }, inflowDiag: {}, recent: [trade] });
   assert.equal(leaksPrivate(r), null); assert.equal(r.tests[0].rule, PRIVATE_RULE); assert.equal(r.tests[1].rule, "Control: copy, RugRadar score 40 or lower");
-  assert.equal(r.tests[0].trades, 3); assert.deepEqual(r.counters, { "copy.rugChecks": 4 }); assert.equal(r.recent[0].pnlSol, -0.01); assert.equal(r.recent[0].signals.buySol, 3); assert.equal(r.recent[0].rug.riskScore, 20);
-  const txt = JSON.stringify(r); for (const bad of ["x.sol", "knownGood", "winnerBuyers", "privateInflow", "netInflowSol", "devGraduated", "hops", "coinFactoryFunder", "graduate"]) assert.ok(!txt.includes(bad), bad);
+  assert.equal(r.tests[0].trades, 3); assert.deepEqual(r.counters, { "copy.rugChecks": 4 }); assert.equal(r.recent[0].pnlSol, -0.01); assert.equal(r.recent[0].signals.buySol, 3); assert.equal(r.recent[0].rug.riskScore, 20); assert.equal(r.recent[0].exitReason, "private_signal_exit"); assert.deepEqual(r.recent[0].exits, { stop_loss: 1 });
+  const txt = JSON.stringify(r); for (const bad of ["x.sol", "knownGood", "winnerBuyers", "privateInflow", "netInflowSol", "devGraduated", "hops", "coinFactoryFunder", "graduate", "winner_wallet"]) assert.ok(!txt.includes(bad), bad);
 });
 test("admin key: off when unset or short, timing-safe match otherwise", () => {
   const req = (h?: string) => ({ header: (n: string) => (n.toLowerCase() === "x-paper-admin-key" ? h : undefined) }) as any;

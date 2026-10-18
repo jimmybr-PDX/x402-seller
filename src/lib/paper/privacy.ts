@@ -10,6 +10,9 @@ import type { Request } from "express";
 export const PRIVATE_KEYS = new Set(["family", "familyKnown", "familyTests", "familySummary", "priv", "privateSignals", "named", "namedWallet", "trust", "coinFactoryFunder",
   "winnerBuyers", "winnersTracked", "privateInflow", "netInflowSol", "names", "nameTests", "cpTop", "cpSeen", "knownGood", "siblings", "inflowDiag", "hops", "funder", "ruggerHop", "devGraduated", "devLaunches", "priorGraduated", "graduated24h"]);
 const PRIVATE_TEXT = /inflow|winner|wallet|known.?good|good dev|family|funder|name history|same.?name|graduat|coin.?factory|named/i;
+const PRIVATE_KEYNAME = /winner|wallet|family|funder|named|known.?good|good.?dev/i; // any key naming a private signal (e.g. exit-reason counts)
+const REASON_KEYS = new Set(["rule", "description", "reason", "exitReason", "entryReason", "why"]);
+export const PRIVATE_EXIT = "private_signal_exit";
 export const PRIVATE_RULE = "private test (rule details are not public)";
 export function isAdmin(req: Request, env = process.env): boolean {
   const want = env.PAPER_ADMIN_KEY ?? "", got = String(req.header("x-paper-admin-key") ?? "");
@@ -26,7 +29,8 @@ export function redact<T>(x: T): T {
       for (const [k, y] of Object.entries(v)) {
         if (PRIVATE_KEYS.has(k)) continue;
         if (key === "counters" && PRIVATE_TEXT.test(k)) continue;
-        if ((k === "rule" || k === "description" || k === "reason") && typeof y === "string" && PRIVATE_TEXT.test(y)) { o[k] = k === "rule" ? PRIVATE_RULE : "private"; continue; }
+        if (PRIVATE_KEYNAME.test(k)) continue;
+        if (REASON_KEYS.has(k) && typeof y === "string" && PRIVATE_TEXT.test(y)) { o[k] = k === "rule" ? PRIVATE_RULE : /reason/i.test(k) ? PRIVATE_EXIT : "private"; continue; }
         o[k] = walk(y, k);
       }
       return o;
