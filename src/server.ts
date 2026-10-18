@@ -47,7 +47,9 @@ import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
 import { rugCheck, flaggedWallets, DISCLAIMER as RUG_DISCLAIMER } from "./lib/rug.js";
 import { registerRugradarWeb } from "./lib/rugradar-web.js";
-import { initCredits, issueKey, issueKeyOnce, isRedeemed, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell } from "./lib/credits.js";
+import { createWatcher, WATCH_PLANS, planOf, type Watch } from "./lib/watch.js";
+import { registerWatchRoutes, watchKeyMiddleware, watchPaidHandler, createWithCredits, watchConfig, type WatchRouteDeps } from "./lib/watch-routes.js";
+import { initCredits, issueKey, issueKeyOnce, isRedeemed, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell , spendN, refundN, loadDoc, saveDoc } from "./lib/credits.js";
 import { registerWalletPay, orderSecret, solUsdPublic, type PayDeps } from "./lib/solpay.js";
 import { startSales, salesStats } from "./lib/sales.js";
 import { classify, recordRejection, recordRequest, startTraffic, trafficStats, type Outcome } from "./lib/traffic.js";
@@ -167,6 +169,7 @@ const PAID = {
   "/token-safety": RUG_PRICE,
   "/honeypot-check": RUG_PRICE,
   "/credits/buy": RUG_PRICE,
+  "/watch": "$0.10",
 } as const;
 /** Paid paths that also accept POST (JSON body). */
 const POST_OK = new Set<string>(["/search"]);
@@ -240,6 +243,14 @@ const ERRORS_DOC =
 
 async function main() {
   const app = express();
+  // RugRadar Watch + Alert: public RugRadar engine only (no Helius, no private signals); watches persist in the private credit store.
+  const watcher = createWatcher({
+    rugCheck: (m) => rugCheck(m, "solana", { noCache: true }),
+    load: async () => (await loadDoc<{ v: 1; watches: Watch[] }>("watches.json", { v: 1, watches: [] })).watches ?? [],
+    save: (watches, msg) => saveDoc("watches.json", { v: 1, watches }, msg),
+    publicUrl: PUBLIC_URL,
+  });
+  const watchDeps: WatchRouteDeps = { watcher, spendN, refundN, publicUrl: PUBLIC_URL, allowPrivate: process.env.WATCH_ALLOW_PRIVATE === "1" };
   // Render terminates TLS at the edge; trust proxy so 402 resource URLs become https://.
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
@@ -301,6 +312,8 @@ async function main() {
   });
 
 
+  // RugRadar Watch + Alert: credit-key path for GET /watch (before payment middleware).
+  app.use(watchKeyMiddleware(watchDeps));
   // RugRadar credit keys: spend one prepaid credit instead of an x402 payment (runs before payment middleware).
   app.use(async (req: Request, res: Response, next: NextFunction) => {
     const key = req.header("x-rugradar-key");
@@ -1078,6 +1091,37 @@ async function main() {
         }),
       },
     },
+    "GET /watch": {
+      accepts: NETWORKS.map((network) => ({
+        scheme: "exact",
+        price: (ctx: any) => `$${WATCH_PLANS[planOf(ctx?.adapter?.getQueryParam?.("hours") ?? "24") ?? "24"].priceUsd}`,
+        network,
+        payTo: NETWORK_INFO[network]!.family === "svm" ? RUG_PAY_TO_SVM : RUG_PAY_TO_EVM,
+        maxTimeoutSeconds: 300,
+      })),
+      description: `RugRadar Watch + Alert: watch one Solana token (pump.fun incl.) for 24h ($0.05) or 48h ($0.10). Re-checked about every 10 min; signed webhook alert when the dev sells, liquidity drops 30%+, mint/freeze authority appears, risk score jumps 20+ points, or it can't be sold. Heuristic, may be wrong. Not financial advice.`,
+      mimeType: "application/json",
+      serviceName: "RugRadar Watch + Alert (token rug alerts)",
+      tags: ["rug alert", "token watch", "pump.fun alert", "dev sell alert", "liquidity alert"],
+      iconUrl: RUG_ICON_URL,
+      extensions: {
+        ...declareDiscoveryExtension({
+          input: { token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", hours: "24", webhook: "https://example.com/rugradar-hook" },
+          inputSchema: {
+            properties: {
+              token: { type: "string", minLength: 32, maxLength: 44, description: "Solana mint address" },
+              hours: { type: "string", enum: ["24", "48"], description: "24 ($0.05) or 48 ($0.10); default 24" },
+              webhook: { type: "string", description: "https URL that receives signed JSON POST alerts" },
+            },
+            required: ["token", "webhook"],
+          },
+          output: {
+            example: { watchId: "w_example", token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", status: "active", hours: 24, expiresAt: "2026-10-20T00:00:00.000Z", secret: "whsec_returned_once", checkEveryMin: 10 },
+            schema: { properties: { watchId: { type: "string" }, status: { type: "string" }, hours: { type: "integer" }, expiresAt: { type: "string" }, secret: { type: "string" } }, required: ["watchId", "secret", "expiresAt"] },
+          },
+        }),
+      },
+    },
     "GET /credits/buy": {
       accepts: NETWORKS.map((network) => ({
         scheme: "exact",
@@ -1424,7 +1468,11 @@ async function main() {
     issue: (n, refs) => issueKeyOnce(n, refs), isRedeemed: async (r) => { await initCredits(); return isRedeemed(r); },
   };
   registerWalletPay(app, walletPay);
-  registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), spend, refund });
+  registerWatchRoutes(app, watchDeps);
+  app.get("/watch", watchPaidHandler(watchDeps, decodeB64Json));
+  const watchTimer = setInterval(() => { watcher.tick().catch(() => {}); }, 30_000); watchTimer.unref?.();
+  process.once("SIGTERM", () => { watcher.flush().catch(() => {}); });
+  registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), spend, refund, watch: { create: (k, a) => createWithCredits(watchDeps, k, a), config: () => watchConfig(watchDeps) } });
   app.get("/icon.png", (_req, res) => {
     if (!ICON_PNG) return res.redirect(302, "/icon.svg");
     res.type("image/png").set("Cache-Control", "public, max-age=86400").send(ICON_PNG);

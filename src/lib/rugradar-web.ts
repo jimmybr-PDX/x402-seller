@@ -10,6 +10,8 @@ export type WebDeps = {
   publicUrl: string; port: number; priceUsd: string; speed: { creditS: number; paidS: number; x: number } | null;
   rugCheck: (t: string, chain: string) => Promise<any>;
   spend: (k: string) => Promise<number | null>; refund: (k: string) => Promise<void>;
+  /** RugRadar Watch + Alert (optional): create a watch paid with credits; config for prices/destinations. */
+  watch?: { create: (key: string, args: any) => Promise<any>; config: () => any };
 };
 export const FREE_PER_VISITOR = 1;
 export const FREE_COPY = "1 free limited check per visitor, then credits for the full report.";
@@ -104,6 +106,7 @@ input,select{font-size:16px;padding:10px;border-radius:8px;border:1px solid #2b3
 <h2>Free Solana rug check (incl. pump.fun)</h2><p>Mint and freeze authority, top-holder share, liquidity, token age, and the deployer wallet's earlier launches that died or never graduated, plus a funding wallet linked to earlier high-risk patterns.</p>
 <h2>Honeypot check for BNB, Base, Ethereum and Arbitrum</h2><p>A simulated buy and sell shows whether you can sell and the real buy/sell tax, plus owner powers such as mint, pause and blacklist. Established, exchange-listed tokens are weighted accordingly.</p>
 <h2>RugCheck alternative: what RugRadar shows that RugCheck doesn't</h2><div class="box">Tested on Oct 14, 2026 with the same 5 Solana tokens (a fresh pump.fun launch, a known rug, a mid-cap meme, an established token, and one with mint and freeze authority). RugCheck's free report covered 14 of our 30 buyer signals; RugRadar covered 28. Only RugRadar showed: dev sold % of what they bought, sniper share in the first 10 seconds, launch-block bundle share, a live can-you-sell quote with price impact, the creator's past launches and our bad-deployer list, market cap and liquidity vs market cap, 24h volume, buys, sells and traders, price, holder and liquidity change, a bot-trading (organic) score, social links, a plain buyer summary, a confidence rating, and 4 EVM chains. RugCheck still shows two things we don't: an insider-network graph and an "already rugged" flag.</div>
+${WATCH_SECTION}
 <h2 id="credits">Prepaid credits</h2><div class="box">$${p} per check, no discount, 1 to 1,000 credits. Pay once with any x402 client: <code>GET ${U}/credits/buy?credits=${UNLOCK_CREDITS}</code> ($${(UNLOCK_CREDITS * Number(p)).toFixed(2)}, unlocks ${UNLOCK_CREDITS} full reports) or <code>GET ${U}/credits/buy?credits=100</code> ($1.00). You get a secret key once; paste it above or send it as <code>X-RugRadar-Key</code>. Free balance: <code>${U}/credits/balance</code>.</div>
 <h2>Rug pull checker API for AI agents (x402 + MCP)</h2><div class="box">HTTP: <code>GET ${U}/rug-check?token=&lt;address&gt;&amp;chain=solana</code> ($${p} via x402; also /token-safety and /honeypot-check).<br>MCP (streamable HTTP): <code>${U}/mcp</code> with tools rug_check, token_safety, honeypot_check.</div>
 <h2>FAQ</h2>${faq.map(([q, a]) => `<h3 style="font-size:17px;margin:14px 0 4px">${q}</h3><p style="margin:0">${a}</p>`).join("")}
@@ -163,16 +166,61 @@ f.addEventListener('submit',async e=>{e.preventDefault();out.textContent='Checki
 </script></main></body></html>`;
 }
 
+
+/** Watch + Alert section (client JS has no template interpolation on purpose). */
+const WATCH_SECTION = String.raw`<h2 id="watch">Watch + Alert: get pinged if it turns into a rug</h2><section class="box" aria-label="Watch a token">
+<p style="margin-top:0">We re-check one Solana token about every 10 minutes for 24 h (<b>$0.05</b>, 5 credits) or 48 h (<b>$0.10</b>, 10 credits) and alert you when the <b>dev sells</b>, <b>liquidity drops 30%+</b>, <b>mint or freeze authority appears</b>, the <b>risk score jumps 20+ points</b>, or it <b>can't be sold</b>. Each alert is sent once.</p>
+<form id="wf"><input id="wtok" required autocomplete="off" spellcheck="false" placeholder="Solana mint address" style="width:100%;box-sizing:border-box;margin:4px 0">
+<div class="row"><select id="whours"><option value="24">24 hours · $0.05 (5 credits)</option><option value="48">48 hours · $0.10 (10 credits)</option></select>
+<select id="wdest"><option value="webhook">Webhook (signed JSON POST)</option><option value="telegram" disabled>Telegram (coming soon)</option><option value="email" disabled>Email (not available)</option></select></div>
+<input id="whook" type="url" placeholder="https://your-server.example/rugradar-hook" autocomplete="off" style="width:100%;box-sizing:border-box;margin:8px 0">
+<div class="row"><input id="wkey" placeholder="Credit key (rr_...)" autocomplete="off" style="flex:1;min-width:180px"><button type="button" class="btn" id="wtest" style="background:#2b3d6b;color:#E8EEF8">Send test alert</button><button class="btn" id="wgo">Start watch</button></div>
+<small>No key yet? <a href="#credits" style="color:#46DC64">Buy credits</a> (Phantom/Solflare packs or x402), then paste the key. Agents: <code>GET /watch?token=&lt;mint&gt;&amp;hours=24&amp;webhook=&lt;url&gt;</code> via x402, or MCP tool <code>watch_token</code>. Alerts carry <code>X-RugRadar-Signature: t=&lt;unix&gt;,v1=HMAC-SHA256(secret, "t.body")</code>.</small></form>
+<div id="wout" aria-live="polite"></div></section>
+<script>
+(function(){const $=id=>document.getElementById(id),out=$('wout');const say=(t,c)=>{out.textContent='';const p=document.createElement('p');p.textContent=t;if(c)p.style.color=c;out.append(p);return p};
+fetch('/rugradar/watch/config').then(r=>r.json()).then(c=>{if(c.destinations&&c.destinations.telegram){const o=$('wdest').querySelector('option[value=telegram]');o.disabled=false;o.textContent='Telegram (chat id)'}if(c.slotsLeft===0)say('All watch slots are busy right now; try again later.','#F7931A')}).catch(()=>{});
+$('wdest').addEventListener('change',()=>{$('whook').placeholder=$('wdest').value==='telegram'?'Telegram chat id':'https://your-server.example/rugradar-hook'});
+try{const k=localStorage.getItem('rr_key');if(k)$('wkey').value=k}catch(e){}
+$('wtest').addEventListener('click',async()=>{const u=$('whook').value.trim();if(!u){say('Enter your webhook URL first.','#F7931A');return}say('Sending a test alert...');
+ try{const r=await fetch('/rugradar/watch/test',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({webhook:u})});const j=await r.json();say(j.delivered?'Test alert delivered (HTTP '+j.status+').':'Test alert not delivered: '+(j.error||j.message||('HTTP '+j.status)),j.delivered?'#46DC64':'#ff5a5a')}catch(e){say('Network error.','#ff5a5a')}});
+$('wf').addEventListener('submit',async ev=>{ev.preventDefault();const key=$('wkey').value.trim();if(!key){say('Paste a credit key first (or buy credits below).','#F7931A');return}
+ const body={token:$('wtok').value.trim(),hours:$('whours').value};if($('wdest').value==='telegram')body.telegram=$('whook').value.trim();else body.webhook=$('whook').value.trim();
+ $('wgo').disabled=true;say('Checking the token and starting the watch...');
+ try{const r=await fetch('/rugradar/watch',{method:'POST',headers:{'content-type':'application/json','X-RugRadar-Key':key},body:JSON.stringify(body)});const j=await r.json();
+  if(!r.ok){say(j.message||('Error '+r.status),'#ff5a5a');return}try{localStorage.setItem('rr_key',key)}catch(e){}
+  out.textContent='';const h=document.createElement('p');h.style.color='#46DC64';h.textContent='Watching until '+new Date(j.expiresAt).toLocaleString()+'. Score now '+j.atStart.riskScore+' ('+j.atStart.riskLevel+'). '+j.credits_remaining+' credit(s) left.';out.append(h);
+  const s=document.createElement('p');s.textContent='Watch ID '+j.watchId+'. Signing secret (shown once, save it; also lets you check or cancel the watch):';out.append(s);const c=document.createElement('code');c.textContent=j.secret;out.append(c);
+ }catch(e){say('Network error, try again.','#ff5a5a')}finally{$('wgo').disabled=false}});})();
+</script>`;
 // ---------- MCP (streamable HTTP, JSON responses, stateless) ----------
 const TOOLS = [
   ["rug_check", "RugRadar rug check / rug pull checker: 0-100 risk score with plain reasons and a buyer summary for a token on Solana (incl. pump.fun), BNB, Base, Ethereum or Arbitrum. " + RUG_EDGE],
   ["token_safety", "RugRadar token safety check: mint/freeze authority, holder concentration, liquidity, age, deployer history, dev holding/sold, snipers, bundles, volume vs market cap, socials; 0-100 risk score. " + RUG_EDGE],
   ["honeypot_check", "RugRadar honeypot check: can I sell this token? Simulated buy/sell and tax on EVM chains, live Jupiter sell quote plus freeze/mint authority and token-2022 transfer controls on Solana; 0-100 risk score. " + RUG_EDGE],
 ] as const;
+const WATCH_TOOL = { name: "watch_token", description: "RugRadar Watch + Alert: watch one Solana token for 24h ($0.05 = 5 credits) or 48h ($0.10 = 10 credits). Re-checked about every 10 min with the RugRadar engine; signed webhook alert when the dev sells, liquidity drops 30%+, mint/freeze authority appears, risk score jumps 20+ points, or it can't be sold. Pass a RugRadar credit key; without one the tool returns the x402 payment requirement for GET /watch.",
+  inputSchema: { type: "object", properties: { token: { type: "string", description: "Solana mint address" }, hours: { type: "string", enum: ["24", "48"], description: "default 24" }, webhook_url: { type: "string", description: "https URL for signed JSON POST alerts" }, telegram_chat_id: { type: "string", description: "Telegram chat id (coming soon)" }, api_key: { type: "string", description: "RugRadar credit key (or header X-RugRadar-Key)" } }, required: ["token"] },
+  annotations: { readOnlyHint: false, openWorldHint: true } };
 const ROUTE: Record<string, string> = { rug_check: "/rug-check", token_safety: "/token-safety", honeypot_check: "/honeypot-check" };
 const schema = { type: "object", properties: { token: { type: "string", description: "Solana mint or EVM 0x token contract" }, chain: { type: "string", enum: CHAINS, description: "default solana; 0x addresses default to base" }, api_key: { type: "string", description: "optional RugRadar credit key (or send header X-RugRadar-Key)" } }, required: ["token"] };
 
+async function mcpWatch(d: WebDeps, args: any, headerKey: string | undefined) {
+  const text = (o: unknown, isError = false) => ({ result: { isError, content: [{ type: "text", text: JSON.stringify(o) }], structuredContent: o } });
+  if (!d.watch) return text({ error: "unavailable" }, true);
+  const key = headerKey || (typeof args?.api_key === "string" ? args.api_key : "");
+  if (key) {
+    try { return text(await d.watch.create(key, args ?? {})); }
+    catch (e: any) { if (e?.code !== "insufficient_credits") return text({ error: e?.code ?? "unavailable", message: String(e?.message ?? e) }, true); }
+  }
+  const q = new URLSearchParams({ token: String(args?.token ?? ""), hours: String(args?.hours ?? "24"), webhook: String(args?.webhook_url ?? "") });
+  const url = `${d.publicUrl}/watch?${q}`;
+  let requirement: unknown = null;
+  try { const r = await fetch(url, { headers: { accept: "application/json", "user-agent": "rugradar-mcp-self (self)" }, signal: AbortSignal.timeout(5000) }); const h = r.headers.get("payment-required"); requirement = h ? JSON.parse(Buffer.from(h, "base64").toString()) : null; } catch {}
+  return text({ error: "payment_required", ...d.watch.config(), payWith: { x402: { url, method: "GET", paymentRequired: requirement }, credits: { buy: `${d.publicUrl}/credits/buy?credits=10`, use: "pass api_key or header X-RugRadar-Key" } } }, true);
+}
 async function mcpCall(d: WebDeps, name: string, args: any, headerKey: string | undefined) {
+  if (name === "watch_token") return mcpWatch(d, args, headerKey);
   const route = ROUTE[name];
   if (!route) return { error: { code: -32602, message: `unknown tool ${name}` } };
   const token = String(args?.token ?? "").trim();
@@ -215,7 +263,7 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     const now = new Date().toISOString().slice(0, 10);
     res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${["/rugradar", "/", "/examples"].map((p) => `<url><loc>${d.publicUrl}${p}</loc><lastmod>${now}</lastmod></url>`).join("\n")}\n</urlset>\n`);
   });
-  app.get("/mcp", (_req, res) => { res.status(405).set("Allow", "POST").json({ error: "use POST (MCP streamable HTTP, JSON responses)", tools: TOOLS.map(([n]) => n) }); });
+  app.get("/mcp", (_req, res) => { res.status(405).set("Allow", "POST").json({ error: "use POST (MCP streamable HTTP, JSON responses)", tools: [...TOOLS.map(([n]) => n), ...(d.watch ? [WATCH_TOOL.name] : [])] }); });
   app.post("/mcp", async (req: Request, res: Response) => {
     const m = req.body ?? {};
     const reply = (o: object) => res.json({ jsonrpc: "2.0", id: m.id ?? null, ...o });
@@ -224,7 +272,7 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     switch (m.method) {
       case "initialize": return reply({ result: { protocolVersion: m.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "rugradar", title: "RugRadar", version: "1.0.0" }, instructions: `Token rug/honeypot risk checks. Each call costs $${d.priceUsd}: pass a RugRadar credit key (header X-RugRadar-Key or api_key), otherwise the tool returns the x402 payment requirement. ${DISCLAIMER}` } });
       case "ping": return reply({ result: {} });
-      case "tools/list": return reply({ result: { tools: TOOLS.map(([name, description]) => ({ name, description, inputSchema: schema, annotations: { readOnlyHint: true, openWorldHint: true } })) } });
+      case "tools/list": return reply({ result: { tools: [...TOOLS.map(([name, description]) => ({ name, description, inputSchema: schema, annotations: { readOnlyHint: true, openWorldHint: true } })), ...(d.watch ? [WATCH_TOOL] : [])] } });
       case "tools/call": return reply(await mcpCall(d, m.params?.name, m.params?.arguments, req.header("x-rugradar-key")));
       default: return reply({ error: { code: -32601, message: `method not found: ${m.method}` } });
     }

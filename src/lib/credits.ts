@@ -108,3 +108,33 @@ export async function spend(key: string): Promise<number | null> {
 export async function refund(key: string) { const r = data.keys[hashKey(key)]; if (r) { r.credits += 1; persistSoon(); } }
 export async function balance(key: string): Promise<number | null> { await initCredits(); return data.keys[hashKey(key)]?.credits ?? null; }
 export async function flushCredits() { if (pending) { clearTimeout(pending); pending = null; } await serial(() => persist("flush")); }
+
+/** Spend n credits at once (all or nothing). Returns remaining credits, or null when the key is unknown or has fewer than n. */
+export async function spendN(key: string, n: number): Promise<number | null> {
+  await initCredits();
+  const r = data.keys[hashKey(key)];
+  if (!r || !(n >= 1) || r.credits < n) return null;
+  r.credits -= n; r.lastUsedAt = new Date().toISOString(); persistSoon();
+  return r.credits;
+}
+export async function refundN(key: string, n: number) { const r = data.keys[hashKey(key)]; if (r) { r.credits += n; persistSoon(); } }
+
+/** Extra JSON documents in the same durable store (e.g. watches.json). Same repo, same serial queue as credits. */
+const docPath = (name: string) => path.join(path.dirname(file), name);
+export async function loadDoc<T>(name: string, fallback: T): Promise<T> {
+  await initCredits();
+  if (!file) return fallback;
+  try { const p = docPath(name); return fs.existsSync(p) ? (JSON.parse(fs.readFileSync(p, "utf8")) as T) : fallback; } catch { return fallback; }
+}
+export async function saveDoc(name: string, value: unknown, msg: string): Promise<void> {
+  await initCredits();
+  if (!file) throw new Error("store unavailable");
+  await serial(async () => {
+    fs.writeFileSync(docPath(name), JSON.stringify(value) + "\n");
+    if (mode !== "github") return;
+    await git("add", name);
+    await git("commit", "-q", "-m", msg).catch(() => {});
+    try { await git("push", "-q", "origin", "HEAD"); }
+    catch { await git("pull", "-q", "--rebase", "origin", "HEAD").catch(() => {}); await git("push", "-q", "origin", "HEAD"); }
+  });
+}
