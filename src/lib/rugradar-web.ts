@@ -15,6 +15,12 @@ export const FREE_PER_VISITOR = 1;
 export const FREE_COPY = "1 free limited check per visitor, then credits for the full report.";
 const LIMITED_CHECKS = new Set(["mint_authority", "freeze_authority", "mint_function", "holders", "liquidity", "age"]);
 export const LOCKED_SIGNALS = ["exact dev-sold %", "sniper share", "launch-bundle share", "can-you-sell quote with price impact", "creator's past launches", "organic/bot score", "full buyer summary"];
+export const UNLOCK_CREDITS = 10;
+/** Conversion offer shown after a free check (or when it is used up). Points only at the existing credits flow and x402 paths. */
+export function unlockOffer(publicUrl: string, priceUsd: string) {
+  const usd = (UNLOCK_CREDITS * Number(priceUsd)).toFixed(2);
+  return { credits: UNLOCK_CREDITS, priceUsd: usd, label: `Unlock full report \u2014 ${UNLOCK_CREDITS} credits for $${usd}`, buy: `${publicUrl}/credits/buy?credits=${UNLOCK_CREDITS}`, useKey: "Paste the key in the Credit key box (or send header X-RugRadar-Key) and check again.", agents: `Agents: pay $${priceUsd} per call via x402 at ${publicUrl}/rug-check, or send X-RugRadar-Key.` };
+}
 /** Free web check: basic score from mint/freeze authority, top-holder concentration, age and liquidity only. Paid paths never call this. */
 export function limitedReport(full: any) {
   const f = full?.facts ?? {};
@@ -84,7 +90,8 @@ h1{color:#46DC64;font-size:44px;margin:4px 0;text-align:center;text-shadow:0 0 1
 .banner{background:#0f2a1a;border:2px solid #46DC64;border-radius:12px;padding:14px 18px;margin-bottom:18px;box-shadow:0 0 18px rgba(70,220,100,.35);text-align:center}.banner b{color:#46DC64;font-size:22px}
 .btn{display:inline-block;background:#46DC64;color:#0A1630;font-weight:800;padding:10px 20px;border-radius:8px;text-decoration:none;border:0;font-size:16px;cursor:pointer}
 input,select{font-size:16px;padding:10px;border-radius:8px;border:1px solid #2b3d6b;background:#0A1630;color:#E8EEF8}#tok{width:100%;box-sizing:border-box;margin:8px 0}
-.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.score{font-size:48px;font-weight:800}.low{color:#46DC64}.medium{color:#F7931A}.high{color:#ff5a5a}ul{padding-left:20px}</style></head>
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.score{font-size:48px;font-weight:800}.low{color:#46DC64}.medium{color:#F7931A}.high{color:#ff5a5a}ul{padding-left:20px}
+.locked{border:1px dashed #46DC64;border-radius:10px;padding:12px 16px;margin:14px 0;background:#0d1b3a}.locked table{width:100%;border-collapse:collapse}.locked td{padding:5px 4px;border-bottom:1px solid #1d2f5c;color:#6f7f9c}.locked td.v{text-align:right;letter-spacing:2px}.locked .how{font-size:14px;color:#9fb0cc;margin-top:10px}</style></head>
 <body><main>
 <div class="banner"><b>${sp}</b><div style="margin:6px 0 10px"><b>${RUG_EDGE.replace("$0.01", "$" + p)}</b><br>Same $${p} per check, buy 1 to 1,000. Agents send the key as X-RugRadar-Key.</div><a class="btn" href="#credits">Buy credits</a></div>
 <div class="c"><img class="logo" src="/rugradar/rug-radar-512.png" alt="RugRadar emblem" width="150" height="150"><h1>RugRadar</h1>
@@ -97,19 +104,24 @@ input,select{font-size:16px;padding:10px;border-radius:8px;border:1px solid #2b3
 <h2>Free Solana rug check (incl. pump.fun)</h2><p>Mint and freeze authority, top-holder share, liquidity, token age, and the deployer wallet's earlier launches that died or never graduated, plus a funding wallet linked to earlier high-risk patterns.</p>
 <h2>Honeypot check for BNB, Base, Ethereum and Arbitrum</h2><p>A simulated buy and sell shows whether you can sell and the real buy/sell tax, plus owner powers such as mint, pause and blacklist. Established, exchange-listed tokens are weighted accordingly.</p>
 <h2>RugCheck alternative: what RugRadar shows that RugCheck doesn't</h2><div class="box">Tested on Oct 14, 2026 with the same 5 Solana tokens (a fresh pump.fun launch, a known rug, a mid-cap meme, an established token, and one with mint and freeze authority). RugCheck's free report covered 14 of our 30 buyer signals; RugRadar covered 28. Only RugRadar showed: dev sold % of what they bought, sniper share in the first 10 seconds, launch-block bundle share, a live can-you-sell quote with price impact, the creator's past launches and our bad-deployer list, market cap and liquidity vs market cap, 24h volume, buys, sells and traders, price, holder and liquidity change, a bot-trading (organic) score, social links, a plain buyer summary, a confidence rating, and 4 EVM chains. RugCheck still shows two things we don't: an insider-network graph and an "already rugged" flag.</div>
-<h2 id="credits">Prepaid credits</h2><div class="box">$${p} per check, no discount, 1 to 1,000 credits. Pay once with any x402 client: <code>GET ${U}/credits/buy?credits=100</code> ($1.00). You get a secret key once; paste it above or send it as <code>X-RugRadar-Key</code>. Free balance: <code>${U}/credits/balance</code>.</div>
+<h2 id="credits">Prepaid credits</h2><div class="box">$${p} per check, no discount, 1 to 1,000 credits. Pay once with any x402 client: <code>GET ${U}/credits/buy?credits=${UNLOCK_CREDITS}</code> ($${(UNLOCK_CREDITS * Number(p)).toFixed(2)}, unlocks ${UNLOCK_CREDITS} full reports) or <code>GET ${U}/credits/buy?credits=100</code> ($1.00). You get a secret key once; paste it above or send it as <code>X-RugRadar-Key</code>. Free balance: <code>${U}/credits/balance</code>.</div>
 <h2>Rug pull checker API for AI agents (x402 + MCP)</h2><div class="box">HTTP: <code>GET ${U}/rug-check?token=&lt;address&gt;&amp;chain=solana</code> ($${p} via x402; also /token-safety and /honeypot-check).<br>MCP (streamable HTTP): <code>${U}/mcp</code> with tools rug_check, token_safety, honeypot_check.</div>
 <h2>FAQ</h2>${faq.map(([q, a]) => `<h3 style="font-size:17px;margin:14px 0 4px">${q}</h3><p style="margin:0">${a}</p>`).join("")}
 <p class="c"><small>${DISCLAIMER} RugRadar flags high-risk patterns; it never labels people.</small></p>
 <script>
 const f=document.getElementById('f'),out=document.getElementById('out'),q=document.getElementById('quota'),go=document.getElementById('go');
 const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e};
+const LOCKED=${JSON.stringify(LOCKED_SIGNALS)},OFFER=${JSON.stringify(unlockOffer(U, p))};
+function lockedPanel(names,o,note){o=o||OFFER;const b=el('div','locked');b.id='unlock';b.append(el('b',null,note||'Full report: locked signals'));
+ const tb=el('table');(names&&names.length?names:LOCKED).forEach(n=>{const tr=el('tr');tr.append(el('td',null,'\u{1F512} '+n),el('td','v','\u2022\u2022\u2022'));tb.append(tr)});b.append(tb);
+ const a=el('a','btn',o.label);a.href='#credits';a.style.marginTop='12px';a.addEventListener('click',()=>{h.hidden=false;setTimeout(()=>document.getElementById('key').focus(),50)});b.append(a);
+ const h=el('div','how');h.hidden=true;h.append(el('p',null,'1. Buy '+o.credits+' credits ($'+o.priceUsd+') with any x402 client: GET '+o.buy+' (you get a secret key once).'),el('p',null,'2. '+o.useKey),el('p',null,o.agents));b.append(h);return b}
 document.getElementById('tok').addEventListener('input',e=>{if(e.target.value.trim().startsWith('0x')&&document.getElementById('chain').value==='solana')document.getElementById('chain').value='base'});
 f.addEventListener('submit',async e=>{e.preventDefault();out.textContent='Checking...';go.disabled=true;
  const t=document.getElementById('tok').value.trim(),c=document.getElementById('chain').value,k=document.getElementById('key').value.trim();
  try{const r=k?await fetch('/rug-check?token='+encodeURIComponent(t)+'&chain='+c,{headers:{'X-RugRadar-Key':k}}):await fetch('/rugradar/api/check?token='+encodeURIComponent(t)+'&chain='+c,{method:'POST'});
  const j=await r.json().catch(()=>({}));out.textContent='';
- if(!r.ok){out.append(el('p',null,j.message||('Error '+r.status)));if(r.status===402||j.error==='free_checks_used'){const a=el('a','btn','Buy credits');a.href='#credits';out.append(a)}return}
+ if(!r.ok){out.append(el('p',null,j.message||(r.status===402&&k?'Credit key not accepted or out of credits.':'Error '+r.status)));if(r.status===402||j.error==='free_checks_used'){out.append(lockedPanel(j.lockedSignals,j.unlockOffer,j.error==='free_checks_used'?'Free check used. The full report includes:':null));if(j.error==='free_checks_used')q.textContent='Free check used. Credits unlock the full report.'}return}
  const s=el('div','score '+j.riskLevel,j.riskScore+'/100');out.append(s,el('p',null,(j.riskLevel||'').toUpperCase()+' risk, confidence '+(j.confidence||'n/a')+'. '+(j.verdict||'')));
  if(j.buyerSummary)out.append(el('p',null,j.buyerSummary));
  const B=j.buyer||(j.facts&&j.facts.buyer)||{},F=[['Dev holds %','devHoldingPct'],['Dev sold % of buys','devSoldPctOfBought'],['Snipers % (first 10s)','sniperSupplyPct10s'],['Launch-bundle %','bundledSupplyPctLaunchSlot'],['Can sell ($100 test)','sellRoute'],['Sell price impact %','sellPriceImpactPct'],['Sell tax %','sellTaxPct'],['Market cap $','marketCapUsd'],['Liquidity / mcap %','liquidityToMcapPct'],['24h volume $','volume24hUsd'],['24h buys / sells',null],['Organic trading','organicLabel'],['LP','lpStatus'],['Socials','socials']];
@@ -117,7 +129,7 @@ f.addEventListener('submit',async e=>{e.preventDefault();out.textContent='Checki
  const ul=el('ul');(j.reasons&&j.reasons.length?j.reasons:['No major high-risk patterns found.']).forEach(x=>ul.append(el('li',null,x)));out.append(ul);
  if(j.unknownSignals&&j.unknownSignals.length)out.append(el('p',null,'Unknown (scored neutral): '+j.unknownSignals.join(', ')));
  out.append(el('small',null,j.disclaimer||${JSON.stringify(DISCLAIMER)}));
- if(j.lockedSignals){out.append(el('p',null,'Limited free report. Locked: '+j.lockedSignals.join(', ')+'.'));const a=el('a','btn','Buy credits for the full report');a.href='#credits';out.append(a)}if(j.free_checks_left!=null)q.textContent=j.free_checks_left>0?j.free_checks_left+' free limited check(s) left.':'Free check used. Credits unlock the full report.';if(j.credits_remaining!=null)q.textContent=j.credits_remaining+' credit(s) left on your key.';
+ if(j.lockedSignals){out.append(el('p',null,'Limited free report: basic score, mint/freeze authority, top holders, age and liquidity.'));out.append(lockedPanel(j.lockedSignals,j.unlockOffer))}if(j.free_checks_left!=null)q.textContent=j.free_checks_left>0?j.free_checks_left+' free limited check(s) left.':'Free check used. Credits unlock the full report.';if(j.credits_remaining!=null)q.textContent=j.credits_remaining+' credit(s) left on your key.';
  }catch(err){out.textContent='Network error, try again.'}finally{go.disabled=false}});
 </script></main></body></html>`;
 }
@@ -164,10 +176,10 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     const ip = ipOf(req), a = freeAllowance(ip, vid);
     if (!a.ok) {
       const msg = a.reason === "slow_down" ? "One check every few seconds, please." : a.reason === "daily_free_cap" ? "Today's free checks are used up. Buy credits to keep checking." : `You've used your free limited check. Buy credits ($${d.priceUsd} each) for the full report.`;
-      res.status(a.reason === "slow_down" ? 429 : 402).json({ error: a.reason, message: msg, buyCredits: `${d.publicUrl}/credits/buy?credits=100` }); return;
+      res.status(a.reason === "slow_down" ? 429 : 402).json({ error: a.reason, message: msg, buyCredits: `${d.publicUrl}/credits/buy?credits=100`, ...(a.reason === "slow_down" ? {} : { lockedSignals: LOCKED_SIGNALS, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd) }) }); return;
     }
     useFree(ip, vid);
-    try { res.json({ ...limitedReport(await d.rugCheck(token, chain)), free_checks_left: a.left }); }
+    try { res.json({ ...limitedReport(await d.rugCheck(token, chain)), unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
     catch (e) { refundFree(ip, vid); res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
   });
   app.get("/sitemap.xml", (_req, res) => {

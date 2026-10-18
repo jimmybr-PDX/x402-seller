@@ -26,9 +26,10 @@ test("free web checks: 1 limited check per visitor, then 402; cookie and IP both
     const j = await r.json(); const txt = JSON.stringify({ ...j, lockedSignals: null });
     assert.equal(j.free_checks_left, 0); assert.equal(j.report, "limited"); assert.equal(j.riskScore, 10);
     assert.equal(j.facts.top10Pct, 20); assert.equal(j.facts.liquidityUsd, 9000); assert.equal(j.facts.mintAuthority, null);
+    assert.equal(j.unlockOffer.credits, 10); assert.equal(j.unlockOffer.priceUsd, "0.10"); assert.equal(j.unlockOffer.label, "Unlock full report \u2014 10 credits for $0.10"); assert.match(j.unlockOffer.buy, /\/credits\/buy\?credits=10$/);
     for (const bad of ["buyerSummary", "\"buyer\"", "devSold", "sniper", "Dev sold", "Snipers", "Creator launched", "priorLaunches", "organic"]) assert.ok(!txt.includes(bad), bad);
     await new Promise((x) => setTimeout(x, 2600));
-    const blocked = await call(ck, MINT, "8.8.8.8"); assert.equal(blocked.status, 402); assert.match((await blocked.json()).buyCredits, /credits\/buy/); // new IP, same cookie: still blocked
+    const blocked = await call(ck, MINT, "8.8.8.8"); assert.equal(blocked.status, 402); const bj = await blocked.json(); assert.match(bj.buyCredits, /credits\/buy/); assert.equal(bj.error, "free_checks_used"); assert.equal(bj.lockedSignals.length, 7); assert.equal(bj.unlockOffer.credits, 10); // new IP, same cookie: still blocked
     const sameIp = await call(undefined, MINT, "9.9.9.9"); assert.equal(sameIp.status, 402); // same IP, no cookie: still blocked
   } finally { srv.closeAllConnections(); srv.close(); }
 });
@@ -38,7 +39,7 @@ test("page has SEO title, description, JSON-LD, disclaimer; sitemap lists /rugra
   try {
     const h = await (await fetch(`${base}/rugradar`)).text();
     assert.match(h, /<title>RugRadar: Free Solana Rug Check & Honeypot Checker/); assert.match(h, /name="description"/); assert.match(h, /application\/ld\+json/); assert.match(h, /FAQPage/);
-    assert.match(h, /Do your own research/); assert.match(h, /1\.8x faster/); assert.match(h, /1 free limited check per visitor, then credits for the full report\./); assert.ok(!/scammer/i.test(h));
+    assert.match(h, /Do your own research/); assert.match(h, /1\.8x faster/); assert.match(h, /1 free limited check per visitor, then credits for the full report\./); assert.match(h, /function lockedPanel/); assert.match(h, /Unlock full report \u2014 10 credits for \$0\.10/); assert.match(h, /credits\/buy\?credits=10/); assert.ok(!/scammer/i.test(h));
     assert.match(await (await fetch(`${base}/sitemap.xml`)).text(), /\/rugradar<\/loc>/);
   } finally { srv.closeAllConnections(); srv.close(); }
 });
@@ -54,4 +55,12 @@ test("MCP: initialize, tools/list, tools/call with credit key, and payment_requi
     const unpaid = await rpc({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "honeypot_check", arguments: { token: MINT, api_key: "rr_bad" } } });
     assert.equal(unpaid.result.isError, true); assert.equal(unpaid.result.structuredContent.error, "payment_required");
   } finally { srv.closeAllConnections(); srv.close(); }
+});
+
+test("RugRadar code path never reads paper-bot or private signals", async () => {
+  const fs = await import("node:fs");
+  for (const f of ["src/lib/rug.ts", "src/lib/rug-extra.ts", "src/lib/rugradar-web.ts"]) {
+    const src = fs.readFileSync(f, "utf8");
+    for (const bad of [/paper\//, /winners\.json/, /knownWinners/, /coinFactory/i, /inflow/i, /creatorFamily|family\.js/i, /nameHistory|named\.js/i, /private-signals/, /trusted-creators/, /knownGood/i]) assert.ok(!bad.test(src), `${f} matches ${bad}`);
+  }
 });

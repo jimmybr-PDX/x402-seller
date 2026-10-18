@@ -6,10 +6,8 @@ const j = (u: string, ms = 3500) => fetch(u, { headers: UA, signal: AbortSignal.
 const r2 = (n: number | null | undefined, d = 2) => (n == null || !isFinite(Number(n)) ? null : +Number(n).toFixed(d));
 export type Extra = { signals: Record<string, unknown>; checks: { check: string; points: number; detail: string }[]; unknown: string[]; ms: number };
 
-// Known early-buyer wallets: profitable early wallets from our public-trade research (winners.json) + wallets this
-// service has seen sniping (first 10 s) 3+ different coins. In-memory, free, no lookups.
-const knownWinners = new Set<string>();
-try { const fs = await import("node:fs"); for (const w of JSON.parse(fs.readFileSync(new URL("./paper/winners.json", import.meta.url), "utf8")).top ?? []) knownWinners.add(w.wallet); } catch {}
+// Repeat snipers: wallets this service has itself seen sniping (first 10 s) 3+ different coins. In-memory, free, no lookups.
+// RugRadar never reads paper-bot or private signal data; it reports danger warnings from public data only.
 const sniperSeen = new Map<string, Set<string>>();
 function noteSnipers(mint: string, ws: string[]) { for (const w of ws) { const x = sniperSeen.get(w) ?? new Set(); x.add(mint); sniperSeen.set(w, x); } if (sniperSeen.size > 50000) sniperSeen.delete(sniperSeen.keys().next().value!); }
 const isKnownSniper = (w: string) => (sniperSeen.get(w)?.size ?? 0) >= 3;
@@ -53,12 +51,12 @@ export async function pumpLaunch(mint: string, dev: string | null, supply: numbe
     const devFirstSell = dev ? asc.find((t) => t.userAddress === dev && t.type === "sell") : null;
     out.firstMinute = { buyers: new Set(m1.filter((t) => t.type === "buy").map((t) => t.userAddress)).size, buySol: sol(m1.filter((t) => t.type === "buy")), sellSol: sol(m1.filter((t) => t.type === "sell")), trades: m1.length };
     out.creatorFirstSellAfterSec = devFirstSell ? Math.round((Date.parse(devFirstSell.timestamp) - t0) / 1000) : null;
-    // Early snipers (first 10 s, not the dev): how much they still hold, and known sniper/winner wallets among early buyers
+    // Early snipers (first 10 s, not the dev): how much they still hold, and repeat sniper wallets among early buyers
     const sn = [...new Set(sniperBuys.map((t) => t.userAddress))];
     const net = (w: string) => asc.filter((t) => t.userAddress === w).reduce((a, t) => a + (t.type === "buy" ? 1 : -1) * amt(t), 0);
     out.sniperStillHoldPct = supply > 0 ? r2((sn.reduce((a, w) => a + Math.max(0, net(w)), 0) / supply) * 100, 2) : null;
     const early = [...new Set(asc.filter((t) => t.type === "buy" && Date.parse(t.timestamp) - t0 <= 60_000 && t.userAddress !== dev).map((t) => t.userAddress))];
-    out.knownSnipersEarly = early.filter(isKnownSniper).length; out.knownWinnersEarly = early.filter((w) => knownWinners.has(w)).length;
+    out.knownSnipersEarly = early.filter(isKnownSniper).length;
     noteSnipers(mint, sn);
   }
   return out;
@@ -129,7 +127,7 @@ export async function solanaExtra(mint: string, o: { jup: any; mintInfo: any; ds
     if (Number(pump.sniperSupplyPct10s) >= 25) add("snipers", 10, `Snipers bought ${pump.sniperSupplyPct10s}% of supply in the first 10 seconds.`);
     if (Number(pump.bundledSupplyPctLaunchSlot) >= 15) add("bundled", 12, `${pump.bundledWalletsLaunchSlot} wallets bought ${pump.bundledSupplyPctLaunchSlot}% in the launch block (bundle high-risk pattern).`);
     if (!pump.historyComplete) unknown.push("sniper/bundle share (too many trades to reach launch)");
-    Object.assign(s, { firstMinute: pump.firstMinute ?? null, creatorFirstSellAfterSec: pump.creatorFirstSellAfterSec ?? null, sniperStillHoldPct: pump.sniperStillHoldPct ?? null, knownSnipersEarly: pump.knownSnipersEarly ?? null, knownWinnersEarly: pump.knownWinnersEarly ?? null });
+    Object.assign(s, { firstMinute: pump.firstMinute ?? null, creatorFirstSellAfterSec: pump.creatorFirstSellAfterSec ?? null, sniperStillHoldPct: pump.sniperStillHoldPct ?? null, knownSnipersEarly: pump.knownSnipersEarly ?? null });
     const fm: any = pump.firstMinute;
     if (pump.creatorFirstSellAfterSec != null && Number(pump.creatorFirstSellAfterSec) <= 60) add("creator_fast_sell", 12, `Creator started selling ${pump.creatorFirstSellAfterSec} seconds after launch.`);
     if (fm && fm.sellSol > fm.buySol && fm.trades >= 5) add("first_minute_selling", 6, `More selling than buying in the first minute (${fm.sellSol} vs ${fm.buySol} SOL).`);
