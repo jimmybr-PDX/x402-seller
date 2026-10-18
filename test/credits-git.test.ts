@@ -23,3 +23,10 @@ test("git store: purchase is pushed before the key is returned (survives restart
   execFileSync("git", ["-C", check, "pull", "-q"]);
   assert.equal(JSON.parse(fs.readFileSync(path.join(check, "credits.json"), "utf8")).keys[c.hashKey(key)].credits, 4);
 });
+test("git store: watches.json (saveDoc) is pushed and loads back", async () => {
+  await c.saveDoc("watches.json", { v: 1, watches: [{ id: "w_1" }] }, "watch created");
+  const check2 = path.join(root, "check2"); execFileSync("git", ["clone", "-q", bare, check2]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(check2, "watches.json"), "utf8")), { v: 1, watches: [{ id: "w_1" }] });
+  assert.deepEqual(await c.loadDoc("watches.json", null), { v: 1, watches: [{ id: "w_1" }] });
+  const { key } = await c.issueKey(10, "g2"); assert.equal(await c.spendN(key, 5), 5); assert.equal(await c.spendN(key, 6), null); await c.refundN(key, 5); assert.equal(await c.balance(key), 10);
+});
