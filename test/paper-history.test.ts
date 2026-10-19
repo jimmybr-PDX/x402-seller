@@ -31,7 +31,7 @@ test("history: coin trades merged per coin (max 150, deduped), launches with soc
   h.noteCoinTrades("MINT1", Array.from({ length: 120 }, (_, i) => tr(i + 80)).reverse()); // overlap 80..99
   h.noteLaunch({ mint: "MINT2", traderPublicKey: "CR", name: "Name", symbol: "SYM", initialBuy: 1e6, solAmount: 1.234567, marketCapSol: 30.1, uri: "ipfs://x" });
   const meta = (m: string) => (m === "MINT2" ? { twitter: true, telegram: false, website: true, descLen: 42 } : null);
-  const realNow = Date.now; Date.now = () => realNow() + 30 * 60_000; try { h.flushHistory(meta); } finally { Date.now = realNow; }
+  const realNow = Date.now; Date.now = () => realNow() + 30 * 60_000; try { await h.flushHistory(meta); } finally { Date.now = realNow; }
   const day = fs.readdirSync(path.join(dir, "data", "coin-trades"))[0]!; const f = fs.readdirSync(path.join(dir, "data", "coin-trades", day))[0]!;
   const coin = JSON.parse(gunzipSync(fs.readFileSync(path.join(dir, "data", "coin-trades", day, f))).toString().trim());
   assert.equal(coin.m, "MINT1"); assert.equal(coin.n, 150); assert.equal(coin.t.length, 150); assert.equal(coin.t.at(-1)[5], "sig199"); assert.equal(new Set(coin.t.map((r: any) => r[5])).size, 150);

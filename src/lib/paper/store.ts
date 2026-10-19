@@ -10,13 +10,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { gzipSync } from "node:zlib";
+import { gzip as gzipCb } from "node:zlib";
+import { createHash } from "node:crypto";
+import { track, stringifyChunked } from "../lag.js";
+const gzipAsync = promisify(gzipCb); // libuv threadpool, off the event loop
 const run = promisify(execFile);
 
 let mode: "github" | "file" | "unavailable" = "unavailable";
 let dir = ""; let env: NodeJS.ProcessEnv = process.env; let lastError: string | null = null; let lastPushAt: string | null = null;
 // Oct 16: keep git small in memory (the container has 512 MB shared with the server): single-threaded packing, small windows
-const git = (...a: string[]) => run("git", ["-C", dir, "-c", "pack.threads=1", "-c", "pack.windowMemory=16m", "-c", "core.packedGitLimit=32m", "-c", "core.packedGitWindowSize=8m", "-c", "core.bigFileThreshold=4m", "-c", "gc.auto=0", ...a], { env, timeout: 30000 });
+// Oct 18: git runs at the lowest CPU priority so on the 0.1 CPU free plan it cannot starve the server (health check timeouts)
+const NICE = fs.existsSync("/usr/bin/nice") ? ["/usr/bin/nice", "-n", "19"] : [];
+const git = (...a: string[]) => run(NICE[0] ?? "git", [...NICE.slice(1), ...(NICE.length ? ["git"] : []), "-C", dir, "-c", "pack.threads=1", "-c", "pack.windowMemory=16m", "-c", "core.packedGitLimit=32m", "-c", "core.packedGitWindowSize=8m", "-c", "core.bigFileThreshold=4m", "-c", "gc.auto=0", ...a], { env, timeout: 30000 });
 export const storeStatus = () => ({ mode, lastPushAt, ...(lastError ? { error: lastError } : {}) });
 
 export async function initStore(): Promise<void> {
@@ -38,11 +43,12 @@ export function loadTrades(): any[] {
 }
 export function appendTrade(t: unknown) { if (mode === "unavailable") return; fs.appendFileSync(path.join(dir, "data", "trades.jsonl"), JSON.stringify(t) + "\n"); }
 let busy = false;
-export async function saveState(state: unknown, msg: string) {
+export async function saveState(state: unknown, msg: string) { return track("paper-store save+push", () => saveStateNow(state, msg)); }
+async function saveStateNow(state: unknown, msg: string) {
   if (mode === "unavailable" || busy) return;
   busy = true;
   try {
-    fs.writeFileSync(path.join(dir, "data", "state.json"), JSON.stringify(state) + "\n");
+    await fs.promises.writeFile(path.join(dir, "data", "state.json"), JSON.stringify(state) + "\n");
     if (mode !== "github") return;
     await git("add", "data");
     const { stdout } = await git("status", "--porcelain");
@@ -56,17 +62,27 @@ export async function saveState(state: unknown, msg: string) {
 }
 
 export function loadFile<T>(name: string, fallback: T): T { try { return JSON.parse(fs.readFileSync(path.join(dir, "data", name), "utf8")); } catch { return fallback; } }
-export function writeFile(name: string, obj: unknown) { if (mode === "unavailable") return; fs.writeFileSync(path.join(dir, "data", name), JSON.stringify(obj) + "\n"); }
+const lastHash = new Map<string, string>();
+/** Oct 18: async, stringified in slices (creators/names are several MB), and skipped when nothing changed (less git work too). */
+export async function writeFile(name: string, obj: unknown) {
+  if (mode === "unavailable") return;
+  await track(`paper-store write ${name}`, async () => {
+    const body = (await stringifyChunked(obj)) + "\n"; const hsh = createHash("sha1").update(body).digest("hex");
+    if (lastHash.get(name) === hsh) return; await fs.promises.writeFile(path.join(dir, "data", name), body); lastHash.set(name, hsh);
+  });
+}
 /** Oct 18: append one JSON line to a data/ file (small, append-only logs). */
 export function appendLine(name: string, obj: unknown) { if (mode === "unavailable") return; fs.appendFileSync(path.join(dir, "data", name), JSON.stringify(obj) + "\n"); }
 /** Oct 18: write one batch of JSON lines as a new file under data/<kind>/<UTC day>/<HHMMSS>[.gz]. Returns the relative path or null. */
-export function writeBatch(kind: string, rows: unknown[], gzip = true, now = new Date()): string | null {
+export async function writeBatch(kind: string, rows: unknown[], gzip = true, now = new Date()): Promise<string | null> {
   if (mode === "unavailable" || !rows.length) return null;
   const iso = now.toISOString(), day = iso.slice(0, 10), t = iso.slice(11, 19).replace(/:/g, "");
   const rel = path.join(kind, day, `${t}.jsonl${gzip ? ".gz" : ""}`), full = path.join(dir, "data", rel);
-  fs.mkdirSync(path.dirname(full), { recursive: true });
-  const body = rows.map((r) => JSON.stringify(r)).join("\n") + "\n";
-  fs.writeFileSync(full, gzip ? gzipSync(body, { level: 6 }) : body); historyDirty = true;
+  await fs.promises.mkdir(path.dirname(full), { recursive: true });
+  const parts: string[] = []; // Oct 18: stringify in slices with yields, gzip on the threadpool, async write
+  for (let i = 0; i < rows.length; i += 200) { parts.push(rows.slice(i, i + 200).map((r) => JSON.stringify(r)).join("\n")); await new Promise((r) => setImmediate(r)); }
+  const body = parts.join("\n") + "\n";
+  await fs.promises.writeFile(full, gzip ? await gzipAsync(body, { level: 6 }) : body); historyDirty = true;
   return rel;
 }
 let historyDirty = false;

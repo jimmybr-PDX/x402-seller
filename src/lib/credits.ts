@@ -26,7 +26,9 @@ let chain: Promise<unknown> = Promise.resolve();
 const serial = <T>(f: () => Promise<T>): Promise<T> => { const p = chain.then(f, f); chain = p.catch(() => {}); return p; };
 
 export const hashKey = (k: string) => createHash("sha256").update(k).digest("hex");
-const git = (...a: string[]) => run("git", ["-C", dir, ...a], { env, timeout: 20000 });
+// Oct 18: lowest CPU priority so git cannot starve the server on the 0.1 CPU free plan
+const NICE = fs.existsSync("/usr/bin/nice") ? ["/usr/bin/nice", "-n", "19"] : [];
+const git = (...a: string[]) => run(NICE[0] ?? "git", [...NICE.slice(1), ...(NICE.length ? ["git"] : []), "-C", dir, ...a], { env, timeout: 20000 });
 
 export function initCredits(): Promise<void> {
   if (ready) return ready;

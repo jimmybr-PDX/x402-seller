@@ -12,9 +12,10 @@ const loopLag = monitorEventLoopDelay({ resolution: 20 }); loopLag.enable();
 import { getProgramDerivedAddress, getAddressEncoder, getAddressDecoder, address } from "@solana/kit";
 import { familyOf, type Family } from "./family.js";
 import { namedWallet, type Named } from "./named.js";
-import { rpcUrl, heliusWsUrl, isHeliusUrl, noteWs, noteWsConnect, budgetOk, heliusStatus, loadHelius, heliusDaily, heliusEnabled, markPublicBad } from "./helius.js";
+import { rpcUrl, heliusWsUrl, isHeliusUrl, noteWs, noteWsConnect, budgetOk, heliusStatus, loadHelius, heliusDaily, heliusEnabled, markPublicBad, PUBLIC_RPC_HTTP } from "./helius.js";
 import { track, pin, chainTrades, curveState, setOn, isOn, chainStat } from "./chain-trades.js";
 import { privateSignals, noteLaunchMeta, launchMeta, type Priv } from "./private-signals.js";
+import { startLagWatch, track as lagTrack, lagStatus } from "../lag.js";
 import { initStore, loadState, loadTrades, appendTrade, saveState, storeStatus, loadFile, writeFile, appendLine, takeHistoryDirty } from "./store.js";
 import { noteCoinTrades, noteLaunch, marketTick, flushHistory, histStat } from "./history.js";
 import { freeFeedOn, freeFeedStatus } from "./free-feed.js";
@@ -46,14 +47,17 @@ export const TESTS = [
   { strat: "tp20", rule: "Oct 18 test: same entry as the control (copy_r40); take profit at +20%, trailing stop (arms at +10%, sells 8 points below the high; both kept above break-even), other sell rules as the control", startedAt: "2026-10-18T22:00:00Z" },
   { strat: "inflow_tp", rule: "Oct 18 test: same entry as inflow_v1; exits are tp20's (take profit +20%, trailing stop, control's stop loss / stall / time stop) instead of inflow_v1's creator-sell and 5-min exits", startedAt: "2026-10-18T22:00:00Z" },
   { strat: "inflow_fx25", rule: "Oct 18 test: same entries as inflow_v1 (opened alongside it, only when inflow_v1 has room); sell at 25 s after entry if the price has never been above break-even (+3.5% incl. fees); otherwise inflow_v1's exits", startedAt: "2026-10-18T23:00:00Z" },
+  { strat: "inflow_x10", rule: "Oct 18 test (from the offline replay): same entries as inflow_v1 (opened alongside it, only when inflow_v1 has room); sell at 10 s after entry if the price has never been above +5% (exact per-position timer); -15% stop; trailing stop 20% below the highest price; creator / followed-wallet sells and the 5-minute time stop as inflow_v1; 0.0001 SOL priority fee per transaction; stop and trail also checked every 1 s from free price reads", startedAt: "2026-10-19T01:00:00Z" },
   { strat: "copy_v2cp", rule: "Same entry as v2; also sell at once on a 15%+ drop within about 10 s, when the creator sells 0.3+ SOL, or when a top-5 early buyer sells 40%+ of what they bought (0.5+ SOL); normal stop too", startedAt: "" },
 ];
 export const TP20: Partial<Cfg> = { tp: 0.2, trailArm: 0.1, trail: 0.08, sl: -0.3, stallS: 300, maxHoldS: 600 };
 export const FX25 = { afterS: 25, bePct: 3.5 };
-const VARIANT_CFG: Record<string, Partial<Cfg>> = { copy_v2ff: { stallS: 90, sl: -0.2 }, tp20: TP20, inflow_tp: TP20, inflow_fx25: { maxOpen: 99 } /* entries gated by inflow_v1's room, so the two see the same coins */ }; // max RugRadar score allowed
-export const STRATS: Strat[] = ["sniper", "inflow_v1", "early_v1", "tp20", "inflow_tp", "inflow_fx25", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...V2_STRATS, ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
+/** Oct 18 inflow_x10: replay winner on inflow_v1 entries (still a loss-cutter, not profitable in the replay holdout). */
+export const X10 = { afterS: 10, minPeakPct: 5, trailPct: 20, sl: -0.15, prio: 100_000, fastMs: 1000 };
+const VARIANT_CFG: Record<string, Partial<Cfg>> = { copy_v2ff: { stallS: 90, sl: -0.2 }, tp20: TP20, inflow_tp: TP20, inflow_fx25: { maxOpen: 99 }, inflow_x10: { maxOpen: 99, sl: X10.sl, prio: X10.prio } /* entries gated by inflow_v1's room, so the two see the same coins */ }; // max RugRadar score allowed
+export const STRATS: Strat[] = ["sniper", "inflow_v1", "early_v1", "tp20", "inflow_tp", "inflow_fx25", "inflow_x10", ...RUG_VARIANTS.copy.map((t) => `copy_r${t}`), ...V2_STRATS, ...RUG_VARIANTS.edge.map((t) => `edge_r${t}`)];
 // Oct 18: new tests whose names don't start with their base (cost model / size come from the base)
-const BASE_OF: Record<string, Base> = { early_v1: "early", tp20: "copy", inflow_tp: "inflow", inflow_fx25: "inflow" };
+const BASE_OF: Record<string, Base> = { early_v1: "early", tp20: "copy", inflow_tp: "inflow", inflow_fx25: "inflow", inflow_x10: "inflow" };
 const baseOf = (s: Strat) => (BASE_OF[s.split("@")[0]] ?? s.split(/[_@]/)[0]) as Base;
 type Cfg = { size: number; prio: number; tip: number; buyFail: number; sellFail: number; maxOpen: number; tp: number; trailArm: number; trail: number; sl: number; maxHoldS: number; stallS: number; maxBePct: number };
 export const cfgOf = (s: Strat): Cfg => ({ ...CFG[baseOf(s)], ...(VARIANT_CFG[s.split("@")[0]] ?? {}) });
@@ -235,6 +239,7 @@ async function enter(strat: Strat, c: { mint: string; symbol: string; createdMs:
     costLamports: Math.round(SIZE * LAMPORTS) + fees + ATA_RENT, tokens: fill.toString(), entryPriceSol: SIZE / (Number(fill) / 1e6), bePct: beEst, sizeSol: SIZE, sizeMult: mult, buyFeeLamports: fees, buyDriftLamports: q1.out > 0n ? Math.round(Number(q1.out - fill) / Number(q1.out) * SIZE * LAMPORTS) : 0,
     peakRoi: 0, lastMarkRoi: 0, sellFails: 0, noRouteSince: null, rug: null, signals: { ...signals, impactPct: q2?.impact ?? q1.impact } };
   state.open.push(pos); bump(`${strat}.entries`); dirty = true; pin(c.mint, true);
+  if (strat === "inflow_x10") x10Arm(pos);
   if (strat === "copy_v2cp") trades(c.mint, 100).then((tr) => { const m: Record<string, number> = {}; const cr = seen.get(c.mint)?.creator;
     for (const t of tr ?? []) if (t.type === "buy" && t.userAddress !== cr) m[t.userAddress] = (m[t.userAddress] ?? 0) + Number(t.amountSol || 0);
     pos.cpTop = Object.fromEntries(Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 5)); dirty = true; }).catch(() => {});
@@ -297,9 +302,54 @@ async function rugSnapshotNow(mint: string) {
   catch (e) { return { error: String((e as Error).message ?? e).slice(0, 100) }; }
 }
 
+/** One manage() at a time per position, and never on a closed one (the inflow_x10 fast checks run beside the 5 s loop). */
+const managing = new Set<string>();
+async function manageOnce(p: Pos) {
+  if (managing.has(p.id) || !state.open.includes(p)) return; managing.add(p.id);
+  try { await manage(p); } finally { managing.delete(p.id); }
+}
+/** inflow_x10 exit rules on the current mark (ROI vs our all-in buy price, like every strategy). */
+export function x10Reason(p: { peakRoi: number; lastMarkRoi: number }, holdS: number): string | null {
+  if (holdS >= X10.afterS && p.peakRoi * 100 <= X10.minPeakPct) return "x10_never_above_5pct";
+  if (p.lastMarkRoi <= (1 + p.peakRoi) * (1 - X10.trailPct / 100) - 1) return "trailing_stop_20pct";
+  if (p.lastMarkRoi <= X10.sl) return "stop_loss";
+  return null;
+}
+/** Free price read for inflow_x10: newest on-chain trade from the public chain websocket if tracked, else one batched
+ * getMultipleAccounts on the bonding curves via the free public RPC. Never Helius: on failure the position just waits. */
+const x10Curve = new Map<string, string>();
+async function x10Prices(mints: string[]): Promise<Record<string, number>> {
+  const out: Record<string, number> = {}; const need: string[] = [];
+  for (const m of mints) { const t = chainTrades(m, 1)?.[0]; if (t && Date.now() - Date.parse(t.timestamp) < 2000 && Number(t.priceSol) > 0) out[m] = Number(t.priceSol); else need.push(m); }
+  if (!need.length) return out;
+  try {
+    const keys = await Promise.all(need.map(async (m) => { let k = x10Curve.get(m); if (!k) { const [pda] = await getProgramDerivedAddress({ programAddress: address("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"), seeds: ["bonding-curve", getAddressEncoder().encode(address(m))] }); k = String(pda); x10Curve.set(m, k); if (x10Curve.size > 500) x10Curve.delete(x10Curve.keys().next().value!); } return k; }));
+    const r: any = await fetch(PUBLIC_RPC_HTTP, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getMultipleAccounts", params: [keys, { encoding: "base64", commitment: "confirmed" }] }), signal: AbortSignal.timeout(2500) }).then((x) => x.json()).catch(() => null);
+    const vals = r?.result?.value; if (!Array.isArray(vals)) { bump("inflow_x10.freePriceMiss"); return out; }
+    need.forEach((m, i) => { const b = Buffer.from(vals[i]?.data?.[0] ?? "", "base64"); if (b.length < 49 || b[48] === 1) return; const vtok = Number(b.readBigUInt64LE(8)), vsol = Number(b.readBigUInt64LE(16)); if (vtok > 0) out[m] = (vsol / 1e9) / (vtok / 1e6); });
+  } catch { bump("inflow_x10.freePriceMiss"); }
+  return out;
+}
+function x10Mark(p: Pos, price: number) {
+  p.lastMarkRoi = price / p.entryPriceSol - 1; if (p.lastMarkRoi > p.peakRoi) { p.peakRoi = p.lastMarkRoi; p.peakAt = Date.now(); }
+}
+/** Check one or all open inflow_x10 positions now; a hit sets forceExit and sells through the normal manage() path (Jupiter quote + latency). */
+async function x10Check(only?: Pos) {
+  const ps = only ? [only].filter((p) => state.open.includes(p)) : state.open.filter((p) => p.strat === "inflow_x10" && !p.forceExit);
+  if (!ps.length) return;
+  const px = await x10Prices([...new Set(ps.map((p) => p.mint))]);
+  for (const p of ps) {
+    const price = px[p.mint]; if (price) { x10Mark(p, price); bump("inflow_x10.fastMarks"); }
+    const holdS = (Date.now() - p.entryAt) / 1000; const why = p.forceExit ? null : x10Reason(p, holdS);
+    if (why) { p.forceExit = why; (p as any).x10TriggerS = Math.round(holdS * 10) / 10; dirty = true; await manageOnce(p); }
+  }
+}
+const x10Tick = () => x10Check();
+/** Exact 10 s check per position (the 5 s loop alone would act anywhere from 10 to 15 s). */
+function x10Arm(p: Pos) { setTimeout(() => { x10Check(p).catch(() => {}); }, Math.max(0, p.entryAt + X10.afterS * 1000 - Date.now()) + 20).unref?.(); }
 async function manage(p: Pos) {
   const cfg = cfgOf(p.strat);
-  const isCp = p.strat.split("@")[0] === "copy_v2cp", isCs = p.strat.split("@")[0] === "copy_v2cs", isIn = p.strat === "inflow_v1" || p.strat === "inflow_fx25"; // Oct 18: inflow_fx25 keeps inflow_v1's exits
+  const isCp = p.strat.split("@")[0] === "copy_v2cp", isCs = p.strat.split("@")[0] === "copy_v2cs", isIn = p.strat === "inflow_v1" || p.strat === "inflow_fx25" || p.strat === "inflow_x10"; // Oct 18: inflow_fx25 keeps inflow_v1's exits
   const tr = await trades(p.mint, isCp || isCs || isIn ? 30 : 5);
   let price = tr?.[0] ? Number(tr[0].priceSol) : null;
   if (isOn()) { const cs = (await curveState([p.mint]))[p.mint]; if (cs && !cs.complete && cs.priceSol > 0) price = cs.priceSol; }
@@ -332,6 +382,7 @@ async function manage(p: Pos) {
       if (creator && t.userAddress === creator) { cpReason ??= "creator_sold_exit"; } else if (winners.has(t.userAddress)) cpReason ??= "winner_wallet_sold_exit"; }
   }
   let reason: string | null = p.forceExit ?? cpReason;
+  if (!reason && p.strat === "inflow_x10") reason = x10Reason(p, holdS);
   if (!reason && p.strat === "inflow_fx25" && holdS >= FX25.afterS && p.peakRoi * 100 <= FX25.bePct) reason = "fx25_never_above_breakeven"; // Oct 18 test
   // Oct 15: mark is vs our all-in buy price, so selling costs (~1.25% + sell fees) still apply; keep every profit exit above break-even
   const be = (p.bePct ?? 5) / 100, arm = Math.max(cfg.trailArm, be + cfg.trail + 0.02), tp = Math.max(cfg.tp, be + 0.1);
@@ -583,6 +634,7 @@ async function scanInflow() {
           privateInflow: { telegram: m ? !!m.telegram : null, allThreeSocials: m ? m.socials === 3 : null, creatorFirstBuySol: devBuy ? +Number(devBuy.amountSol || 0).toFixed(3) : null, creatorFirstBuy1SolPlus: devBuy ? Number(devBuy.amountSol || 0) >= 1 : null } };
         enter("inflow_tp", c, { ...sigIn, entryOf: "inflow_v1" }).catch(() => {}); // Oct 18: same entry, tp20 exits
         if (state.open.filter((p) => p.strat === "inflow_v1").length < cfgOf("inflow_v1").maxOpen && !state.open.some((p) => p.strat === "inflow_v1" && p.mint === c.mint)) enter("inflow_fx25", c, { ...sigIn, entryOf: "inflow_v1" }).catch(() => {}); // Oct 18: same entries as inflow_v1, 25 s break-even exit
+        if (state.open.filter((p) => p.strat === "inflow_v1").length < cfgOf("inflow_v1").maxOpen && !state.open.some((p) => p.strat === "inflow_v1" && p.mint === c.mint)) enter("inflow_x10", c, { ...sigIn, entryOf: "inflow_v1" }).catch(() => {}); // Oct 18: same entries as inflow_v1, 10 s / -15% / 20% trail exits
         await enter("inflow_v1", c, sigIn);
       } else { bump(net < 5 ? "inflow_v1.lowInflow" : creatorSold ? "inflow_v1.creatorSold" : "inflow_v1.concentrated"); if (age > 60) c.checked.add("inflow"); }
   }
@@ -635,16 +687,18 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   await loadWinners();
   startWs();
   if (process.env.PAPER_FORCE_CHAIN === "1") setOn(true); // test switch
-  const loop = async (fn: () => Promise<unknown>, ms: number) => { for (;;) { await new Promise((r) => setImmediate(r)); try { await fn(); } catch (e) { lastErr = String((e as Error).message ?? e).slice(0, 160); } await sleep(ms); } };
-  process.once("SIGTERM", () => { flushHistory(launchMeta, true); saveState(state, "paper: flush on shutdown").catch(() => {}); });
+  startLagWatch();
+  const loop = async (fn: () => Promise<unknown>, ms: number, label = fn.name || "paper loop") => { for (;;) { await new Promise((r) => setImmediate(r)); try { await lagTrack(label, fn); } catch (e) { lastErr = String((e as Error).message ?? e).slice(0, 160); } await sleep(ms); } };
+  process.once("SIGTERM", () => { flushHistory(launchMeta, true).catch(() => {}); saveState(state, "paper: flush on shutdown").catch(() => {}); });
   loadHelius((state as any).heliusDaily); sc = loadFile<Sc[]>("scorecard.json", []); nlog = loadFile("names.json", {}); creatorMints = loadFile("creators.json", {}); devStats = loadFile("devstats.json", {});
   if (!sc.length) for (const t of closed) if (t.rug?.riskScore != null && !sc.some((x) => x.mint === t.mint)) sc.push({ mint: t.mint, symbol: t.symbol, checkedAt: Date.parse(t.entryAt), score: t.rug.riskScore, level: t.rug.riskLevel, priceSol: t.entryPriceSol, liqUsd: t.rug.facts?.liquidityUsd ?? null, backfilled: true, after: {} });
   loop(scRecheck, 60_000);
-  loop(() => marketTick(() => ({ chainTradesSeenTotal: chainStat.tradesSeen, seenCoins: seen.size, openPositions: state.open.length, feeds: activeFeed().active })), 60_000); // Oct 18: market snapshot
-  loop(async () => { flushHistory(launchMeta); }, 600_000); // Oct 18: history batch files every 10 min
+  loop(() => marketTick(() => ({ chainTradesSeenTotal: chainStat.tradesSeen, seenCoins: seen.size, openPositions: state.open.length, feeds: activeFeed().active })), 60_000, "market snapshot"); // Oct 18: market snapshot
+  loop(async () => { await flushHistory(launchMeta); }, 600_000, "history flush"); // Oct 18: history batch files every 10 min
   loop(pollNew, 5000); loop(rpcPing, 60_000); loop(scanCandidates, 8000); loop(scanInflow, 4000); loop(feedWatch, 15_000);
-  loop(async () => { if (isOn() && state.open.length) await curveState([...new Set(state.open.map((p) => p.mint))]).catch(() => null); /* one batched price read for all open positions */ for (const p of [...state.open]) { await manage(p); await new Promise((r) => setImmediate(r)); } }, 5_000); // Oct 15: 10 s -> 5 s price checks
-  loop(async () => { for (const [n, o] of [["scorecard.json", sc], ["names.json", nlog], ["creators.json", creatorMints], ["devstats.json", devStats]] as const) { writeFile(n, o); await new Promise((r) => setImmediate(r)); } (state as any).heliusDaily = heliusDaily; if (takeHistoryDirty() || dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000);
+  loop(async () => { if (isOn() && state.open.length) await curveState([...new Set(state.open.map((p) => p.mint))]).catch(() => null); /* one batched price read for all open positions */ for (const p of [...state.open]) { await manageOnce(p); await new Promise((r) => setImmediate(r)); } }, 5_000, "open-position checks");
+  loop(x10Tick, X10.fastMs, "inflow_x10 fast checks"); // Oct 18 inflow_x10: 1 s stop/trail checks from free price reads (no requests when it has no open position) // Oct 15: 10 s -> 5 s price checks
+  loop(async () => { for (const [n, o] of [["scorecard.json", sc], ["names.json", nlog], ["creators.json", creatorMints], ["devstats.json", devStats]] as const) { await writeFile(n, o); await new Promise((r) => setImmediate(r)); } (state as any).heliusDaily = heliusDaily; if (takeHistoryDirty() || dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000, "paper save loop");
 }
 
 export function paperSummary() {
@@ -663,7 +717,7 @@ export function paperSummary() {
     return { ...t, startedAt: new Date(start).toISOString(), trades: xs.length, totalPnlSol: +xs.reduce((a, x) => a + x.pnlSol, 0).toFixed(4), avgRoi: xs.length ? +(xs.reduce((a, x) => a + x.roi, 0) / xs.length).toFixed(4) : null,
       winRate: xs.length ? +(xs.filter((x) => x.pnlSol > 0).length / xs.length).toFixed(3) : null, avgLossRoi: losses.length ? +(losses.reduce((a, x) => a + x.roi, 0) / losses.length).toFixed(4) : null }; });
   const mu = process.memoryUsage(); const mb = (x: number) => Math.round(x / 1048576); // Oct 18: memory on the free plan (512 MB)
-  return { process: { rssMB: mb(mu.rss), heapUsedMB: mb(mu.heapUsed), heapTotalMB: mb(mu.heapTotal), externalMB: mb(mu.external), uptimeS: Math.round(process.uptime()) }, helius: heliusStatus(), dataSource: dataSource(), feed: activeFeed(), inflowDiag, earlyDiag, coinFactoryFunder: { rule: `private paper flag: a creator or funder that funded ${COIN_FACTORY.minCreators}+ coin creators in 24 h (lower bound from our traces), or a known coin-factory name`, flaggedTrades: closed.filter((t) => t.coinFactoryFunder?.flag).length, fundersTracked: fundedBy.size }, paused: PAUSED, tests, testDecisionRule: TEST_RULE, paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL (control and v2 tests), edge-finder 0.1 SOL; sniper paused (was 0.4 SOL)", startedAt: state.startedAt, strategies: by,
+  return { process: { rssMB: mb(mu.rss), heapUsedMB: mb(mu.heapUsed), heapTotalMB: mb(mu.heapTotal), externalMB: mb(mu.external), uptimeS: Math.round(process.uptime()), eventLoopLag: lagStatus() }, helius: heliusStatus(), dataSource: dataSource(), feed: activeFeed(), inflowDiag, earlyDiag, coinFactoryFunder: { rule: `private paper flag: a creator or funder that funded ${COIN_FACTORY.minCreators}+ coin creators in 24 h (lower bound from our traces), or a known coin-factory name`, flaggedTrades: closed.filter((t) => t.coinFactoryFunder?.flag).length, fundersTracked: fundedBy.size }, paused: PAUSED, tests, testDecisionRule: TEST_RULE, paperOnly: true, sizeSolPerTrade: "copy 0.2 SOL (control and v2 tests), edge-finder 0.1 SOL; sniper paused (was 0.4 SOL)", startedAt: state.startedAt, strategies: by,
     latency: { precheckRecent: preLog.slice(-30), eventLoopDelayMs: { p50: Math.round(loopLag.percentile(50) / 1e6), p99: Math.round(loopLag.percentile(99) / 1e6), max: Math.round(loopLag.max / 1e6) }, sniperPrecheckMedianMs: med(preMs), sniperPrecheckP90Ms: preMs.length ? [...preMs].sort((a, b) => a - b)[Math.floor(preMs.length * 0.9)] : 0, medianDetectMs: med(lat.detectMs), detectNote: "websocket launches have no on-chain timestamp in the feed; counted as 1000 ms (conservative floor). Poll-detected launches are measured.", medianRpcRoundTripMs: med(lat.rpcMs), simulatedExecMs: execLatencyMs() },
     counters: state.counters, store: storeStatus(), history: histStat, websocket: !!ws, winnersTracked: winners.size, lastError: lastErr,
     recent: closed.slice(-40).reverse().map(({ signals, rug, markPath, ...t }) => ({ ...t, rugScore: rug?.riskScore ?? null, precheckMs: signals?.precheck?.ms ?? null, rugMax: signals?.rugMax ?? null, rugLevel: rug?.riskLevel ?? null })) };

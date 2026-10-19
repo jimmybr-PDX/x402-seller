@@ -77,20 +77,20 @@ export async function marketTick(extra: () => Record<string, unknown>) {
 }
 
 /** Move finished coins/launches into files (one gzip file per kind per batch). Called every 10 min and on shutdown. */
-export function flushHistory(meta: (mint: string) => any, all = false) {
+export async function flushHistory(meta: (mint: string) => any, all = false) {
   try {
     const now = Date.now();
     for (const [m, b] of [...coins.entries()]) if (all || now - b.last > QUIET_MS || now - b.first > MAX_AGE_MS) finish(m, b);
     settleLaunches(meta);
     const out: [string, any[], boolean][] = [["coin-trades", readyCoins, true], ["launches", readyLaunches, true], ["market", readyMarket, false]];
+    readyCoins = []; readyLaunches = []; readyMarket = []; // Oct 18: taken before the async writes, so rows added meanwhile wait for the next batch
     for (const [kind, rows, gz] of out) {
       if (!rows.length) continue;
-      const f = writeBatch(kind, rows, gz); if (!f) continue;
+      const f = await writeBatch(kind, rows, gz); if (!f) continue;
       histStat.files++; histStat.lastFile = f;
       if (kind === "coin-trades") { histStat.coinsWritten += rows.length; histStat.tradesWritten += rows.reduce((a, r) => a + r.n, 0); }
       else if (kind === "launches") histStat.launchesWritten += rows.length; else histStat.marketWritten += rows.length;
     }
-    readyCoins = []; readyLaunches = []; readyMarket = [];
   } catch (e) { histStat.lastError = String((e as Error).message ?? e).slice(0, 120); }
   histStat.buffered = coins.size;
 }

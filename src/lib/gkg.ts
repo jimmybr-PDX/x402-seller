@@ -11,6 +11,7 @@ import zlib from "node:zlib";
 
 const inflateRaw = promisify(zlib.inflateRaw); // libuv threadpool: keeps the event loop free
 import { USER_AGENT } from "./net.js";
+import { track } from "./lag.js";
 
 export type GkgItem = { title: string; url: string; source: string; t: number; lc: string };
 
@@ -144,15 +145,21 @@ async function loadFile(ts: string): Promise<number> {
   return fresh.length;
 }
 
-function prune() {
+/** Oct 18: drop old items in slices with yields (was one sort of up to 200k items per 5-min poll, which blocked the event loop). */
+async function prune() {
   const cutoff = Date.now() - HOURS * 3600_000;
-  if (items.length && (items[0]!.t < cutoff || items.length > MAX_ITEMS)) {
-    items.sort((a, b) => a.t - b.t);
-    let i = 0;
-    while (i < items.length && (items[i]!.t < cutoff || items.length - i > MAX_ITEMS)) i++;
-    for (const it of items.slice(0, i)) seenUrls.delete(it.url.replace(/^https?:\/\/(www\.)?/, "").replace(/[?#].*$/, "").toLowerCase());
-    items = items.slice(i);
+  if (!items.some((it) => it.t < cutoff) && items.length <= MAX_ITEMS) return;
+  const key = (u: string) => u.replace(/^https?:\/\/(www\.)?/, "").replace(/[?#].*$/, "").toLowerCase();
+  const keep: GkgItem[] = [];
+  for (let i = 0; i < items.length; i += 5000) {
+    for (const it of items.slice(i, i + 5000)) { if (it.t < cutoff) seenUrls.delete(key(it.url)); else keep.push(it); }
+    await new Promise((r) => setImmediate(r));
   }
+  if (keep.length > MAX_ITEMS) { // rare: over the cap inside the window -> drop the oldest
+    keep.sort((a, b) => a.t - b.t); await new Promise((r) => setImmediate(r));
+    for (const it of keep.splice(0, keep.length - MAX_ITEMS)) seenUrls.delete(key(it.url));
+  }
+  items = keep;
 }
 
 async function latestTs(): Promise<string> {
@@ -164,7 +171,8 @@ async function latestTs(): Promise<string> {
   return m[1]!;
 }
 
-async function sync(backfillReq: boolean) {
+async function sync(backfillReq: boolean) { return track("gdelt sync", () => syncNow(backfillReq)); }
+async function syncNow(backfillReq: boolean) {
   // Keep backfilling (full window) until it has been filled once, so a failed first load is not
   // downgraded to the 2-hour poll window.
   const backfill = backfillReq || !backfilled;
@@ -187,7 +195,7 @@ async function sync(backfillReq: boolean) {
       );
       if (backfill) await new Promise((r) => setTimeout(r, 400));
     }
-    prune();
+    await prune();
     if (failed === 0 || ok > 0) {
       lastOkAt = new Date().toISOString();
       failures = 0;

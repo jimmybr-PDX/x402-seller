@@ -22,6 +22,7 @@ import { RUG_EDGE_SHORT } from "./lib/rug-extra.js";
  * with the real tx hash and payer. No invented hashes.
  */
 
+import { startLagWatch, track } from "./lib/lag.js";
 import { startPaper } from "./lib/paper/engine.js";
 import { swapConfig } from "./lib/swap.js";
 import { registerPaper } from "./lib/paper/page.js";
@@ -262,7 +263,8 @@ async function main() {
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
   // Oct 15: answer the keep-awake probe before any other middleware, so it never waits on body parsing, tracking or payments.
-  app.get("/health", (_req, res) => { res.set("Cache-Control", "no-store").json({ ok: true }); }); // Oct 15: answered before all other middleware (keep-awake probe)
+  startLagWatch(); // Oct 18: warn in the log when the event loop is blocked over 1 s (Render health checks time out at 5 s)
+  app.get("/health", (_req, res) => { res.set("Cache-Control", "no-store").type("application/json").end('{"ok":true}'); }); // Oct 15: answered before all other middleware (keep-awake probe); Oct 18: no JSON work at all
   app.use(express.json());
 
   // Interest tracker (counts only; visitor = salted hash of IP+UA, raw IPs never stored).
@@ -1509,7 +1511,7 @@ async function main() {
   registerWalletPay(app, walletPay);
   registerWatchRoutes(app, watchDeps);
   app.get("/watch", watchPaidHandler(watchDeps, decodeB64Json));
-  const watchTimer = setInterval(() => { watcher.tick().catch(() => {}); }, 30_000); watchTimer.unref?.();
+  const watchTimer = setInterval(() => { track("watch checks", () => watcher.tick()).catch(() => {}); }, 30_000); watchTimer.unref?.();
   process.once("SIGTERM", () => { watcher.flush().catch(() => {}); });
   registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), spend, refund, watch: { create: (k, a) => createWithCredits(watchDeps, k, a), config: () => watchConfig(watchDeps) }, swap: swapConfig() });
   app.get("/icon.png", (_req, res) => {
