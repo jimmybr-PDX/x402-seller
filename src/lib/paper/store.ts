@@ -40,9 +40,25 @@ export async function initStore(): Promise<void> {
 export function loadState<T>(fallback: T): T { try { return JSON.parse(fs.readFileSync(path.join(dir, "data", "state.json"), "utf8")); } catch { return fallback; } }
 /** Oct 18: parses only the last `tail` lines (was the whole 11+ MB file, then sliced: seconds of blocked loop on 0.1 CPU). */
 export function loadTrades(tail = Infinity): any[] {
-  try { const ls = fs.readFileSync(path.join(dir, "data", "trades.jsonl"), "utf8").split("\n").filter(Boolean); return ls.slice(Number.isFinite(tail) ? -tail : 0).map((l) => JSON.parse(l)); } catch { return []; }
+  // Oct 19 (bandwidth): new trades go to small hourly files data/trades/<day>/<HH>.jsonl; data/trades.jsonl is the frozen pre-Oct-19 log.
+  try {
+    const want = Number.isFinite(tail) ? tail : Infinity; let rows: string[] = [];
+    for (const f of tradeFiles().reverse()) { rows = readLines(f).concat(rows); if (rows.length >= want) break; }
+    if (rows.length < want) rows = readLines(path.join(dir, "data", "trades.jsonl")).concat(rows);
+    return rows.slice(Number.isFinite(want) ? -want : 0).map((l) => JSON.parse(l));
+  } catch { return []; }
 }
-export function appendTrade(t: unknown) { if (mode === "unavailable") return; fs.appendFileSync(path.join(dir, "data", "trades.jsonl"), JSON.stringify(t) + "\n"); }
+const readLines = (f: string) => { try { return fs.readFileSync(f, "utf8").split("\n").filter(Boolean); } catch { return []; } };
+function tradeFiles(): string[] {
+  const root = path.join(dir, "data", "trades"); const out: string[] = [];
+  try { for (const d of fs.readdirSync(root).sort()) for (const h of fs.readdirSync(path.join(root, d)).sort()) if (h.endsWith(".jsonl")) out.push(path.join(root, d, h)); } catch {}
+  return out;
+}
+export function tradeFileFor(now = new Date()) { const iso = now.toISOString(); return path.join("trades", iso.slice(0, 10), `${iso.slice(11, 13)}.jsonl`); }
+export function appendTrade(t: unknown, now = new Date()) {
+  if (mode === "unavailable") return;
+  const f = path.join(dir, "data", tradeFileFor(now)); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.appendFileSync(f, JSON.stringify(t) + "\n");
+}
 let busy = false;
 export async function saveState(state: unknown, msg: string) { return track("paper-store save+push", () => saveStateNow(state, msg)); }
 async function saveStateNow(state: unknown, msg: string) {
@@ -51,9 +67,10 @@ async function saveStateNow(state: unknown, msg: string) {
   try {
     await writeParts(path.join(dir, "data", "state.json"), [...(await stringifyParts(state)), "\n"]); // Oct 18: time-sliced (was one blocking JSON.stringify)
     if (mode !== "github") return;
-    await git("add", "data");
+    // Oct 19 (bandwidth): raw coin-trades history stays on local disk only (it was ~70 MB/day of uploads)
+    await git("add", "-A", "--", "data", ":(exclude)data/coin-trades");
     const { stdout } = await git("status", "--porcelain");
-    if (!stdout.trim()) return;
+    if (!stdout.split("\n").some((l) => l.trim() && !l.startsWith("??"))) return; // untracked local-only history is not a change
     await git("commit", "-q", "-m", msg);
     try { await git("push", "-q", "origin", "HEAD"); }
     catch { await git("pull", "-q", "--rebase", "origin", "HEAD"); await git("push", "-q", "origin", "HEAD"); }
@@ -75,8 +92,15 @@ async function writeParts(file: string, parts: string[]) {
 export function loadFile<T>(name: string, fallback: T): T { try { return JSON.parse(fs.readFileSync(path.join(dir, "data", name), "utf8")); } catch { return fallback; } }
 const lastHash = new Map<string, string>();
 /** Oct 18: async, stringified in slices (creators/names are several MB), and skipped when nothing changed (less git work too). */
-export async function writeFile(name: string, obj: unknown) {
+// Oct 19 (bandwidth): multi-MB caches are re-uploaded whole on every change (git sends files over 4 MB without deltas),
+// so they are written at most every 6 h, plus on shutdown.
+export const BIG_FILES = new Set(["scorecard.json", "names.json", "creators.json"]);
+export const BIG_EVERY_MS = 6 * 3600_000;
+const lastBigWrite = new Map<string, number>();
+export async function writeFile(name: string, obj: unknown, force = false, now = Date.now()) {
   if (mode === "unavailable") return;
+  if (!force && BIG_FILES.has(name)) { const at = lastBigWrite.get(name); if (at == null) lastBigWrite.set(name, now); else if (now - at < BIG_EVERY_MS) return; }
+  if (BIG_FILES.has(name)) lastBigWrite.set(name, now);
   await track(`paper-store write ${name}`, async () => {
     // Oct 18 (v2): stringify in time slices, hash part by part with yields, write the parts in batches (no multi-MB join/hash in one go)
     const parts = [...(await stringifyParts(obj)), "\n"]; const h = createHash("sha1"); const y = yielder();

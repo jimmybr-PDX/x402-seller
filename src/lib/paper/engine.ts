@@ -695,7 +695,7 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   if (process.env.PAPER_FORCE_CHAIN === "1") setOn(true); // test switch
   startLagWatch();
   const loop = async (fn: () => Promise<unknown>, ms: number, label = fn.name || "paper loop") => { for (;;) { await new Promise((r) => setImmediate(r)); try { await lagTrack(label, fn); } catch (e) { lastErr = String((e as Error).message ?? e).slice(0, 160); } await sleep(ms); } };
-  process.once("SIGTERM", () => { flushHistory(launchMeta, true).catch(() => {}); saveState(state, "paper: flush on shutdown").catch(() => {}); });
+  process.once("SIGTERM", () => { flushHistory(launchMeta, true).catch(() => {}); (async () => { for (const [n, o] of [["scorecard.json", sc], ["names.json", nlog], ["creators.json", creatorMints]] as const) await writeFile(n, o, true).catch(() => {}); await saveState(state, "paper: flush on shutdown"); })().catch(() => {}); });
   const tick = () => new Promise((r) => setTimeout(r, 50)); // Oct 18: let the loop (health checks) breathe between the multi-MB parses
   loadHelius((state as any).heliusDaily); sc = loadFile<Sc[]>("scorecard.json", []); await tick(); nlog = loadFile("names.json", {}); await tick(); creatorMints = loadFile("creators.json", {}); await tick(); devStats = loadFile("devstats.json", {});
   if (!sc.length) for (const t of closed) if (t.rug?.riskScore != null && !sc.some((x) => x.mint === t.mint)) sc.push({ mint: t.mint, symbol: t.symbol, checkedAt: Date.parse(t.entryAt), score: t.rug.riskScore, level: t.rug.riskLevel, priceSol: t.entryPriceSol, liqUsd: t.rug.facts?.liquidityUsd ?? null, backfilled: true, after: {} });
@@ -705,7 +705,7 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   loop(pollNew, 5000); loop(rpcPing, 60_000); loop(scanCandidates, 8000); loop(scanInflow, 4000); loop(feedWatch, 15_000);
   loop(async () => { if (isOn() && state.open.length) await curveState([...new Set(state.open.map((p) => p.mint))]).catch(() => null); /* one batched price read for all open positions */ for (const p of [...state.open]) { await manageOnce(p); await new Promise((r) => setImmediate(r)); } }, 5_000, "open-position checks");
   loop(x10Tick, X10.fastMs, "inflow_x10 fast checks"); // Oct 18 inflow_x10: 1 s stop/trail checks from free price reads (no requests when it has no open position) // Oct 15: 10 s -> 5 s price checks
-  loop(async () => { for (const [n, o] of [["scorecard.json", sc], ["names.json", nlog], ["creators.json", creatorMints], ["devstats.json", devStats]] as const) { await writeFile(n, o); await new Promise((r) => setImmediate(r)); } (state as any).heliusDaily = heliusDaily; if (takeHistoryDirty() || dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 180_000, "paper save loop");
+  loop(async () => { for (const [n, o] of [["scorecard.json", sc], ["names.json", nlog], ["creators.json", creatorMints], ["devstats.json", devStats]] as const) { await writeFile(n, o); await new Promise((r) => setImmediate(r)); } (state as any).heliusDaily = heliusDaily; if (takeHistoryDirty() || dirty || scDirty) { scDirty = false; dirty = false; await saveState(state, `paper: ${closed.length} trades, ${state.open.length} open`); } }, 900_000, "paper save loop"); // Oct 19 (bandwidth): push every 15 min (was 3)
 }
 
 export function paperSummary() {

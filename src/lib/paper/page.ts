@@ -26,8 +26,8 @@ const th = (label: string, tip: string) => `<th tabindex="0" data-tip="${esc(tip
 export function registerPaper(app: Express) {
   registerScorecard(app);
   // Oct 18: public = performance only (private signals stripped); full data with X-Paper-Admin-Key or from the private paper store
-  app.get("/paper.json", (req, res) => { res.set("Cache-Control", "no-store").json(isAdmin(req) ? paperSummary() : redact(paperSummary())); });
-  app.get("/paper/trades.json", (req, res) => { const t = paperTrades().slice(-500); res.set("Cache-Control", "no-store").json(isAdmin(req) ? t : redact(t)); });
+  app.get("/paper.json", (req, res) => { res.set("Cache-Control", "no-cache").json(isAdmin(req) ? paperSummary() : redact(paperSummary())); });
+  app.get("/paper/trades.json", (req, res) => { const n = Math.min(500, Math.max(1, Math.floor(Number(req.query.limit ?? 50)) || 50)); const t = paperTrades().slice(-n); res.set("Cache-Control", "no-cache").json(isAdmin(req) ? t : redact(t)); }); // Oct 19: last 50 by default, ?limit= up to 500; no-cache so ETag gives 304s
   app.get("/paper", async (req, res) => {
     if (!isAdmin(req)) { res.set("Cache-Control", "no-store").type("html").send(publicPage(redact(paperSummary()) as any, await solPrice())); return; }
     const s = paperSummary(); const p = await solPrice();
