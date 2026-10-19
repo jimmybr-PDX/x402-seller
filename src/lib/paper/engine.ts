@@ -335,7 +335,9 @@ function x10Mark(p: Pos, price: number) {
 }
 /** Check one or all open inflow_x10 positions now; a hit sets forceExit and sells through the normal manage() path (Jupiter quote + latency). */
 async function x10Check(only?: Pos) {
-  const ps = only ? [only].filter((p) => state.open.includes(p)) : state.open.filter((p) => p.strat === "inflow_x10" && !p.forceExit);
+  // Oct 18 fix: a triggered exit that lost the race with the slow 5 s loop (its cycle over all open positions runs ~90 s) is retried here every second
+  for (const p of [...state.open]) if (p.strat === "inflow_x10" && p.forceExit && !managing.has(p.id)) await manageOnce(p);
+  const ps = only ? [only].filter((p) => state.open.includes(p) && !p.forceExit) : state.open.filter((p) => p.strat === "inflow_x10" && !p.forceExit);
   if (!ps.length) return;
   const px = await x10Prices([...new Set(ps.map((p) => p.mint))]);
   for (const p of ps) {
@@ -350,9 +352,10 @@ function x10Arm(p: Pos) { setTimeout(() => { x10Check(p).catch(() => {}); }, Mat
 async function manage(p: Pos) {
   const cfg = cfgOf(p.strat);
   const isCp = p.strat.split("@")[0] === "copy_v2cp", isCs = p.strat.split("@")[0] === "copy_v2cs", isIn = p.strat === "inflow_v1" || p.strat === "inflow_fx25" || p.strat === "inflow_x10"; // Oct 18: inflow_fx25 keeps inflow_v1's exits
-  const tr = await trades(p.mint, isCp || isCs || isIn ? 30 : 5);
+  const x10Go = p.strat === "inflow_x10" && !!p.forceExit; // Oct 18: inflow_x10 already decided from its 1 s free price read -> straight to the sell
+  const tr = x10Go ? null : await trades(p.mint, isCp || isCs || isIn ? 30 : 5);
   let price = tr?.[0] ? Number(tr[0].priceSol) : null;
-  if (isOn()) { const cs = (await curveState([p.mint]))[p.mint]; if (cs && !cs.complete && cs.priceSol > 0) price = cs.priceSol; }
+  if (isOn() && !x10Go) { const cs = (await curveState([p.mint]))[p.mint]; if (cs && !cs.complete && cs.priceSol > 0) price = cs.priceSol; }
   const holdS = (Date.now() - p.entryAt) / 1000;
   let cpReason: string | null = null;
   if (isCp && tr) { // crash-protect (paper test): fast drop, or the creator / a top-5 early buyer dumping
@@ -462,7 +465,7 @@ async function close(p: Pos, reason: string, outLamports: bigint, fees: number) 
   const feesPaid = { pumpFunSol: +pumpFee.toFixed(6), networkAndPrioritySol: +fixed.toFixed(6), slippageSol: +slip.toFixed(6), totalSol: +(pumpFee + fixed + slip).toFixed(6) };
   const breakEvenPct = +(((fixed + slip) / size + PUMP * 2 + PUMP * PUMP) * 100).toFixed(2);
   const t = { id: p.id, strat: p.strat, mint: p.mint, symbol: p.symbol, result: pnl > 0 ? "win" : "loss", exitReason: reason,
-    entryAt: new Date(p.entryAt).toISOString(), exitAt: new Date().toISOString(), holdS: Math.round((Date.now() - p.entryAt) / 1000), entryAgeS: p.entryAgeS, latencyMs: p.latencyMs,
+    entryAt: new Date(p.entryAt).toISOString(), exitAt: new Date().toISOString(), holdS: Math.round((Date.now() - p.entryAt) / 1000), entryAgeS: p.entryAgeS, latencyMs: p.latencyMs, ...((p as any).x10TriggerS != null ? { x10TriggerS: (p as any).x10TriggerS } : {}),
     sizeSol: p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */, sizeMult: p.sizeMult ?? 1, costSol: +(p.costLamports / LAMPORTS).toFixed(6), proceedsSol: +(proceeds / LAMPORTS).toFixed(6), pnlSol: +pnl.toFixed(6), roi: +(pnl / (p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */)).toFixed(4),
     entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, priv: p.priv ?? null, named: p.named ?? null, dataSource: (p as any).dataSource ?? null, trust: trustFor(p.mint, p.family), coinFactoryFunder: coinFactoryOf(p.family, p.named), feesPaid, breakEvenPct, ...markFields(p) };
   followCheckpoints(p);
