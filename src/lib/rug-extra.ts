@@ -117,6 +117,7 @@ export async function solanaExtra(mint: string, o: { jup: any; mintInfo: any; ds
   const socials = new Set<string>([...(jup?.twitter ? ["twitter"] : []), ...(jup?.website ? ["website"] : []), ...(jup?.telegram ? ["telegram"] : []), ...(jup?.discord ? ["discord"] : []),
     ...(dsInfo.socials ?? []).map((x: any) => String(x.type)), ...((dsInfo.websites ?? []).length ? ["website"] : [])]);
   s.socials = [...socials]; s.twitter = jup?.twitter ?? (dsInfo.socials ?? []).find((x: any) => x.type === "twitter")?.url ?? null; s.website = jup?.website ?? dsInfo.websites?.[0]?.url ?? null;
+  s.socialLinks = socialLinks(jup, dsInfo);
   if (!socials.size) add("no_socials", 5, "No website or social links listed.");
   // LP status: pump.fun bonding curve has no LP to pull; PumpSwap graduation burns LP by protocol design.
   const dexes = [...new Set(o.dsPairs.map((p) => p.dexId))];
@@ -146,6 +147,25 @@ export async function solanaExtra(mint: string, o: { jup: any; mintInfo: any; ds
     if (Number(pump.knownSnipersEarly) >= 3) add("known_snipers", 5, `${pump.knownSnipersEarly} repeat sniper wallets bought in the first minute.`);
   } else if (isPump) unknown.push("pump.fun trade history"); else s.launchAnalysis = "not a pump.fun launch";
   return { signals: s, checks, unknown, ms: Date.now() - t0 };
+}
+
+/** All creator-set social links (Jupiter + DexScreener), http(s) only, max 200 chars each, deduped, max 12. */
+export function socialLinks(jup: any, dsInfo: any): { type: string; url: string }[] {
+  const raw: { type: string; url: unknown }[] = [
+    { type: "twitter", url: jup?.twitter }, { type: "website", url: jup?.website }, { type: "telegram", url: jup?.telegram }, { type: "discord", url: jup?.discord },
+    ...(Array.isArray(dsInfo?.socials) ? dsInfo.socials : []).map((x: any) => ({ type: String(x?.type ?? "link"), url: x?.url })),
+    ...(Array.isArray(dsInfo?.websites) ? dsInfo.websites : []).map((x: any) => ({ type: "website", url: x?.url })),
+  ];
+  const out: { type: string; url: string }[] = []; const seen = new Set<string>();
+  for (const r of raw) {
+    if (typeof r.url !== "string" || r.url.length > 200) continue;
+    let u: URL; try { u = new URL(r.url.trim()); } catch { continue; }
+    if (u.protocol !== "https:" && u.protocol !== "http:") continue;
+    const key = u.href.replace(/\/$/, "").toLowerCase(); if (seen.has(key)) continue; seen.add(key);
+    out.push({ type: r.type.replace(/[^a-z0-9_-]/gi, "").slice(0, 20).toLowerCase() || "link", url: u.href });
+    if (out.length >= 12) break;
+  }
+  return out;
 }
 
 export function evmExtra(g: any, ds: any[] | null) {
