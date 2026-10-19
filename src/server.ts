@@ -51,7 +51,7 @@ import { rugCheck, flaggedWallets, DISCLAIMER as RUG_DISCLAIMER } from "./lib/ru
 import { registerRugradarWeb } from "./lib/rugradar-web.js";
 import { createWatcher, WATCH_PLANS, planOf, type Watch } from "./lib/watch.js";
 import { registerWatchRoutes, watchKeyMiddleware, watchPaidHandler, createWithCredits, watchConfig, type WatchRouteDeps } from "./lib/watch-routes.js";
-import { initCredits, issueKey, issueKeyOnce, isRedeemed, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell , spendN, refundN, loadDoc, saveDoc } from "./lib/credits.js";
+import { initCredits, issueKey, issueKeyOnce, isRedeemed, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell , spendN, refundN, loadDoc, saveDoc, saveDocs, listDocs, syncStore } from "./lib/credits.js";
 import { registerWalletPay, orderSecret, solUsdPublic, type PayDeps } from "./lib/solpay.js";
 import { startSales, salesStats } from "./lib/sales.js";
 import { classify, recordRejection, recordRequest, startTraffic, trafficStats, attachDurable, type Outcome } from "./lib/traffic.js";
@@ -1014,11 +1014,12 @@ async function main() {
       accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
       description:
         // Oct 18: agent-job-first wording for the "token safety" / "is this token safe" / "token risk score" searches, where this
-        // route was missing from Bazaar's top 20 (rug-check already ranks #1 for rug queries).
-        `Is this token safe to buy? Call before an agent buys, swaps or recommends an unfamiliar token. Token risk score 0-100, low/medium/high verdict and plain reasons: mint/freeze authority, liquidity, top holders, dev sold %, snipers, bundles, live sell test, creator rug history. Solana (pump.fun) plus Base, BNB, Ethereum, Arbitrum via chain=. RugRadar heuristic, may be wrong; not financial advice. ${perCall(RUG_PRICE)}`,
+        // route was missing from Bazaar's top 20 (rug-check already ranks #1 for rug queries). Oct 19: "Solana token safety" back
+        // in the name/description/tags (dropping it lost that search, #7 -> out of top 20).
+        `Is this token safe to buy? Solana token safety check and token risk score for agents: call before buying, swapping or recommending an unfamiliar token. Risk score 0-100, low/medium/high verdict and plain reasons: mint/freeze authority, liquidity, top holders, dev sold %, snipers, bundles, live sell test, creator rug history. Solana (pump.fun) by default; Base, BNB, Ethereum, Arbitrum via chain=. RugRadar heuristic, may be wrong; not financial advice. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
-      serviceName: "Is This Token Safe? RugRadar Token Safety Score",
-      tags: ["token safety", "is this token safe", "token risk score", "memecoin safety", "token security scan"],
+      serviceName: "Is This Token Safe? Solana Token Safety Score (RugRadar)",
+      tags: ["token safety", "is this token safe", "solana token safety", "token risk score", "memecoin safety", "token security scan"],
       iconUrl: RUG_ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
@@ -2034,7 +2035,12 @@ async function main() {
   const httpServer = app.listen(PORT, "0.0.0.0", () => {
     startTraffic();
     // Oct 18: /stats counters survive restarts: restored from / saved to the private RugRadar GitHub store (traffic.json)
-    initCredits().then(() => { if (creditsStatus().store === "github") return attachDurable({ name: "private GitHub store (rugradar-credits repo, traffic.json)", load: () => loadDoc<any>("traffic.json", null), save: (d) => saveDoc("traffic.json", d, "traffic stats") }); }).catch(() => {});
+    initCredits().then(() => { if (creditsStatus().store === "github") return attachDurable({
+      name: "private GitHub store (rugradar-credits repo)",
+      load: async () => { const out: Record<string, unknown> = {}; for (const n of await listDocs("traffic")) out[n] = await loadDoc<unknown>(n, null); return out; },
+      sync: () => syncStore(),
+      write: (docs, msg) => saveDocs(docs, msg),
+    }); }).catch(() => {});
     setTimeout(() => startPaper({ rugCheck: (m) => rugCheck(m, "solana"), flagged: flaggedWallets }).catch(() => {}), 20_000);
     startSales(PAY_TO_EVM, PUBLIC_URL);
     warmNews();

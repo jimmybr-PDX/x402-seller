@@ -47,19 +47,71 @@ export function initCredits(): Promise<void> {
       await run("git", ["clone", "--depth", "1", repo, dir], { env, timeout: 30000 });
       file = path.join(dir, "credits.json");
       data = JSON.parse(fs.readFileSync(file, "utf8"));
+      branch = (await run("git", ["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"], { env, timeout: 10000 })).stdout.trim() || "main";
       mode = "github";
     } catch (e) { mode = "unavailable"; lastError = String((e as Error).message ?? e).replace(/\s+/g, " ").slice(0, 160); }
   })();
   return ready;
 }
 
-async function persist(msg: string) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 1) + "\n");
-  if (mode !== "github") return;
-  await git("add", "credits.json");
+// Oct 19: pushes never leave the clone stuck. Before, a rejected push ran `git pull --rebase`; when two instances
+// (old + new during a deploy/restart) had changed the same file the rebase stopped half-way, the error was swallowed and
+// every later push failed. Now: on a rejected push, abort any rebase, fetch, hard-reset to the remote, re-apply every
+// document this instance still owes (credits.json is merged with the remote copy so no paid key is lost), commit, retry.
+const dirty = new Map<string, (afterReset: boolean) => void>();
+let branch = "main";
+const revoked = new Set<string>(); // hashes revoked here, so a remote merge never brings them back
+/** After a reset to the remote: fold the remote credits.json (now on disk) into memory. */
+function mergeRemoteCredits() {
+  {
+    try {
+      const remote = JSON.parse(fs.readFileSync(file, "utf8")) as Data;
+      for (const [h, r] of Object.entries(remote.keys ?? {})) {
+        if (revoked.has(h)) continue;
+        const l = data.keys[h];
+        if (!l) data.keys[h] = r; // bought on the other instance: keep it
+        else { l.credits = Math.min(l.credits, r.credits); l.bought = Math.max(l.bought, r.bought); if ((r.lastUsedAt ?? "") > (l.lastUsedAt ?? "")) l.lastUsedAt = r.lastUsedAt; } // spends only lower credits
+      }
+      for (const [ref, h] of Object.entries(remote.purchases ?? {})) if (!(ref in data.purchases)) data.purchases[ref] = h;
+    } catch { /* no remote copy: ours is the only one */ }
+  }
+}
+function writeCredits() { fs.writeFileSync(file, JSON.stringify(data, null, 1) + "\n"); }
+async function resetToRemote() {
+  await git("rebase", "--abort").catch(() => {});
+  await git("merge", "--abort").catch(() => {});
+  await git("fetch", "-q", "--depth", "1", "origin", branch);
+  await git("reset", "-q", "--hard", "FETCH_HEAD");
+  mergeRemoteCredits(); // keys bought/spent on another instance; memory now covers both
+  if (!dirty.has("credits.json")) dirty.set("credits.json", writeCredits);
+  const names = [...dirty.keys()];
+  for (const w of dirty.values()) w(true);
+  if (names.length) { await git("add", "-A"); await git("commit", "-q", "-m", "re-apply after remote moved").catch(() => {}); }
+}
+/** Write the named documents (their writers are registered in `dirty`), commit and push, recovering from a moved remote. */
+async function commitPush(names: string[], msg: string) {
+  for (const n of names) dirty.get(n)?.(false);
+  if (mode !== "github") { for (const n of names) dirty.delete(n); return; }
+  await git("add", "-A");
   await git("commit", "-q", "-m", msg).catch(() => {});
-  try { await git("push", "-q", "origin", "HEAD"); }
-  catch { await git("pull", "-q", "--rebase", "origin", "HEAD").catch(() => {}); await git("push", "-q", "origin", "HEAD"); }
+  let err: unknown;
+  for (let i = 0; i < 3; i++) {
+    try { await git("push", "-q", "origin", `HEAD:${branch}`); dirty.clear(); return; } catch (e) { err = e; }
+    try { await resetToRemote(); } catch (e) { err = e; }
+  }
+  throw err;
+}
+async function persist(msg: string) {
+  dirty.set("credits.json", writeCredits);
+  await commitPush(["credits.json"], msg);
+}
+/** Fetch the remote and hard-reset the local clone to it (keeping anything this instance still has to push). */
+export async function syncStore(): Promise<void> { await initCredits(); if (mode === "github") await serial(resetToRemote); }
+/** Names of stored JSON documents starting with `prefix` (local clone; call syncStore first for a fresh view). */
+export async function listDocs(prefix: string): Promise<string[]> {
+  await initCredits();
+  if (!file) return [];
+  try { return fs.readdirSync(path.dirname(file)).filter((n) => n.startsWith(prefix) && n.endsWith(".json")).sort(); } catch { return []; }
 }
 let pending: NodeJS.Timeout | null = null;
 function persistSoon() {
@@ -98,7 +150,7 @@ export async function issueKeyOnce(n: number, refs: string[]): Promise<{ key: st
     return { key, credits: n };
   });
 }
-export async function revokeKey(key: string) { await serial(async () => { delete data.keys[hashKey(key)]; await persist("revoke unpaid"); }); }
+export async function revokeKey(key: string) { await serial(async () => { const h = hashKey(key); revoked.add(h); delete data.keys[h]; await persist("revoke unpaid"); }); }
 /** Spend one credit. Returns remaining credits, or null when the key is unknown or empty. */
 export async function spend(key: string): Promise<number | null> {
   await initCredits();
@@ -129,14 +181,18 @@ export async function loadDoc<T>(name: string, fallback: T): Promise<T> {
   try { const p = docPath(name); return fs.existsSync(p) ? (JSON.parse(fs.readFileSync(p, "utf8")) as T) : fallback; } catch { return fallback; }
 }
 export async function saveDoc(name: string, value: unknown, msg: string): Promise<void> {
+  return saveDocs({ [name]: value }, msg);
+}
+/** Write several documents in one commit; a null value deletes that document. */
+export async function saveDocs(docs: Record<string, unknown>, msg: string): Promise<void> {
   await initCredits();
   if (!file) throw new Error("store unavailable");
   await serial(async () => {
-    fs.writeFileSync(docPath(name), JSON.stringify(value) + "\n");
-    if (mode !== "github") return;
-    await git("add", name);
-    await git("commit", "-q", "-m", msg).catch(() => {});
-    try { await git("push", "-q", "origin", "HEAD"); }
-    catch { await git("pull", "-q", "--rebase", "origin", "HEAD").catch(() => {}); await git("push", "-q", "origin", "HEAD"); }
+    const names = Object.keys(docs);
+    for (const n of names) {
+      const body = docs[n] === null ? null : JSON.stringify(docs[n]) + "\n";
+      dirty.set(n, () => { const p = docPath(n); if (body === null) fs.rmSync(p, { force: true }); else fs.writeFileSync(p, body); });
+    }
+    await commitPush(names, msg);
   });
 }

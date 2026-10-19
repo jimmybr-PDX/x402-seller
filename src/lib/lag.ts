@@ -5,7 +5,7 @@
  */
 import { monitorEventLoopDelay, performance, PerformanceObserver } from "node:perf_hooks";
 import fs from "node:fs/promises";
-const CG_WARN_MB = Number(process.env.CG_WARN_MB ?? 460); let cgMB: number | null = null, peakCg = 0;
+const CG_WARN_MB = Number(process.env.CG_WARN_MB ?? 460); let cgMB: number | null = null, peakCg = 0, cgTotalMB: number | null = null, cgCacheMB: number | null = null;
 const WARN_MS = Number(process.env.LAG_WARN_MS ?? 1000);
 const active = new Map<number, { label: string; start: number }>(); let seq = 0;
 const slow: { label: string; ms: number; at: number; sync: boolean }[] = [];
@@ -31,9 +31,21 @@ export function startLagWatch() {
   process.on("exit", (code) => { const mu = process.memoryUsage(); console.error(`[lag] process exit code ${code}; rss ${Math.round(mu.rss / 1048576)} MB; running: ${[...active.values()].map((a) => a.label).join(", ") || "-"}`); });
   // Oct 18: Render kills on the CONTAINER's memory (node + git/ssh children + tsx's esbuild), not node's RSS. Sample the
   // cgroup every 15 s (async read, no blocking) so the log names container pressure before a health-check death.
-  const readCg = async () => { for (const f of ["/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory/memory.usage_in_bytes"]) { try { return Number((await fs.readFile(f, "utf8")).trim()) / 1048576; } catch {} } return null; };
+  // Oct 19: warn on the working set = usage minus inactive (reclaimable) file cache, like the OOM killer and Render's
+  // memory graph see it. Raw memory.current counts the page cache of git clones/files and read ~130 MB high (false alarm).
+  const readCg = async (): Promise<{ total: number; cache: number } | null> => {
+    for (const [cur, stat, key] of [["/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory.stat", "inactive_file"], ["/sys/fs/cgroup/memory/memory.usage_in_bytes", "/sys/fs/cgroup/memory/memory.stat", "total_inactive_file"]] as const) {
+      try {
+        const total = Number((await fs.readFile(cur, "utf8")).trim());
+        let cache = 0;
+        try { const m = (await fs.readFile(stat, "utf8")).match(new RegExp(`^${key} (\\d+)$`, "m")); if (m) cache = Number(m[1]); } catch {}
+        return { total: total / 1048576, cache: Math.min(cache, total) / 1048576 };
+      } catch {}
+    }
+    return null;
+  };
   let lastCgWarn = 0;
-  setInterval(() => { readCg().then((mb) => { if (mb == null) return; cgMB = Math.round(mb); if (cgMB > peakCg) peakCg = cgMB; if (cgMB > CG_WARN_MB && Date.now() - lastCgWarn > 300_000) { lastCgWarn = Date.now(); keep(memWarns, { at: new Date().toISOString(), rssMB: Math.round(process.memoryUsage.rss() / 1048576), containerMB: cgMB, running: [...active.values()].map((a) => a.label) } as any, 10); console.warn(`[lag] container memory high: ${cgMB} MB (node rss ${Math.round(process.memoryUsage.rss() / 1048576)} MB); running: ${[...active.values()].map((a) => a.label).join(", ") || "-"}`); } }).catch(() => {}); }, 15_000).unref?.();
+  setInterval(() => { readCg().then((r) => { if (!r) return; cgTotalMB = Math.round(r.total); cgCacheMB = Math.round(r.cache); cgMB = Math.round(r.total - r.cache); if (cgMB > peakCg) peakCg = cgMB; if (cgMB > CG_WARN_MB && Date.now() - lastCgWarn > 300_000) { lastCgWarn = Date.now(); keep(memWarns, { at: new Date().toISOString(), rssMB: Math.round(process.memoryUsage.rss() / 1048576), containerMB: cgMB, containerTotalMB: cgTotalMB, reclaimableCacheMB: cgCacheMB, running: [...active.values()].map((a) => a.label) } as any, 10); console.warn(`[lag] container memory high: ${cgMB} MB working set (${cgTotalMB} MB incl. ${cgCacheMB} MB reclaimable cache; node rss ${Math.round(process.memoryUsage.rss() / 1048576)} MB); running: ${[...active.values()].map((a) => a.label).join(", ") || "-"}`); } }).catch(() => {}); }, 15_000).unref?.();
   for (const sig of ["SIGTERM", "SIGINT"] as const) process.prependListener(sig, () => console.warn(`[lag] ${sig} received (uptime ${Math.round(process.uptime())} s); rss ${Math.round(process.memoryUsage.rss() / 1048576)} MB; container ${cgMB ?? "?"} MB; running: ${[...active.values()].map((a) => a.label).join(", ") || "-"}`));
   let lastMemWarn = 0;
   let last = performance.now();
@@ -50,7 +62,7 @@ export function startLagWatch() {
   }, 500).unref?.();
 }
 export const lagStatus = () => ({ warnOverMs: WARN_MS, since, warnings: count, maxLagMs: Math.round(maxLag), delayMs: { p50: Math.round(h.percentile(50) / 1e6), p99: Math.round(h.percentile(99) / 1e6), max: Math.round(h.max / 1e6) },
-  recentWarnings: warns.slice(-10), peakRssMB: Math.round(peakRss), containerMB: cgMB, peakContainerMB: peakCg || null, memoryWarnings: memWarns, slowJobs: slow.slice(-15).map((s) => ({ ...s, at: new Date(s.at).toISOString() })), longGc: gcs.slice(-10).map((g) => ({ ...g, at: new Date(g.at).toISOString() })) });
+  recentWarnings: warns.slice(-10), peakRssMB: Math.round(peakRss), containerMB: cgMB, containerTotalMB: cgTotalMB, reclaimableCacheMB: cgCacheMB, peakContainerMB: peakCg || null, containerNote: "containerMB = cgroup usage minus inactive (reclaimable) file cache; warn over " + CG_WARN_MB + " MB", memoryWarnings: memWarns, slowJobs: slow.slice(-15).map((s) => ({ ...s, at: new Date(s.at).toISOString() })), longGc: gcs.slice(-10).map((g) => ({ ...g, at: new Date(g.at).toISOString() })) });
 /** Oct 18 (v2): JSON.stringify in time slices. Walks plain objects/arrays two levels deep, stringifies each leaf with
  * JSON.stringify and yields to the event loop whenever ~budgetMs of work has run (was: fixed 2,000-key slices, which on the
  * 0.1 CPU plan still blocked 1-2 s per slice on names.json/creators.json). Output is byte-identical to JSON.stringify. */

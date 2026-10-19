@@ -12,6 +12,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export type Klass = "client" | "crawler" | "pinger" | "bot" | "head" | "self";
@@ -288,7 +289,7 @@ export function trafficStats(paidRoutes: string[], full = true) {
     since: daily[0]?.start ?? startedAt.slice(0, 10),
     trackingSince,
     processStartedAt: startedAt,
-    persistence: { ...persistence, durable: durableStatus, ...(durableStatus.store ? { note: `durable: restored on boot and saved every 5 min (only when changed) to the ${durableStatus.store}; local file is a fallback` } : {}) },
+    persistence: { ...persistence, durable: durableStatus, ...(durableStatus.store ? { note: `durable: each instance saves its own counts every 5 min (when changed) and on shutdown to ${durableStatus.instanceFile} in the ${durableStatus.store}; boot restores traffic.json + other instance files, a refresh 10 min after boot adds what the previous instance saved at shutdown; local file is a fallback` } : {}) },
     last24h: compact(merge(last24), paidRoutes),
     today: { date: dayKey(now), ...compact(merge(today), paidRoutes) },
   };
@@ -336,58 +337,140 @@ export function trafficStats(paidRoutes: string[], full = true) {
   };
 }
 
-// ---------- durable store (Oct 18) ----------
-// Render free has no disk, so data/traffic.json dies with every deploy/restart. When a durable store is attached (the
-// private RugRadar GitHub store, same repo as credits/watches), counts are restored on boot (added onto anything counted
-// since boot) and written back every few minutes, only when they changed. Visitor-hash sets are never persisted
-// (a visitor seen before and after a restart counts once per side).
-export type DurableStore = { name: string; load: () => Promise<any>; save: (doc: unknown) => Promise<void> };
+// ---------- durable store (Oct 18, per-instance files Oct 19) ----------
+// Render free has no disk, so data/traffic.json dies with every deploy/restart. With a durable store attached (the private
+// RugRadar GitHub store, same repo as credits/watches) each instance writes ONLY the counts it made itself to its own file
+// traffic-<instance>.json (every 5 min when changed, and on SIGTERM marked final). Two instances never write the same file,
+// so a deploy/restart overlap cannot collide. On boot: restored = traffic.json (compacted base) + every other instance file.
+// 10 min after boot (old instance gone, its final save landed) and every 6 h: fetch the remote, add whatever the other files
+// gained since boot (that is the old instance's last minutes), then fold final/stale (>2 h) files into traffic.json and
+// delete them. Visitor-hash sets are never persisted (a visitor seen before and after a restart counts once per side).
+export type DurableStore = {
+  name: string;
+  /** All traffic documents by file name (traffic.json + traffic-*.json) from the local copy. */
+  load: () => Promise<Record<string, any>>;
+  /** Refresh the local copy from the remote (optional). */
+  sync?: () => Promise<void>;
+  /** Write/delete (null) documents in one go. */
+  write: (docs: Record<string, unknown>, msg: string) => Promise<void>;
+};
+type Doc = { v: 1; savedAt: string; trackingSince: string; hourly: Bucket[]; daily: Bucket[]; rejections: Rejection[]; rejectionReasons: Record<string, number>; instance?: string; final?: boolean };
+const INSTANCE = `${(process.env.RENDER_INSTANCE_ID || os.hostname() || "local").replace(/[^\w.-]/g, "").slice(-24)}-${Date.now().toString(36)}`;
+export const OWN_FILE = `traffic-${INSTANCE}.json`;
+const BASE_FILE = "traffic.json";
+const STALE_MS = 2 * 3600e3;
 let durable: DurableStore | null = null;
 let lastDurableBody = "";
-let durableStatus: { store: string | null; restoredFrom: string | null; restoredBuckets: number; lastSavedAt: string | null; saves: number; error?: string } = { store: null, restoredFrom: null, restoredBuckets: 0, lastSavedAt: null, saves: 0 };
-function addCounts(o: RouteCounts, c: Partial<RouteCounts>) {
-  const bc = (a: ByClass, b?: Partial<ByClass>) => { if (b) for (const k of KLASSES) a[k] += Number(b[k] ?? 0) || 0; };
+let restored: Doc = emptyDoc();
+let durableStatus: { store: string | null; instanceFile: string; restoredFrom: string | null; restoredBuckets: number; restoredFiles: number; lastSavedAt: string | null; saves: number; lastRefreshAt: string | null; refreshAdded: number; compacted: number; error?: string } =
+  { store: null, instanceFile: OWN_FILE, restoredFrom: null, restoredBuckets: 0, restoredFiles: 0, lastSavedAt: null, saves: 0, lastRefreshAt: null, refreshAdded: 0, compacted: 0 };
+function emptyDoc(): Doc { return { v: 1, savedAt: "", trackingSince: "9999-12-31T00:00:00.000Z", hourly: [], daily: [], rejections: [], rejectionReasons: {} }; }
+function addCounts(o: RouteCounts, c: Partial<RouteCounts>, sign = 1) {
+  const n = (x: unknown) => sign * (Number(x ?? 0) || 0), cl = (x: number) => Math.max(0, x);
+  const bc = (a: ByClass, b?: Partial<ByClass>) => { if (b) for (const k of KLASSES) a[k] = cl(a[k] + n(b[k])); };
   bc(o.requests, c.requests); bc(o.unpaid402, c.unpaid402); bc(o.visitors, c.visitors);
-  o.paid200 += Number(c.paid200 ?? 0) || 0; o.settleFailed += Number(c.settleFailed ?? 0) || 0; o.paymentInvalid += Number(c.paymentInvalid ?? 0) || 0;
-  o.uncharged += Number(c.uncharged ?? 0) || 0; if (c.selfPaid) o.selfPaid = (o.selfPaid ?? 0) + (Number(c.selfPaid) || 0);
+  o.paid200 = cl(o.paid200 + n(c.paid200)); o.settleFailed = cl(o.settleFailed + n(c.settleFailed)); o.paymentInvalid = cl(o.paymentInvalid + n(c.paymentInvalid));
+  o.uncharged = cl(o.uncharged + n(c.uncharged)); if (c.selfPaid || o.selfPaid) o.selfPaid = cl((o.selfPaid ?? 0) + n(c.selfPaid));
 }
-/** Add saved buckets onto the live ones (exported for tests). Returns how many saved buckets were applied. */
-export function mergeSaved(j: any): number {
-  if (!j || j.v !== 1) return 0;
+/** Add (sign 1) or subtract (sign -1, floored at 0) saved buckets into a bucket list. Returns buckets touched. */
+function addBuckets(list: Bucket[], saved: unknown, keep: number, sign = 1): number {
   let n = 0;
-  for (const [list, saved, keep] of [[hourly, j.hourly, HOURS_KEPT], [daily, j.daily, DAYS_KEPT]] as const) {
-    for (const sb of Array.isArray(saved) ? saved : []) {
-      if (!sb || typeof sb.start !== "string") continue;
-      const b = bucket(list as Bucket[], sb.start, keep as number); n++;
-      for (const [r, c] of Object.entries((sb.routes ?? {}) as Record<string, Partial<RouteCounts>>)) addCounts(rc(b, r), c);
-      for (const [a, v] of Object.entries((sb.agents ?? {}) as Record<string, number>)) if (b.agents[a] !== undefined || Object.keys(b.agents).length < MAX_AGENT_KEYS) b.agents[a] = (b.agents[a] ?? 0) + (Number(v) || 0);
+  for (const sb of (Array.isArray(saved) ? saved : []) as Bucket[]) {
+    if (!sb || typeof sb.start !== "string") continue;
+    if (sign < 0 && !list.some((x) => x.start === sb.start)) continue;
+    const b = bucket(list, sb.start, keep); n++;
+    for (const [r, c] of Object.entries((sb.routes ?? {}) as Record<string, Partial<RouteCounts>>)) addCounts(rc(b, r), c, sign);
+    for (const [a, v] of Object.entries((sb.agents ?? {}) as Record<string, number>)) {
+      if (b.agents[a] === undefined && (sign < 0 || Object.keys(b.agents).length >= MAX_AGENT_KEYS)) continue;
+      b.agents[a] = Math.max(0, (b.agents[a] ?? 0) + sign * (Number(v) || 0));
     }
   }
-  if (Array.isArray(j.rejections)) rejections = [...j.rejections, ...rejections].slice(-REJECTIONS_KEPT);
+  return n;
+}
+const sortB = (l: Bucket[]) => l.sort((x, y) => (x.start < y.start ? -1 : x.start > y.start ? 1 : 0));
+/** Sum saved documents into one (pure; exported for tests). */
+export function sumDocs(docs: any[]): Doc {
+  const out = emptyDoc();
+  for (const j of docs) {
+    if (!j || j.v !== 1) continue;
+    addBuckets(out.hourly, j.hourly, HOURS_KEPT); addBuckets(out.daily, j.daily, DAYS_KEPT);
+    if (Array.isArray(j.rejections)) out.rejections.push(...j.rejections);
+    for (const [k, v] of Object.entries((j.rejectionReasons ?? {}) as Record<string, number>)) out.rejectionReasons[k] = (out.rejectionReasons[k] ?? 0) + (Number(v) || 0);
+    if (typeof j.trackingSince === "string" && j.trackingSince < out.trackingSince) out.trackingSince = j.trackingSince;
+  }
+  sortB(out.hourly); sortB(out.daily);
+  while (out.hourly.length > HOURS_KEPT) out.hourly.shift();
+  while (out.daily.length > DAYS_KEPT) out.daily.shift();
+  out.rejections = out.rejections.sort((x, y) => (x.at < y.at ? -1 : 1)).slice(-REJECTIONS_KEPT);
+  return out;
+}
+/** a minus b, floored at 0 (pure). */
+function diffDoc(a: Doc, b: Doc): Doc {
+  const out = sumDocs([a]);
+  addBuckets(out.hourly, b.hourly, HOURS_KEPT, -1); addBuckets(out.daily, b.daily, DAYS_KEPT, -1);
+  const seen = new Set(b.rejections.map((r) => JSON.stringify(r)));
+  out.rejections = out.rejections.filter((r) => !seen.has(JSON.stringify(r)));
+  for (const [k, v] of Object.entries(b.rejectionReasons)) if (out.rejectionReasons[k] !== undefined) out.rejectionReasons[k] = Math.max(0, out.rejectionReasons[k]! - v);
+  return out;
+}
+/** Add a saved document onto the live counts (exported for tests). Returns how many saved buckets were applied. */
+export function mergeSaved(j: any): number {
+  if (!j || j.v !== 1) return 0;
+  const n = addBuckets(hourly, j.hourly, HOURS_KEPT) + addBuckets(daily, j.daily, DAYS_KEPT);
+  sortB(hourly); sortB(daily);
+  if (Array.isArray(j.rejections)) rejections = [...j.rejections, ...rejections].sort((x, y) => (x.at < y.at ? -1 : 1)).slice(-REJECTIONS_KEPT);
   if (j.rejectionReasons && typeof j.rejectionReasons === "object") for (const [k, v] of Object.entries(j.rejectionReasons as Record<string, number>)) rejectionReasons[k] = (rejectionReasons[k] ?? 0) + (Number(v) || 0);
   if (typeof j.trackingSince === "string" && j.trackingSince < trackingSince) trackingSince = j.trackingSince;
   return n;
 }
-const snapshot = () => ({ v: 1, savedAt: new Date().toISOString(), trackingSince, hourly, daily, rejections, rejectionReasons });
-/** Write the counts to the durable store if they changed since the last write. Never throws. */
-export async function saveDurable(): Promise<void> {
+const snapshot = (): Doc => ({ v: 1, savedAt: new Date().toISOString(), trackingSince, hourly, daily, rejections, rejectionReasons });
+/** Counts made by this instance only (everything minus what was restored). */
+const ownDoc = (final = false): Doc => ({ ...diffDoc(snapshot(), restored), savedAt: new Date().toISOString(), trackingSince: startedAt, instance: INSTANCE, ...(final ? { final: true } : {}) });
+/** Write this instance's own counts if they changed since the last write. Never throws. */
+export async function saveDurable(final = false): Promise<void> {
   if (!durable) return;
   try {
-    const doc = snapshot(); const body = JSON.stringify({ ...doc, savedAt: "" }); // ~0.1-1 MB: one small stringify
+    const doc = ownDoc(final); const body = JSON.stringify({ ...doc, savedAt: "" });
     if (body === lastDurableBody) return;
-    await durable.save(doc); lastDurableBody = body; durableStatus.lastSavedAt = doc.savedAt; durableStatus.saves++; delete durableStatus.error;
+    await durable.write({ [OWN_FILE]: doc }, final ? "traffic stats (final)" : "traffic stats");
+    lastDurableBody = body; durableStatus.lastSavedAt = doc.savedAt; durableStatus.saves++; delete durableStatus.error;
   } catch (e) { durableStatus.error = String((e as Error).message ?? e).replace(/\s+/g, " ").slice(0, 120); }
 }
-/** Attach the durable store: restore once, then save every `everyMs` (default 5 min). */
-export async function attachDurable(store: DurableStore, everyMs = 5 * 60_000): Promise<void> {
+const others = (docs: Record<string, any>) => Object.entries(docs).filter(([n]) => n !== OWN_FILE);
+/** Pick up what other instances saved since boot, then fold finished instance files into traffic.json. Never throws. */
+export async function refreshDurable(now = Date.now()): Promise<void> {
+  if (!durable) return;
+  try {
+    await durable.sync?.();
+    const docs = await durable.load();
+    const fresh = sumDocs(others(docs).map(([, d]) => d));
+    const delta = diffDoc(fresh, restored);
+    durableStatus.refreshAdded += mergeSaved(delta) ? sumUnpaid(delta) : 0;
+    restored = fresh;
+    durableStatus.lastRefreshAt = new Date(now).toISOString();
+    const done = others(docs).filter(([n, d]) => n !== BASE_FILE && d && (d.final || !(Date.parse(d.savedAt) > now - STALE_MS)));
+    if (done.length) {
+      const base = sumDocs([docs[BASE_FILE], ...done.map(([, d]) => d)]);
+      await durable.write({ [BASE_FILE]: { ...base, savedAt: new Date(now).toISOString() }, ...Object.fromEntries(done.map(([n]) => [n, null])) }, `traffic: fold ${done.length} finished instance file(s)`);
+      durableStatus.compacted += done.length;
+    }
+  } catch (e) { durableStatus.error = `refresh: ${String((e as Error).message ?? e).replace(/\s+/g, " ").slice(0, 100)}`; }
+}
+const sumUnpaid = (d: Doc) => d.daily.reduce((s, b) => s + Object.values(b.routes).reduce((t, c) => t + c.requests.client + c.requests.crawler + c.requests.pinger + c.requests.bot + c.requests.head, 0), 0);
+/** Attach the durable store: restore once, save every `everyMs` (default 5 min), refresh 10 min after boot and every 6 h. */
+export async function attachDurable(store: DurableStore, everyMs = 5 * 60_000, refreshFirstMs = 10 * 60_000, refreshEveryMs = 6 * 3600e3): Promise<void> {
   if (durable) return;
   durable = store; durableStatus.store = store.name;
   try {
-    const j = await store.load();
-    durableStatus.restoredBuckets = mergeSaved(j);
-    if (j?.savedAt) durableStatus.restoredFrom = j.savedAt;
+    const docs = await store.load();
+    const os_ = others(docs);
+    restored = sumDocs(os_.map(([, d]) => d));
+    durableStatus.restoredBuckets = mergeSaved(restored);
+    durableStatus.restoredFiles = os_.length;
+    durableStatus.restoredFrom = os_.map(([, d]) => d?.savedAt).filter(Boolean).sort().pop() ?? null;
   } catch (e) { durableStatus.error = `restore failed: ${String((e as Error).message ?? e).slice(0, 100)}`; }
   const t = setInterval(() => void saveDurable(), everyMs); t.unref();
+  const r1 = setTimeout(() => { void refreshDurable(); const r = setInterval(() => void refreshDurable(), refreshEveryMs); r.unref(); }, refreshFirstMs); r1.unref();
 }
 
 // ---------- persistence ----------
@@ -443,7 +526,7 @@ export function startTraffic(): void {
     const onExit = () => {
       save();
       console.warn("[traffic] shutdown signal: saving counts");
-      Promise.race([saveDurable(), new Promise((r) => setTimeout(r, 8000))]).finally(() => process.exit(0));
+      Promise.race([saveDurable(true), new Promise((r) => setTimeout(r, 8000))]).finally(() => process.exit(0));
     };
     process.once("SIGTERM", onExit);
     process.once("SIGINT", onExit);
