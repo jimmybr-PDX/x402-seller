@@ -119,9 +119,25 @@ export async function marketOf(mint: string) {
   return { failed: false as const, pairs, liquidityUsd: pairs.length ? liq : null, priceUsd: best?.priceUsd ? Number(best.priceUsd) : null, createdAt: pairs.length ? Math.min(...pairs.map((p) => p.pairCreatedAt ?? Infinity)) : null };
 }
 
-async function jupiter(mint: string): Promise<any | null> { return cached(`jup:${mint}`, () => retry(() => jupiterOnce(mint), (v) => v == null)); }
-async function jupiterOnce(mint: string): Promise<any | null> {
-  try { const r = await fetch(`https://lite-api.jup.ag/tokens/v2/search?query=${mint}`, { signal: AbortSignal.timeout(4000) }); const j = r.ok ? ((await r.json()) as any[]) : []; return j.find((t) => t.id === mint) ?? null; } catch { return null; }
+// Jupiter token info. undefined = Jupiter did not answer (rate limit / timeout), null = answered, token not listed.
+export const jupStat = { ok: 0, notListed: 0, failed: 0, lastStatus: null as number | string | null };
+let jupLogAt = 0;
+async function jupiter(mint: string): Promise<any | null | undefined> {
+  return cached(`jup:${mint}`, async () => {
+    let v = await jupiterOnce(mint);
+    for (const wait of [250]) { if (v !== undefined) break; await new Promise((r) => setTimeout(r, wait)); v = await jupiterOnce(mint); }
+    return v;
+  }, (v) => v != null);
+}
+export async function jupiterOnce(mint: string): Promise<any | null | undefined> {
+  const fail = (why: number | string) => { jupStat.failed++; jupStat.lastStatus = why; if (Date.now() - jupLogAt > 60_000) { jupLogAt = Date.now(); console.warn(`[jupiter] token lookup failed: ${why}`); } return undefined; };
+  try {
+    const r = await fetch(`https://lite-api.jup.ag/tokens/v2/search?query=${mint}`, { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return fail(r.status);
+    const j = (await r.json()) as any[]; const t = Array.isArray(j) ? j.find((x) => x.id === mint) ?? null : null;
+    if (t) jupStat.ok++; else jupStat.notListed++;
+    return t;
+  } catch (e: any) { return fail(e?.name ?? "error"); }
 }
 async function oldestTx(addr: string, pages = 6): Promise<{ sig: string; time: number | null; complete: boolean } | null> {
   let before: string | undefined; let last: any = null;
@@ -175,7 +191,7 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   const jup = await jupP;
   // DexScreener often has no pair for pump.fun bonding-curve tokens; Jupiter's liquidity covers them.
   const liqOf = (m: { liquidityUsd: number | null; failed: boolean }) => (!m.liquidityUsd && Number(jup?.liquidity) > 0 ? Number(jup.liquidity) : m.liquidityUsd);
-  const extraP = timed("buyerSignals", marketP.then((m) => solanaExtra(mint, { jup, mintInfo: info, dsPairs: m.pairs, supply, decimals, liquidityUsd: liqOf(m) })).catch(() => null));
+  const extraP = timed("buyerSignals", marketP.then((m) => solanaExtra(mint, { jup, jupFailed: jup === undefined, dsAnswered: !m.failed && !(m as any).source, mintInfo: info, dsPairs: m.pairs, supply, decimals, liquidityUsd: liqOf(m) })).catch(() => null));
   const fast = !!(jup?.dev && jup.createdAt && jup.audit?.topHoldersPercentage != null);
   const oldestP = fast ? null : cached(`oldest:${mint}`, () => oldestTx(mint, 2), (v: any) => !!v).catch(() => null);
   const [largest, market, oldest] = await Promise.all([

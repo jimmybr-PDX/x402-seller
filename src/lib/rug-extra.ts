@@ -63,7 +63,7 @@ export async function pumpLaunch(mint: string, dev: string | null, supply: numbe
   return out;
 }
 
-export async function solanaExtra(mint: string, o: { jup: any; mintInfo: any; dsPairs: any[]; supply: number; decimals: number | null; liquidityUsd: number | null }): Promise<Extra> {
+export async function solanaExtra(mint: string, o: { jup: any; jupFailed?: boolean; dsAnswered?: boolean; mintInfo: any; dsPairs: any[]; supply: number; decimals: number | null; liquidityUsd: number | null }): Promise<Extra> {
   const t0 = Date.now(); const { jup } = o; const unknown: string[] = []; const checks: Extra["checks"] = [];
   const add = (check: string, points: number, detail: string) => checks.push({ check, points, detail });
   const isPump = /pump/i.test(jup?.launchpad ?? "") || mint.endsWith("pump");
@@ -113,12 +113,20 @@ export async function solanaExtra(mint: string, o: { jup: any; mintInfo: any; ds
   if (Number(st.liquidityChange) <= -50) add("liquidity_drop", 15, `Liquidity fell ${Math.abs(Number(st.liquidityChange)).toFixed(0)}% in 24h (liquidity-pull high-risk pattern).`);
   if (s.organicLabel === "low" && Number(s.volume24hUsd) > 10_000) add("inorganic_volume", 5, "Jupiter rates trading as low-organic (bot-like volume).");
   // Socials (Jupiter + DexScreener info)
-  const dsInfo = o.dsPairs.find((p) => p.info)?.info ?? {};
+  // If Jupiter has no links and DexScreener had no info, ask GeckoTerminal. Never call a coin link-less just because sources were down.
+  let dsInfo = o.dsPairs.find((p) => p.info)?.info ?? null;
+  const jupLinks = !!(jup && (jup.twitter || jup.website || jup.telegram || jup.discord));
+  let gtAnswered = false;
+  if (!jupLinks && !dsInfo && (o.jupFailed === true || o.dsAnswered !== true)) { const g = await geckoInfo(mint); if (g !== undefined) { gtAnswered = true; dsInfo = g; } }
+  dsInfo = dsInfo ?? {};
   const socials = new Set<string>([...(jup?.twitter ? ["twitter"] : []), ...(jup?.website ? ["website"] : []), ...(jup?.telegram ? ["telegram"] : []), ...(jup?.discord ? ["discord"] : []),
     ...(dsInfo.socials ?? []).map((x: any) => String(x.type)), ...((dsInfo.websites ?? []).length ? ["website"] : [])]);
   s.socials = [...socials]; s.twitter = jup?.twitter ?? (dsInfo.socials ?? []).find((x: any) => x.type === "twitter")?.url ?? null; s.website = jup?.website ?? dsInfo.websites?.[0]?.url ?? null;
-  s.socialLinks = socialLinks(jup, dsInfo);
-  if (!socials.size) add("no_socials", 5, "No website or social links listed.");
+  const links = socialLinks(jup, dsInfo);
+  const socialsKnown = links.length > 0 || socials.size > 0 || (o.jupFailed !== true && jup != null) || o.dsAnswered === true || gtAnswered;
+  s.socialLinks = socialsKnown ? links : null;
+  if (!socialsKnown) unknown.push("socials (link sources not available)");
+  else if (!socials.size) add("no_socials", 5, "No website or social links listed.");
   // LP status: pump.fun bonding curve has no LP to pull; PumpSwap graduation burns LP by protocol design.
   const dexes = [...new Set(o.dsPairs.map((p) => p.dexId))];
   s.lpStatus = dexes.includes("pumpfun") && !dexes.includes("pumpswap") ? "pump.fun bonding curve (no LP tokens to pull)" : dexes.includes("pumpswap") ? "PumpSwap pool (pump.fun burns graduation LP by design)" : dexes.length ? "not verified" : null;
@@ -150,6 +158,21 @@ export async function solanaExtra(mint: string, o: { jup: any; mintInfo: any; ds
 }
 
 /** All creator-set social links (Jupiter + DexScreener), http(s) only, max 200 chars each, deduped, max 12. */
+// GeckoTerminal token info in DexScreener "info" shape. undefined = no answer; 404 = answered, not listed (empty).
+export async function geckoInfo(mint: string): Promise<{ socials: { type: string; url: string }[]; websites: { url: string }[] } | undefined> {
+  try {
+    const r = await fetch(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/info`, { signal: AbortSignal.timeout(1200), headers: { accept: "application/json" } });
+    if (r.status === 404) return { socials: [], websites: [] };
+    if (!r.ok) return undefined;
+    const a = ((await r.json()) as any)?.data?.attributes ?? {};
+    const h = (v: unknown) => (typeof v === "string" && /^[A-Za-z0-9_]{1,40}$/.test(v) ? v : null);
+    const socials: { type: string; url: string }[] = [];
+    if (h(a.twitter_handle)) socials.push({ type: "twitter", url: `https://x.com/${a.twitter_handle}` });
+    if (h(a.telegram_handle)) socials.push({ type: "telegram", url: `https://t.me/${a.telegram_handle}` });
+    if (typeof a.discord_url === "string") socials.push({ type: "discord", url: a.discord_url });
+    return { socials, websites: (Array.isArray(a.websites) ? a.websites : []).filter((u: unknown) => typeof u === "string").map((url: string) => ({ url })) };
+  } catch { return undefined; }
+}
 export function socialLinks(jup: any, dsInfo: any): { type: string; url: string }[] {
   const raw: { type: string; url: unknown }[] = [
     { type: "twitter", url: jup?.twitter }, { type: "website", url: jup?.website }, { type: "telegram", url: jup?.telegram }, { type: "discord", url: jup?.discord },
