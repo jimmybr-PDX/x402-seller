@@ -43,10 +43,38 @@ export function startLagWatch() {
 }
 export const lagStatus = () => ({ warnOverMs: WARN_MS, since, warnings: count, maxLagMs: Math.round(maxLag), delayMs: { p50: Math.round(h.percentile(50) / 1e6), p99: Math.round(h.percentile(99) / 1e6), max: Math.round(h.max / 1e6) },
   recentWarnings: warns.slice(-10), peakRssMB: Math.round(peakRss), memoryWarnings: memWarns, slowJobs: slow.slice(-15).map((s) => ({ ...s, at: new Date(s.at).toISOString() })), longGc: gcs.slice(-10).map((g) => ({ ...g, at: new Date(g.at).toISOString() })) });
-/** JSON.stringify for big plain objects/arrays in slices, yielding between them so the event loop keeps answering. */
-export async function stringifyChunked(v: unknown, slice = 2000): Promise<string> {
-  const y = () => new Promise<void>((r) => setImmediate(r)); const parts: string[] = [];
-  if (Array.isArray(v)) { parts.push("["); for (let i = 0; i < v.length; i += slice) { parts.push((i ? "," : "") + v.slice(i, i + slice).map((x) => JSON.stringify(x) ?? "null").join(",")); await y(); } parts.push("]"); return parts.join(""); }
-  if (v && typeof v === "object") { const ks = Object.keys(v as object); parts.push("{"); for (let i = 0; i < ks.length; i += slice) { const s = ks.slice(i, i + slice).map((k) => { const x = JSON.stringify((v as any)[k]); return x === undefined ? null : JSON.stringify(k) + ":" + x; }).filter(Boolean).join(","); if (s) parts.push((parts.length > 1 ? "," : "") + s); await y(); } parts.push("}"); return parts.join(""); }
-  return JSON.stringify(v);
+/** Oct 18 (v2): JSON.stringify in time slices. Walks plain objects/arrays two levels deep, stringifies each leaf with
+ * JSON.stringify and yields to the event loop whenever ~budgetMs of work has run (was: fixed 2,000-key slices, which on the
+ * 0.1 CPU plan still blocked 1-2 s per slice on names.json/creators.json). Output is byte-identical to JSON.stringify. */
+export async function stringifyParts(v: unknown, budgetMs = 8): Promise<string[]> {
+  const parts: string[] = []; let t0 = performance.now();
+  const tick = async () => { if (performance.now() - t0 >= budgetMs) { await new Promise<void>((r) => setImmediate(r)); t0 = performance.now(); } };
+  const plain = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x) && typeof (x as any).toJSON !== "function" && (Object.getPrototypeOf(x) === Object.prototype || Object.getPrototypeOf(x) === null);
+  const walk = async (x: unknown, depth: number, inArray: boolean): Promise<void> => {
+    if (depth < 2 && Array.isArray(x)) {
+      parts.push("[");
+      for (let i = 0; i < x.length; i++) { if (i) parts.push(","); await walk(x[i], depth + 1, true); await tick(); }
+      parts.push("]"); return;
+    }
+    if (depth < 2 && plain(x)) {
+      parts.push("{"); let first = true;
+      for (const k of Object.keys(x)) {
+        const val = x[k]; if (val === undefined || typeof val === "function" || typeof val === "symbol") continue;
+        parts.push((first ? "" : ",") + JSON.stringify(k) + ":"); first = false; await walk(val, depth + 1, false); await tick();
+      }
+      parts.push("}"); return;
+    }
+    const s = JSON.stringify(x); parts.push(s === undefined ? (inArray ? "null" : "null") : s);
+  };
+  if (v === undefined || typeof v === "function") return [];
+  await walk(v, 0, false); return parts;
+}
+/** Back-compat wrapper (the second argument used to be a slice size; it is now ignored). */
+export async function stringifyChunked(v: unknown, _slice = 2000): Promise<string> {
+  const parts = await stringifyParts(v); return parts.length ? parts.join("") : (undefined as unknown as string);
+}
+/** Await between steps of a long loop: yields only once ~budgetMs has passed since the last yield. */
+export function yielder(budgetMs = 8) {
+  let t0 = performance.now();
+  return async () => { if (performance.now() - t0 >= budgetMs) { await new Promise<void>((r) => setImmediate(r)); t0 = performance.now(); } };
 }

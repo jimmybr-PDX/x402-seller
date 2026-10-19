@@ -12,7 +12,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { gzip as gzipCb } from "node:zlib";
 import { createHash } from "node:crypto";
-import { track, stringifyChunked } from "../lag.js";
+import { track, stringifyParts, yielder } from "../lag.js";
 const gzipAsync = promisify(gzipCb); // libuv threadpool, off the event loop
 const run = promisify(execFile);
 
@@ -49,7 +49,7 @@ async function saveStateNow(state: unknown, msg: string) {
   if (mode === "unavailable" || busy) return;
   busy = true;
   try {
-    await fs.promises.writeFile(path.join(dir, "data", "state.json"), JSON.stringify(state) + "\n");
+    await writeParts(path.join(dir, "data", "state.json"), [...(await stringifyParts(state)), "\n"]); // Oct 18: time-sliced (was one blocking JSON.stringify)
     if (mode !== "github") return;
     await git("add", "data");
     const { stdout } = await git("status", "--porcelain");
@@ -62,14 +62,27 @@ async function saveStateNow(state: unknown, msg: string) {
   finally { busy = false; }
 }
 
+/** Write string parts to a file in ~256 KB batches through one async file handle (tmp file + rename, so readers never see half a file). */
+async function writeParts(file: string, parts: string[]) {
+  const tmp = `${file}.tmp`; const fh = await fs.promises.open(tmp, "w");
+  try {
+    let buf: string[] = [], n = 0;
+    for (const p of parts) { buf.push(p); n += p.length; if (n >= 262_144) { await fh.write(buf.join("")); buf = []; n = 0; } }
+    if (buf.length) await fh.write(buf.join(""));
+  } finally { await fh.close(); }
+  await fs.promises.rename(tmp, file);
+}
 export function loadFile<T>(name: string, fallback: T): T { try { return JSON.parse(fs.readFileSync(path.join(dir, "data", name), "utf8")); } catch { return fallback; } }
 const lastHash = new Map<string, string>();
 /** Oct 18: async, stringified in slices (creators/names are several MB), and skipped when nothing changed (less git work too). */
 export async function writeFile(name: string, obj: unknown) {
   if (mode === "unavailable") return;
   await track(`paper-store write ${name}`, async () => {
-    const body = (await stringifyChunked(obj)) + "\n"; const hsh = createHash("sha1").update(body).digest("hex");
-    if (lastHash.get(name) === hsh) return; await fs.promises.writeFile(path.join(dir, "data", name), body); lastHash.set(name, hsh);
+    // Oct 18 (v2): stringify in time slices, hash part by part with yields, write the parts in batches (no multi-MB join/hash in one go)
+    const parts = [...(await stringifyParts(obj)), "\n"]; const h = createHash("sha1"); const y = yielder();
+    for (const p of parts) { h.update(p); await y(); }
+    const hsh = h.digest("hex");
+    if (lastHash.get(name) === hsh) return; await writeParts(path.join(dir, "data", name), parts); lastHash.set(name, hsh);
   });
 }
 /** Oct 18: append one JSON line to a data/ file (small, append-only logs). */

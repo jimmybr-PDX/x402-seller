@@ -13,3 +13,9 @@ test("track/trackSync record slow jobs", async () => {
   await track("wait", () => new Promise((r) => setTimeout(r, 210)));
   const s = lagStatus(); assert.ok(s.slowJobs.some((j) => j.label === "busy" && j.sync)); assert.ok(s.slowJobs.some((j) => j.label === "wait" && !j.sync));
 });
+test("stringifyParts (time-sliced) is byte-identical to JSON.stringify on nested data", async () => {
+  const { stringifyParts } = await import("../src/lib/lag.js");
+  const v = { open: [{ id: 1, at: new Date(0), path: [[1, 2]], f: () => 1, u: undefined }, undefined, null, "s"], m: new Map([["a", 1]]), n: { x: { y: [1, { z: undefined }] } }, e: [], o: {}, s: "\u2028q\"", num: NaN };
+  assert.equal((await stringifyParts(v, 0)).join(""), JSON.stringify(v));
+  assert.equal((await stringifyParts([undefined, () => 1], 0)).join(""), JSON.stringify([undefined, () => 1]));
+});

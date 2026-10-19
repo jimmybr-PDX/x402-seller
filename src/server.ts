@@ -29,7 +29,7 @@ import { registerPaper } from "./lib/paper/page.js";
 import { createCdpFacilitatorClient, getCdpDefaultSchemes, getCdpExtensionRegistrations } from "@coinbase/cdp-sdk/x402";
 import { HTTPFacilitatorClient, x402HTTPResourceServer, x402ResourceServer } from "@x402/core/server";
 import { paymentMiddlewareFromHTTPServer } from "@x402/express";
-import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
+import { declareDiscoveryExtension, bazaarResourceServerExtension, validateBazaarRouteExtensions } from "@x402/extensions/bazaar";
 import { BUILDER_CODE, declareBuilderCodeExtension } from "@x402/extensions/builder-code";
 import express, { type Request, type Response, type NextFunction } from "express";
 import fs from "node:fs";
@@ -1350,7 +1350,18 @@ async function main() {
     console.error("[facilitator] CDP /supported failed after 6 tries: CDP networks now settle via PayAI (no CDP Bazaar credit) until the next restart");
   const payToAddr = PAY_TO_EVM;
   const payToSolana = NETWORKS.some((n) => NETWORK_INFO[n]!.family === "svm") ? PAY_TO_SVM : null;
-  app.use(paymentMiddlewareFromHTTPServer(server as any));
+  // Oct 18: the boot freeze (7.4 s blocked loop right at listen, 0.1 CPU) was @x402/express validating every route's Bazaar
+  // schema synchronously, building a fresh Ajv (meta-schema compile) per route in one go. We register the Bazaar extension
+  // ourselves, hand the middleware a view whose `routes` has no Bazaar entries (so it skips that loop), and run the same
+  // validation one route at a time with yields, 2 minutes after boot. Payment handling is unchanged (same server object).
+  if (!resourceServer.hasExtension("bazaar")) resourceServer.registerExtension(bazaarResourceServerExtension as any);
+  const mwView = new Proxy(server as any, { get: (t, k) => { if (k === "routes") return {}; const v = Reflect.get(t, k, t); return typeof v === "function" ? v.bind(t) : v; } });
+  app.use(paymentMiddlewareFromHTTPServer(mwView));
+  setTimeout(() => {
+    void track("bazaar route validation", async () => {
+      for (const [pattern, cfg] of Object.entries(resolvedRoutes as Record<string, any>)) { validateBazaarRouteExtensions({ [pattern]: cfg } as any); await new Promise((r) => setImmediate(r)); }
+    }).catch(() => {});
+  }, Number(process.env.BAZAAR_VALIDATE_DELAY_MS ?? 120_000)).unref?.();
 
   // ---------- free discovery surface ----------
   const catalog = () =>

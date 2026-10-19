@@ -11,7 +11,8 @@ import zlib from "node:zlib";
 
 const inflateRaw = promisify(zlib.inflateRaw); // libuv threadpool: keeps the event loop free
 import { USER_AGENT } from "./net.js";
-import { track } from "./lag.js";
+import { track, yielder } from "./lag.js";
+const TITLE_TAG = Buffer.from("<PAGE_TITLE>");
 
 export type GkgItem = { title: string; url: string; source: string; t: number; lc: string };
 
@@ -105,21 +106,21 @@ async function loadFile(ts: string): Promise<number> {
     return 0;
   }
   if (res.status !== 200) throw new Error(`gkg ${ts} HTTP ${res.status}`);
-  const text = (await unzipSingle(res.body)).toString("utf8");
+  const raw = await unzipSingle(res.body);
   const fresh: GkgItem[] = [];
-  // Scan with indexOf instead of split(): rows are ~27 tab-separated columns of up to 100 KB, and we
-  // only need columns 1, 3, 4 and the PAGE_TITLE tag. Yield to the event loop every 1,000 rows so a
-  // small (0.1 CPU) instance keeps answering requests while a file is parsed.
-  // Oct 18: yield every ~256 KB scanned (was every 1,000 rows = up to ~100 MB) and search inside the line only (a row with
-  // no PAGE_TITLE used to scan ahead into later rows). On the 0.1 CPU plan 100 ms of CPU is ~1 s of wall time.
+  // Oct 18 (v2): scan the decompressed Buffer line by line (no 10-30 MB toString in one blocking step) and decode only rows
+  // that carry a PAGE_TITLE; yield to the event loop every ~8 ms of work (was every 256 KB, which on the 0.1 CPU plan still
+  // blocked 1-2 s per GDELT file).
+  const y = yielder();
   let pos = 0;
-  let lastYield = 0;
-  while (pos < text.length) {
-    let end = text.indexOf("\n", pos);
-    if (end < 0) end = text.length;
-    const line = text.slice(pos, end);
+  while (pos < raw.length) {
+    let end = raw.indexOf(10, pos);
+    if (end < 0) end = raw.length;
+    const row = raw.subarray(pos, end);
     pos = end + 1;
-    if (pos - lastYield > 262_144) { lastYield = pos; await new Promise((r) => setImmediate(r)); }
+    await y();
+    if (row.indexOf(TITLE_TAG) < 0) continue;
+    const line = row.toString("utf8");
     const tStart = line.indexOf("<PAGE_TITLE>");
     if (tStart < 0) continue;
     const tEnd = line.indexOf("</PAGE_TITLE>", tStart);
@@ -142,7 +143,7 @@ async function loadFile(ts: string): Promise<number> {
     fresh.push({ title: flat(title), url: flat(url), source: flat(cols[3] || new URL(url).hostname.replace(/^www\./, "")), t: tsToMs(cols[1] || ts), lc: flat(lcWords(title)) });
   }
   loaded.add(ts);
-  items.push(...fresh);
+  for (const it of fresh) items.push(it); // Oct 18: no spread of tens of thousands of args
   if (!newestTs || ts > newestTs) newestTs = ts;
   return fresh.length;
 }
