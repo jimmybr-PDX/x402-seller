@@ -343,7 +343,7 @@ async function x10Check(only?: Pos) {
   for (const p of ps) {
     const price = px[p.mint]; if (price) { x10Mark(p, price); bump("inflow_x10.fastMarks"); }
     const holdS = (Date.now() - p.entryAt) / 1000; const why = p.forceExit ? null : x10Reason(p, holdS);
-    if (why) { p.forceExit = why; (p as any).x10TriggerS = Math.round(holdS * 10) / 10; dirty = true; await manageOnce(p); }
+    if (why) { p.forceExit = why; (p as any).x10TriggerS = Math.round(holdS * 10) / 10; (p as any).x10TriggerAt = Date.now(); dirty = true; await manageOnce(p); }
   }
 }
 const x10Tick = () => x10Check();
@@ -396,10 +396,11 @@ async function manage(p: Pos) {
   else if (r <= cfg.sl) reason = "stop_loss";
   else if (holdS >= cfg.maxHoldS) reason = "time_stop";
   if (!reason) return;
+  const xd = x10Go ? ((p as any).x10Diag ??= { tries: 0, last: "" }) : null; if (xd) { xd.tries++; xd.last = "quote"; } // Oct 18: where does a decided x10 exit wait?
   const q = await quote(p.mint, SOL, p.tokens);
   const fees = BASE_FEE + cfg.prio + cfg.tip;
   if (!q || q.out === 0n) {
-    if (!noRouteFlag && q == null) { bump("quoteErrors"); return; } // API error/rate limit: retry, do not count as unsellable
+    if (!noRouteFlag && q == null) { bump("quoteErrors"); if (xd) xd.last = "quote_error"; return; } // API error/rate limit: retry, do not count as unsellable
     const direct = await curveSell(p.mint, BigInt(p.tokens));
     if (direct != null && direct > 0n) { await sleep(execLatencyMs()); return close(p, reason + "_via_curve", direct, fees); }
     p.noRouteSince ??= Date.now();
@@ -407,7 +408,7 @@ async function manage(p: Pos) {
     return;
   }
   p.noRouteSince = null;
-  if (rng(`${p.id}:sell:${p.sellFails}`) < cfg.sellFail) { p.sellFails++; bump(`${p.strat}.sellFailed`); p.costLamports += fees; dirty = true; return; } // retry next tick at the new price
+  if (rng(`${p.id}:sell:${p.sellFails}`) < cfg.sellFail) { if (xd) xd.last = "sim_sell_fail"; p.sellFails++; bump(`${p.strat}.sellFailed`); p.costLamports += fees; dirty = true; return; } // retry next tick at the new price
   await sleep(execLatencyMs());
   const q2 = await quote(p.mint, SOL, p.tokens);
   const out = q2 && q2.out < q.out ? q2.out : q.out;
@@ -465,7 +466,7 @@ async function close(p: Pos, reason: string, outLamports: bigint, fees: number) 
   const feesPaid = { pumpFunSol: +pumpFee.toFixed(6), networkAndPrioritySol: +fixed.toFixed(6), slippageSol: +slip.toFixed(6), totalSol: +(pumpFee + fixed + slip).toFixed(6) };
   const breakEvenPct = +(((fixed + slip) / size + PUMP * 2 + PUMP * PUMP) * 100).toFixed(2);
   const t = { id: p.id, strat: p.strat, mint: p.mint, symbol: p.symbol, result: pnl > 0 ? "win" : "loss", exitReason: reason,
-    entryAt: new Date(p.entryAt).toISOString(), exitAt: new Date().toISOString(), holdS: Math.round((Date.now() - p.entryAt) / 1000), entryAgeS: p.entryAgeS, latencyMs: p.latencyMs, ...((p as any).x10TriggerS != null ? { x10TriggerS: (p as any).x10TriggerS } : {}),
+    entryAt: new Date(p.entryAt).toISOString(), exitAt: new Date().toISOString(), holdS: Math.round((Date.now() - p.entryAt) / 1000), entryAgeS: p.entryAgeS, latencyMs: p.latencyMs, ...((p as any).x10TriggerS != null ? { x10TriggerS: (p as any).x10TriggerS, x10DecideToCloseMs: Date.now() - (p as any).x10TriggerAt, x10Diag: (p as any).x10Diag ?? null } : {}),
     sizeSol: p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */, sizeMult: p.sizeMult ?? 1, costSol: +(p.costLamports / LAMPORTS).toFixed(6), proceedsSol: +(proceeds / LAMPORTS).toFixed(6), pnlSol: +pnl.toFixed(6), roi: +(pnl / (p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */)).toFixed(4),
     entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, priv: p.priv ?? null, named: p.named ?? null, dataSource: (p as any).dataSource ?? null, trust: trustFor(p.mint, p.family), coinFactoryFunder: coinFactoryOf(p.family, p.named), feesPaid, breakEvenPct, ...markFields(p) };
   followCheckpoints(p);
