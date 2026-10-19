@@ -1261,9 +1261,35 @@ async function main() {
   // Facilitators: CDP first so it wins every network it supports (Bazaar indexing);
   // PayAI picks up the rest (Avalanche, Sei). First facilitator listing a network wins.
   const needPayai = NETWORKS.some((n) => NETWORK_INFO[n]!.facilitator === "payai");
+  // The SDK's getSupported only retries on HTTP 429; a cold-start network blip ("TypeError: fetch failed") made
+  // initialize() skip CDP entirely, so PayAI silently took over Base/Polygon/Arbitrum/Solana (no CDP Bazaar credit).
+  // Retry network errors with backoff (~31s worst case) and say which facilitator failed.
+  const supportedStatus: Record<string, "ok" | "failed"> = {};
+  const withSupportedRetry = <T extends { getSupported: () => Promise<any> }>(name: string, client: T): T => {
+    const orig = client.getSupported.bind(client);
+    client.getSupported = async () => {
+      let last: unknown;
+      for (let attempt = 1; attempt <= 6; attempt++) {
+        try {
+          const r = await orig();
+          if (attempt > 1) console.log(`[facilitator] ${name} /supported ok on attempt ${attempt}`);
+          supportedStatus[name] = "ok";
+          return r;
+        } catch (e: any) {
+          last = e;
+          const why = e?.cause?.code || e?.cause?.message || "";
+          console.warn(`[facilitator] ${name} /supported attempt ${attempt}/6 failed: ${e}${why ? ` (${why})` : ""}`);
+          if (attempt < 6) await new Promise((r) => setTimeout(r, 1000 * 2 ** (attempt - 1)));
+        }
+      }
+      supportedStatus[name] = "failed";
+      throw last;
+    };
+    return client;
+  };
   const facilitators = [
-    createCdpFacilitatorClient({ apiKeyId: process.env.CDP_API_KEY_ID, apiKeySecret: process.env.CDP_API_KEY_SECRET }),
-    ...(needPayai ? [new HTTPFacilitatorClient({ url: PAYAI_FACILITATOR_URL })] : []),
+    withSupportedRetry("cdp", createCdpFacilitatorClient({ apiKeyId: process.env.CDP_API_KEY_ID, apiKeySecret: process.env.CDP_API_KEY_SECRET })),
+    ...(needPayai ? [withSupportedRetry("payai", new HTTPFacilitatorClient({ url: PAYAI_FACILITATOR_URL }))] : []),
   ];
   const resourceServer = new x402ResourceServer(facilitators);
   for (const scheme of getCdpDefaultSchemes()) resourceServer.register(scheme.network as any, scheme.server as any);
@@ -1317,6 +1343,8 @@ async function main() {
   );
   const server = new x402HTTPResourceServer(resourceServer, resolvedRoutes as any);
   await server.initialize(); // fetches /supported from each facilitator and fails fast on an unsupported network
+  if (supportedStatus.cdp === "failed")
+    console.error("[facilitator] CDP /supported failed after 6 tries: CDP networks now settle via PayAI (no CDP Bazaar credit) until the next restart");
   const payToAddr = PAY_TO_EVM;
   const payToSolana = NETWORKS.some((n) => NETWORK_INFO[n]!.family === "svm") ? PAY_TO_SVM : null;
   app.use(paymentMiddlewareFromHTTPServer(server as any));
