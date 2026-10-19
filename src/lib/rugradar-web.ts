@@ -238,6 +238,7 @@ details.fold{background:var(--card);border:1px solid var(--line);border-radius:1
 code{background:#0E1528;padding:2px 6px;border-radius:6px;font-size:13px;word-break:break-all}pre{background:#0E1528;color:#9fdcf9;padding:10px;border-radius:8px;overflow-x:auto;font-size:12px}
 .agents table{width:100%;border-collapse:collapse;font-size:13px}.agents td{padding:5px 4px;border-bottom:1px solid var(--line);vertical-align:top}.agents td:first-child code{white-space:nowrap;word-break:normal}
 footer{color:var(--mut);font-size:12px;padding:20px 0 40px}
+.soon{color:var(--mut);font-size:14px;cursor:default;user-select:none}
 @media(max-width:899px){.go{padding:11px 14px;font-size:15px}.buyline{margin-top:4px;font-size:11px}.grid{gap:10px}.quiet{margin-top:10px}details.fold{margin:10px 0;padding:12px 14px}}`;
 
 
@@ -322,6 +323,7 @@ function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings
  const wc=el('div','wcards');ws.slice(0,3).forEach((w,i)=>wc.append(card(w,j,DESK&&i===0)));if(ws.length)c.append(wc);
  if(j.report==='limited'&&j.checks){const n=Number(j.hiddenWarnings)||0;if(n>0)c.append(el('span','tease','+'+n+' more warning'+(n>1?'s':'')+' in the full report'));c.append(lockedPanel())}
  else if(ws.length>3){const b=el('button','tease','+'+(ws.length-3)+' more warnings');b.type='button';b.addEventListener('click',()=>{ws.slice(3).forEach(w=>wc.append(card(w,j,false)));b.remove()});c.append(b)}
+ const mo=el('details','quiet');mo.id='more';mo.append(el('summary',null,'More'));const ws2=el('div','sub soon');ws2.append(el('span',null,'\u{1F514} Watch token: coming soon'));mo.append(ws2);c.append(mo);
  c.append(el('div','disc','Danger warnings only. Not a guarantee, not financial advice.'));out.append(c)}
 function waitCard(){out.textContent='';const c=el('div','card res'),v=el('div','verdict'),t=el('div');t.append(el('div','vt','Checking\u2026'),el('div','vl','Usually a few seconds.'));v.append(gauge('wait',0),t);v.querySelector('i').firstChild.textContent='\u2026';c.append(v);out.append(c)}
 function msgCard(text,lock,note){out.textContent='';const c=el('div','card res');c.append(el('p',null,text));if(lock)c.append(lockedPanel(note));out.append(c)}
