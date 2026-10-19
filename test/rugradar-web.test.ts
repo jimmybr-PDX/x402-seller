@@ -69,8 +69,8 @@ test("buy box: Phantom/Solflare packs live in #credits (one copy), SOL default, 
   const { srv, base } = await start();
   try {
     const h = await (await fetch(`${base}/rugradar`)).text();
-    const credits = h.slice(h.indexOf('<h2 id="credits">'), h.indexOf('<h2 id="credits">') + 400);
-    assert.match(credits, /<div id="wpayHome"><\/div>.*x402 client/s, "pack box sits in Buy credits, x402 text kept for agents");
+    const credits = h.slice(h.indexOf('<h2 id="credits">'), h.indexOf('<h2 id="credits">') + 1000);
+    assert.match(credits, /Buy credits: results ~2x faster.*measured ~1\.8x faster.*<div id="wpayHome"><\/div>.*x402 client/s, "pack box sits in Buy credits, x402 text kept for agents");
     assert.match(h, /document\.getElementById\('wpayHome'\)\.append\(walletPacks\(\)\)/); assert.equal((h.match(/append\(walletPacks\(\)\)/g) ?? []).length, 1, "only one pack box (no duplicate ids)");
     assert.match(h, /\[\['sol','SOL'\],\['usdc','USDC'\]\]/, "SOL first = default, USDC selectable");
     assert.match(h, /id="keybox" hidden/); assert.match(h, /localStorage\.setItem\('rr_key',k\)/); assert.match(h, /bt\('Show'/); assert.match(h, /bt\('Copy'/); assert.match(h, /bt\('Forget'/); assert.match(h, /KS\.set\(c\.j\.key\)/);

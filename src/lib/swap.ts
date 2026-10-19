@@ -46,9 +46,9 @@ export function swapClientJs(c: SwapCfg) {
   return `${SWAP_RULE_JS}
 const SWAP=${cfg};let JUPP=null;
 function jupLoad(){if(!JUPP)JUPP=new Promise((ok,no)=>{const c=document.createElement('style');c.textContent='#jupiter-plugin-instance{position:fixed;top:0;left:0;width:100%;z-index:1000}';document.head.append(c);const s=document.createElement('script');s.src=SWAP.src;s.async=true;s.onload=()=>ok(window.Jupiter);s.onerror=()=>{JUPP=null;no(new Error('load'))};document.head.append(s)});return JUPP}
-function swapBox(j){if(!swapOk(j))return null;const b=el('div','wpay');b.id='swapbox';b.append(el('b',null,'Buy this token'));
- const bt=el('button','btn','Swap SOL \\u2192 this token on Jupiter');bt.type='button';const st=el('small',null,'');
+function swapBox(j){if(!swapOk(j))return null;const b=el('div',null);b.id='swapbox';
+ const bt=el('button','btn go','Buy this token \\u2197');bt.type='button';bt.title=SWAP.label;const st=el('small',null,'');
  bt.addEventListener('click',()=>{st.textContent='Opening Jupiter...';jupLoad().then(J=>{st.textContent='';J.init({displayMode:'modal',formProps:{initialInputMint:SWAP.sol,initialOutputMint:j.token,fixedMint:j.token,referralAccount:SWAP.ref,referralFee:SWAP.bps}})}).catch(()=>{st.textContent='Could not load Jupiter. Try again.'})});
- b.append(el('p',null,SWAP.label+' You sign the swap in your own wallet; RugRadar never holds your funds. A low score is not a guarantee or advice: only buy what you can afford to lose.'),bt,st);
+ b.append(bt,el('div','buyline','Opens swap in your wallet \\u00b7 '+(SWAP.bps/100)+'% fee \\u00b7 not advice'),st);
  jupLoad().catch(()=>{});return b}`;
 }
