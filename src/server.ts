@@ -1016,7 +1016,7 @@ async function main() {
         // Oct 18: agent-job-first wording for the "token safety" / "is this token safe" / "token risk score" searches, where this
         // route was missing from Bazaar's top 20 (rug-check already ranks #1 for rug queries). Oct 19: "Solana token safety" back
         // in the name/description/tags (dropping it lost that search, #7 -> out of top 20).
-        `Is this token safe to buy? Solana token safety check and token risk score for agents: call before buying, swapping or recommending an unfamiliar token. Risk score 0-100, low/medium/high verdict and plain reasons: mint/freeze authority, liquidity, top holders, dev sold %, snipers, bundles, live sell test, creator rug history. Solana (pump.fun) by default; Base, BNB, Ethereum, Arbitrum via chain=. RugRadar heuristic, may be wrong; not financial advice. ${perCall(RUG_PRICE)}`,
+        `Is this token safe to buy? Solana token safety check and token risk score for agents: call before buying, swapping or recommending a new token. Score 0-100, low/medium/high verdict and plain reasons: mint/freeze authority, liquidity, top holders, dev sold %, snipers, bundles, live sell test, creator rug history. Solana (pump.fun) default; Base/BNB/Ethereum/Arbitrum via chain=. RugRadar heuristic, may be wrong; not financial advice. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "Is This Token Safe? Solana Token Safety Score (RugRadar)",
       tags: ["token safety", "is this token safe", "solana token safety", "token risk score", "memecoin safety", "token security scan"],
