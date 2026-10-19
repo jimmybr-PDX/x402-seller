@@ -38,8 +38,9 @@ export async function initStore(): Promise<void> {
   } catch (e) { mode = "unavailable"; lastError = String((e as Error).message ?? e).replace(/\s+/g, " ").slice(0, 160); }
 }
 export function loadState<T>(fallback: T): T { try { return JSON.parse(fs.readFileSync(path.join(dir, "data", "state.json"), "utf8")); } catch { return fallback; } }
-export function loadTrades(): any[] {
-  try { return fs.readFileSync(path.join(dir, "data", "trades.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; }
+/** Oct 18: parses only the last `tail` lines (was the whole 11+ MB file, then sliced: seconds of blocked loop on 0.1 CPU). */
+export function loadTrades(tail = Infinity): any[] {
+  try { const ls = fs.readFileSync(path.join(dir, "data", "trades.jsonl"), "utf8").split("\n").filter(Boolean); return ls.slice(Number.isFinite(tail) ? -tail : 0).map((l) => JSON.parse(l)); } catch { return []; }
 }
 export function appendTrade(t: unknown) { if (mode === "unavailable") return; fs.appendFileSync(path.join(dir, "data", "trades.jsonl"), JSON.stringify(t) + "\n"); }
 let busy = false;

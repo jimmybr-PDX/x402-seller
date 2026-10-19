@@ -683,14 +683,15 @@ export async function startPaper(opts: { rugCheck: (m: string) => Promise<any>; 
   rugCheckFn = opts.rugCheck; if (opts.flagged) flagged = opts.flagged;
   await initStore();
   state = loadState<State>(state); (state as any).cpStartedAt ??= new Date().toISOString(); (state as any).csStartedAt ??= new Date().toISOString(); (state as any).inflowStartedAt ??= new Date().toISOString(); state.open ??= []; state.counters ??= {}; state.startedAt ??= new Date().toISOString();
-  closed = loadTrades().slice(-2000); // Oct 16: 2,000 in memory (memory limit); full history stays in the repo
+  closed = loadTrades(2000); await new Promise((r) => setImmediate(r)); // Oct 16: 2,000 in memory (memory limit); full history stays in the repo
   await loadWinners();
   startWs();
   if (process.env.PAPER_FORCE_CHAIN === "1") setOn(true); // test switch
   startLagWatch();
   const loop = async (fn: () => Promise<unknown>, ms: number, label = fn.name || "paper loop") => { for (;;) { await new Promise((r) => setImmediate(r)); try { await lagTrack(label, fn); } catch (e) { lastErr = String((e as Error).message ?? e).slice(0, 160); } await sleep(ms); } };
   process.once("SIGTERM", () => { flushHistory(launchMeta, true).catch(() => {}); saveState(state, "paper: flush on shutdown").catch(() => {}); });
-  loadHelius((state as any).heliusDaily); sc = loadFile<Sc[]>("scorecard.json", []); nlog = loadFile("names.json", {}); creatorMints = loadFile("creators.json", {}); devStats = loadFile("devstats.json", {});
+  const tick = () => new Promise((r) => setTimeout(r, 50)); // Oct 18: let the loop (health checks) breathe between the multi-MB parses
+  loadHelius((state as any).heliusDaily); sc = loadFile<Sc[]>("scorecard.json", []); await tick(); nlog = loadFile("names.json", {}); await tick(); creatorMints = loadFile("creators.json", {}); await tick(); devStats = loadFile("devstats.json", {});
   if (!sc.length) for (const t of closed) if (t.rug?.riskScore != null && !sc.some((x) => x.mint === t.mint)) sc.push({ mint: t.mint, symbol: t.symbol, checkedAt: Date.parse(t.entryAt), score: t.rug.riskScore, level: t.rug.riskLevel, priceSol: t.entryPriceSol, liqUsd: t.rug.facts?.liquidityUsd ?? null, backfilled: true, after: {} });
   loop(scRecheck, 60_000);
   loop(() => marketTick(() => ({ chainTradesSeenTotal: chainStat.tradesSeen, seenCoins: seen.size, openPositions: state.open.length, feeds: activeFeed().active })), 60_000, "market snapshot"); // Oct 18: market snapshot

@@ -110,29 +110,31 @@ async function loadFile(ts: string): Promise<number> {
   // Scan with indexOf instead of split(): rows are ~27 tab-separated columns of up to 100 KB, and we
   // only need columns 1, 3, 4 and the PAGE_TITLE tag. Yield to the event loop every 1,000 rows so a
   // small (0.1 CPU) instance keeps answering requests while a file is parsed.
+  // Oct 18: yield every ~256 KB scanned (was every 1,000 rows = up to ~100 MB) and search inside the line only (a row with
+  // no PAGE_TITLE used to scan ahead into later rows). On the 0.1 CPU plan 100 ms of CPU is ~1 s of wall time.
   let pos = 0;
-  let rows = 0;
+  let lastYield = 0;
   while (pos < text.length) {
     let end = text.indexOf("\n", pos);
     if (end < 0) end = text.length;
-    const lineStart = pos;
+    const line = text.slice(pos, end);
     pos = end + 1;
-    if (++rows % 1000 === 0) await new Promise((r) => setImmediate(r));
-    const tStart = text.indexOf("<PAGE_TITLE>", lineStart);
-    if (tStart < 0 || tStart > end) continue;
-    const tEnd = text.indexOf("</PAGE_TITLE>", tStart);
-    if (tEnd < 0 || tEnd > end) continue;
+    if (pos - lastYield > 262_144) { lastYield = pos; await new Promise((r) => setImmediate(r)); }
+    const tStart = line.indexOf("<PAGE_TITLE>");
+    if (tStart < 0) continue;
+    const tEnd = line.indexOf("</PAGE_TITLE>", tStart);
+    if (tEnd < 0) continue;
     const cols: string[] = [];
-    let c = lineStart;
+    let c = 0;
     for (let k = 0; k < 5; k++) {
-      const tab = text.indexOf("\t", c);
-      if (tab < 0 || tab > end) break;
-      cols.push(text.slice(c, tab));
+      const tab = line.indexOf("\t", c);
+      if (tab < 0) break;
+      cols.push(line.slice(c, tab));
       c = tab + 1;
     }
     const url = cols[4] ?? "";
     if (!/^https?:\/\//.test(url)) continue;
-    const title = decode(text.slice(tStart + 12, tEnd));
+    const title = decode(line.slice(tStart + 12, tEnd));
     if (title.length < 20 || title.length > 300 || title.split(" ").length < 4 || SPAM.test(title) || SPAM.test(url)) continue;
     const key = url.replace(/^https?:\/\/(www\.)?/, "").replace(/[?#].*$/, "").toLowerCase();
     if (seenUrls.has(key)) continue;
