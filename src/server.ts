@@ -23,6 +23,7 @@ import { RUG_EDGE_SHORT } from "./lib/rug-extra.js";
  */
 
 import { startPaper } from "./lib/paper/engine.js";
+import { swapConfig } from "./lib/swap.js";
 import { registerPaper } from "./lib/paper/page.js";
 import { createCdpFacilitatorClient, getCdpDefaultSchemes, getCdpExtensionRegistrations } from "@coinbase/cdp-sdk/x402";
 import { HTTPFacilitatorClient, x402HTTPResourceServer, x402ResourceServer } from "@x402/core/server";
@@ -1510,7 +1511,7 @@ async function main() {
   app.get("/watch", watchPaidHandler(watchDeps, decodeB64Json));
   const watchTimer = setInterval(() => { watcher.tick().catch(() => {}); }, 30_000); watchTimer.unref?.();
   process.once("SIGTERM", () => { watcher.flush().catch(() => {}); });
-  registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), spend, refund, watch: { create: (k, a) => createWithCredits(watchDeps, k, a), config: () => watchConfig(watchDeps) } });
+  registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), spend, refund, watch: { create: (k, a) => createWithCredits(watchDeps, k, a), config: () => watchConfig(watchDeps) }, swap: swapConfig() });
   app.get("/icon.png", (_req, res) => {
     if (!ICON_PNG) return res.redirect(302, "/icon.svg");
     res.type("image/png").set("Cache-Control", "public, max-age=86400").send(ICON_PNG);

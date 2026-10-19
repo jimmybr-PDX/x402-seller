@@ -3,6 +3,7 @@
  * and cookie), sitemap.xml, and an MCP server (streamable HTTP, JSON responses) at /mcp.
  */
 import { RUG_EDGE } from "./rug-extra.js";
+import { swapClientJs, type SwapCfg } from "./swap.js";
 import type { Express, Request, Response } from "express";
 import { randomBytes } from "node:crypto";
 
@@ -12,6 +13,8 @@ export type WebDeps = {
   spend: (k: string) => Promise<number | null>; refund: (k: string) => Promise<void>;
   /** RugRadar Watch + Alert (optional): create a watch paid with credits; config for prices/destinations. */
   watch?: { create: (key: string, args: any) => Promise<any>; config: () => any };
+  /** Jupiter "Buy this token" button; off unless swapConfig() says enabled. */
+  swap?: SwapCfg;
 };
 export const FREE_PER_VISITOR = 1;
 export const FREE_COPY = "1 free limited check per visitor, then credits for the full report.";
@@ -165,7 +168,7 @@ function keyUI(){const b=document.getElementById('keybox'),k=KS.get();b.textCont
  const cp=bt('Copy',()=>{const done=()=>{cp.textContent='Copied';setTimeout(()=>cp.textContent='Copy',1500)};if(navigator.clipboard)navigator.clipboard.writeText(k).then(done,()=>{on=true;c.textContent=k});else{on=true;c.textContent=k}});
  const fg=bt('Forget',()=>{if(!confirm('Forget the saved credit key on this device? Copy it first if it still has credits.'))return;['key','wkey'].forEach(i=>{const x=document.getElementById(i);if(x&&x.value===k)x.value=''});KS.del()});
  b.append(el('span',null,'Saved credit key: '),c,sh,cp,fg);const i=document.getElementById('key');if(!i.value)i.value=k}
-keyUI();document.getElementById('wpayHome').append(walletPacks());
+keyUI();document.getElementById('wpayHome').append(walletPacks());${d.swap?.enabled ? "\n" + swapClientJs(d.swap) : ""}
 document.getElementById('tok').addEventListener('input',e=>{if(e.target.value.trim().startsWith('0x')&&document.getElementById('chain').value==='solana')document.getElementById('chain').value='base'});
 f.addEventListener('submit',async e=>{e.preventDefault();out.textContent='Checking...';go.disabled=true;
  const t=document.getElementById('tok').value.trim(),c=document.getElementById('chain').value,k=document.getElementById('key').value.trim();
@@ -178,7 +181,7 @@ f.addEventListener('submit',async e=>{e.preventDefault();out.textContent='Checki
  const tb=el('table');F.forEach(([n,k])=>{let v=k?B[k]:(B.buys24h!=null?B.buys24h+' / '+B.sells24h:null);if(v==null||v==='')return;if(Array.isArray(v))v=v.length?v.join(', '):'none';if(typeof v==='boolean')v=v?'yes':'NO';if(typeof v==='number'&&v>=1000)v=Math.round(v).toLocaleString();const tr=el('tr');tr.append(el('td',null,n),el('td',null,String(v)));tb.append(tr)});if(tb.childNodes.length)out.append(tb);
  const ul=el('ul');(j.report==='limited'&&j.checks&&j.checks.length?j.checks.map(c=>c.detail):j.reasons&&j.reasons.length?j.reasons:['No major high-risk patterns found.']).forEach(x=>ul.append(el('li',null,x)));out.append(ul);
  if(j.unknownSignals&&j.unknownSignals.length)out.append(el('p',null,'Unknown (scored neutral): '+j.unknownSignals.join(', ')));
- out.append(el('small',null,j.disclaimer||${JSON.stringify(DISCLAIMER)}));
+ out.append(el('small',null,j.disclaimer||${JSON.stringify(DISCLAIMER)}));${d.swap?.enabled ? "\n if(typeof swapBox==='function'&&r.ok&&j.token===t){const sb=swapBox(j);if(sb)out.append(sb)}" : ""}
  if(j.lockedSignals){out.append(el('p',null,'Limited free report: basic score, mint/freeze authority, top holders, age and liquidity.'));out.append(lockedPanel(j.lockedSignals,j.unlockOffer))}if(j.free_checks_left!=null)q.textContent=j.free_checks_left>0?j.free_checks_left+' free limited check(s) left.':'Free check used. Credits unlock the full report.';if(j.credits_remaining!=null){q.textContent=j.credits_remaining+' credit(s) left on your key.';if(k&&KS.get()!==k)KS.set(k)}
  }catch(err){out.textContent='Network error, try again.'}finally{go.disabled=false}});
 </script></main></body></html>`;
