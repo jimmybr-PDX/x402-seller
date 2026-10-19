@@ -12,9 +12,15 @@ test("inflow_fx25: inflow_v1 cost model and exits, own test entry; existing conf
   const c = cfgOf("inflow_fx25"); assert.equal(c.size, CFG.inflow.size); assert.equal(c.sl, CFG.inflow.sl); assert.equal(c.maxHoldS, CFG.inflow.maxHoldS); assert.equal(c.tp, CFG.inflow.tp);
   assert.deepEqual(FX25, { afterS: 25, bePct: 3.5 }); assert.deepEqual(cfgOf("inflow_v1"), CFG.inflow); assert.deepEqual(CHECKPOINTS, [10, 20, 30, 60]);
 });
-test("free-feed mode: on until the end date, env can force it", () => {
-  delete process.env.PAPER_FREE_FEED;
-  assert.equal(ff.freeFeedOn(Date.parse("2026-10-19T00:00:00Z")), true); assert.equal(ff.freeFeedOn(Date.parse("2026-10-24T00:00:00Z")), false);
+test("free-feed mode: permanent by default, env can force off/on, optional until date", () => {
+  delete process.env.PAPER_FREE_FEED; delete process.env.PAPER_FREE_FEED_UNTIL;
+  assert.equal(ff.freeFeedOn(Date.parse("2026-10-19T00:00:00Z")), true);
+  assert.equal(ff.freeFeedOn(Date.parse("2026-11-19T00:00:00Z")), true);
+  assert.equal(ff.freeFeedStatus().until, "permanent");
+  process.env.PAPER_FREE_FEED_UNTIL = "2026-10-23T23:00:00Z";
+  assert.equal(ff.freeFeedOn(Date.parse("2026-10-19T00:00:00Z")), true);
+  assert.equal(ff.freeFeedOn(Date.parse("2026-10-24T00:00:00Z")), false);
+  delete process.env.PAPER_FREE_FEED_UNTIL;
   process.env.PAPER_FREE_FEED = "0"; assert.equal(ff.freeFeedOn(Date.parse("2026-10-19T00:00:00Z")), false);
   process.env.PAPER_FREE_FEED = "1"; assert.equal(ff.freeFeedOn(Date.parse("2026-11-19T00:00:00Z")), true); delete process.env.PAPER_FREE_FEED;
 });
