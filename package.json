@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/server.ts",
-    "start": "tsx src/server.ts",
+    "start": "node --import tsx src/server.ts",
     "report-week": "tsx scripts/report-week.ts",
     "rank-check": "node scripts/rank-check.mjs",
     "test": "node --import tsx --test test/*.test.ts",

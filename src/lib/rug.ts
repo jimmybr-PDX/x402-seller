@@ -336,9 +336,16 @@ async function rugCheckUncached(mintRaw: string, chainRaw = "solana") {
   const sg = (ex?.signals ?? {}) as any;
   if (sg.jupiterVerified && Number(sg.organicScore) >= 90 && Number(sg.marketCapUsd) >= 1e9) {
     for (const x of reasons) if (["mint_authority", "freeze_authority"].includes(x.check) && x.points > 0) { x.points = Math.round(x.points / 4); x.detail += " (down-weighted: established, verified token)"; }
+
     reasons.push({ check: "established", points: 0, detail: `Established: Jupiter-verified, $${Math.round(sg.marketCapUsd / 1e6).toLocaleString("en-US")}M market cap, organic score ${sg.organicScore}.` });
   }
-  const score = Math.min(100, reasons.reduce((a, x) => a + x.points, 0)); const level: "low" | "medium" | "high" = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
+  // Established (Jupiter-verified, organic >= 60, $100M+ cap, 90+ days): creator history, LP burn and mutable metadata say nothing
+  // about such a token (BONK/WIF deployers left dead test mints behind; JUP's old standard pool is not LP-burned).
+  if (isEstablished(sg, f.ageHours)) for (const x of reasons) if (["deployer_history", "known_pattern", "shared_funder", "metadata_mutable", "lp_unlocked"].includes(x.check) && x.points > 0) { x.points = 0; x.detail += " (not scored: established, verified token)"; }
+  let score = Math.min(100, reasons.reduce((a, x) => a + x.points, 0));
+  // Dead token: market data answered, no pool/liquidity left, no live pump.fun curve, and over a week old -> always high.
+  if (isDeadToken(f, sg)) { const pts = Math.max(5, 60 - score); reasons.unshift({ check: "dead_token", points: pts, detail: "Dead token: no liquidity left and no way to sell, over a week old (rated high regardless of other checks)." }); score = Math.min(100, score + pts); }
+  const level: "low" | "medium" | "high" = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
   const unknownSignals = [...base.unknownSignals, ...(ex ? ex.unknown : ["buyer signals"])]; const confidence = base.confidence;
   const { extra: _x, ...factsOnly } = f;
   if (level === "low") logValidation(mint, score, f.priceUsd, f.liquidityUsd);
@@ -349,6 +356,13 @@ async function rugCheckUncached(mintRaw: string, chainRaw = "solana") {
     facts: { ...factsOnly, top1Pct: f.top1Pct && +f.top1Pct.toFixed(2), top10Pct: f.top10Pct && +f.top10Pct.toFixed(2), ageHours: f.ageHours && +f.ageHours.toFixed(1) },
     disclaimer: DISCLAIMER, method: "public Solana RPC (mint account; creator/funder transactions) + keyless Jupiter token API (holders, dev wallet, dev launches/graduations, age) + keyless DexScreener (pools, liquidity, socials) + Jupiter sell quote (can you sell?) + pump.fun public trades (dev sold, snipers, launch-block bundles) + token-2022 extensions; RPC fallbacks when Jupiter lacks data", generatedAt: new Date().toISOString(),
   };
+}
+
+export function isEstablished(sg: any, ageHours: number | null): boolean {
+  return !!sg?.jupiterVerified && Number(sg.organicScore) >= 60 && Number(sg.marketCapUsd) >= 1e8 && ageHours != null && ageHours >= 90 * 24;
+}
+export function isDeadToken(f: { marketUnknown?: boolean; liquidityUsd: number | null; ageHours: number | null }, sg: any): boolean {
+  return !f.marketUnknown && (f.liquidityUsd == null || f.liquidityUsd < 100) && sg?.sellableOnPumpCurve !== true && !String(sg?.canSell ?? "").startsWith("yes") && f.ageHours != null && f.ageHours >= 24 * 7;
 }
 
 /** Number of populated buyer-facing data fields (nested, excluding nulls), for honest comparisons. */

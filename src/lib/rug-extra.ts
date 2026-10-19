@@ -4,6 +4,7 @@ const SOL = "So11111111111111111111111111111111111111112";
 const UA = { "user-agent": "Mozilla/5.0 (RugRadar)", accept: "application/json" };
 const j = (u: string, ms = 3500) => fetch(u, { headers: UA, signal: AbortSignal.timeout(ms) }).then((r) => (r.ok ? r.json() : null)).catch(() => null) as Promise<any>;
 const r2 = (n: number | null | undefined, d = 2) => (n == null || !isFinite(Number(n)) ? null : +Number(n).toFixed(d));
+import { goplusSol, goplusChecks } from "./goplus-sol.js";
 export type Extra = { signals: Record<string, unknown>; checks: { check: string; points: number; detail: string }[]; unknown: string[]; ms: number };
 
 // Repeat snipers: wallets this service has itself seen sniping (first 10 s) 3+ different coins. In-memory, free, no lookups.
@@ -69,6 +70,7 @@ export async function solanaExtra(mint: string, o: { jup: any; mintInfo: any; ds
   // Sell check: ask Jupiter for a sell quote of ~$100 worth (or 0.1% of supply).
   const price = Number(jup?.usdPrice ?? 0);
   const units = price > 0 ? Math.floor((100 / price) * 10 ** (o.decimals ?? 0)) : Math.floor(o.supply * 0.001 * 10 ** (o.decimals ?? 0));
+  const gpP = goplusSol(mint); // non-blocking: raced below against a short budget
   const [quote, pump, curve] = await Promise.all([
     units > 0 && mint !== SOL ? fetch(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${mint}&outputMint=${SOL}&amount=${units}&slippageBps=1000`, { headers: UA, signal: AbortSignal.timeout(3500) }).then((r) => r.json()).catch(() => null) : Promise.resolve(null),
     isPump ? pumpLaunch(mint, jup?.dev ?? null, o.supply).catch(() => null) : Promise.resolve(null),
@@ -119,6 +121,14 @@ export async function solanaExtra(mint: string, o: { jup: any; mintInfo: any; ds
   // LP status: pump.fun bonding curve has no LP to pull; PumpSwap graduation burns LP by protocol design.
   const dexes = [...new Set(o.dsPairs.map((p) => p.dexId))];
   s.lpStatus = dexes.includes("pumpfun") && !dexes.includes("pumpswap") ? "pump.fun bonding curve (no LP tokens to pull)" : dexes.includes("pumpswap") ? "PumpSwap pool (pump.fun burns graduation LP by design)" : dexes.length ? "not verified" : null;
+  // GoPlus (keyless): LP burn %, closable mint, balance-changing authority, mutable metadata
+  const gp = await Promise.race([gpP, new Promise<"t">((r) => setTimeout(() => r("t"), Number(process.env.GOPLUS_SOL_WAIT_MS ?? 1200)).unref?.())]);
+  if (gp === "t" || gp == null) unknown.push("LP burn / closable / balance authority (GoPlus not available)");
+  else {
+    Object.assign(s, { closable: gp.closable, balanceMutableAuthority: gp.balanceMutable, metadataMutable: s.metadataMutable === true || gp.metadataMutable,
+      lpBurnPct: gp.pools.filter((p) => p.lpBurnPct != null).map((p) => ({ dex: p.dex, tvlUsd: Math.round(p.tvlUsd), burnPct: p.lpBurnPct })).slice(0, 5) });
+    checks.push(...goplusChecks(gp));
+  }
   // pump.fun launch: dev sold, snipers, same-slot bundles
   if (pump) {
     Object.assign(s, { devSoldPctOfBought: pump.devSoldPctOfBought, devSells: pump.devSells, sniperSupplyPct10s: pump.sniperSupplyPct10s ?? null, sniperWallets10s: pump.sniperWallets10s ?? null,
