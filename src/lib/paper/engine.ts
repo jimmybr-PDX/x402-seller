@@ -452,6 +452,7 @@ function privFor(mint: string, createdMs: number): Promise<Priv> {
 }
 function familyFor(mint: string) { const c = seen.get(mint); return c?.creator ? familyOf(c.creator, c.createdMs, famCtx) : null; }
 async function close(p: Pos, reason: string, outLamports: bigint, fees: number) {
+  const soldAt = Date.now(); // Oct 18: the sell happens now; exitAt/holdS were stamped after the up-to-90 s wait for the RugRadar snapshot below
   state.open = state.open.filter((x) => x !== p); pin(p.mint, false); (p as any).dataSource = isOn() ? "solana_backup" : "pump.fun";
   const pr = pendingRug.get(p.id); // trade log must carry RugRadar's snapshot taken at buy time
   if (pr) await Promise.race([pr, sleep(90_000)]);
@@ -466,7 +467,7 @@ async function close(p: Pos, reason: string, outLamports: bigint, fees: number) 
   const feesPaid = { pumpFunSol: +pumpFee.toFixed(6), networkAndPrioritySol: +fixed.toFixed(6), slippageSol: +slip.toFixed(6), totalSol: +(pumpFee + fixed + slip).toFixed(6) };
   const breakEvenPct = +(((fixed + slip) / size + PUMP * 2 + PUMP * PUMP) * 100).toFixed(2);
   const t = { id: p.id, strat: p.strat, mint: p.mint, symbol: p.symbol, result: pnl > 0 ? "win" : "loss", exitReason: reason,
-    entryAt: new Date(p.entryAt).toISOString(), exitAt: new Date().toISOString(), holdS: Math.round((Date.now() - p.entryAt) / 1000), entryAgeS: p.entryAgeS, latencyMs: p.latencyMs, ...((p as any).x10TriggerS != null ? { x10TriggerS: (p as any).x10TriggerS, x10DecideToCloseMs: Date.now() - (p as any).x10TriggerAt, x10Diag: (p as any).x10Diag ?? null } : {}),
+    entryAt: new Date(p.entryAt).toISOString(), exitAt: new Date(soldAt).toISOString(), holdS: Math.round((soldAt - p.entryAt) / 1000), entryAgeS: p.entryAgeS, latencyMs: p.latencyMs, ...((p as any).x10TriggerS != null ? { x10TriggerS: (p as any).x10TriggerS, x10DecideToCloseMs: soldAt - (p as any).x10TriggerAt, x10Diag: (p as any).x10Diag ?? null } : {}),
     sizeSol: p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */, sizeMult: p.sizeMult ?? 1, costSol: +(p.costLamports / LAMPORTS).toFixed(6), proceedsSol: +(proceeds / LAMPORTS).toFixed(6), pnlSol: +pnl.toFixed(6), roi: +(pnl / (p.sizeSol ?? 0.5 /* positions opened before sizes were stored were 0.5 SOL */)).toFixed(4),
     entryPriceSol: p.entryPriceSol, exitPriceSol: Number(outLamports) / LAMPORTS / (Number(p.tokens) / 1e6), peakMarkRoi: +p.peakRoi.toFixed(3), peakAfterS: p.peakAt ? Math.round((p.peakAt - p.entryAt) / 1000) : null, exitMarkRoi: +p.lastMarkRoi.toFixed(3), sellFails: p.sellFails, signals: p.signals, rug: p.rug, family: p.family ?? null, priv: p.priv ?? null, named: p.named ?? null, dataSource: (p as any).dataSource ?? null, trust: trustFor(p.mint, p.family), coinFactoryFunder: coinFactoryOf(p.family, p.named), feesPaid, breakEvenPct, ...markFields(p) };
   followCheckpoints(p);
