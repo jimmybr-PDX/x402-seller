@@ -4,6 +4,7 @@ import { solanaExtra, evmExtra, buyerSummary, type Extra } from "./rug-extra.js"
  * (public Solana RPC + keyless DexScreener API). Automated heuristic, may be wrong. Not financial advice.
  */
 import fs from "node:fs";
+import { jupFetch } from "./jup-gate.js";
 import path from "node:path";
 import { rpc, SolanaInputError } from "./solana.js";
 
@@ -24,7 +25,7 @@ export function flagDeployer(w: string, dead: number, launches: number) {
 }
 
 export type Facts = {
-  mint: string; decimals: number | null; supply: number | null;
+  jupiterMissing?: boolean; mint: string; decimals: number | null; supply: number | null;
   mintAuthority: string | null; freezeAuthority: string | null; token2022: boolean;
   top1Pct: number | null; top10Pct: number | null;
   liquidityUsd: number | null; priceUsd: number | null; pairs: number; lpNote: string | null;
@@ -125,14 +126,15 @@ let jupLogAt = 0;
 async function jupiter(mint: string): Promise<any | null | undefined> {
   return cached(`jup:${mint}`, async () => {
     let v = await jupiterOnce(mint);
-    for (const wait of [250]) { if (v !== undefined) break; await new Promise((r) => setTimeout(r, wait)); v = await jupiterOnce(mint); }
+    for (const wait of [300]) { if (v !== undefined) break; await new Promise((r) => setTimeout(r, wait)); v = await jupiterOnce(mint); }
     return v;
   }, (v) => v != null);
 }
 export async function jupiterOnce(mint: string): Promise<any | null | undefined> {
   const fail = (why: number | string) => { jupStat.failed++; jupStat.lastStatus = why; if (Date.now() - jupLogAt > 60_000) { jupLogAt = Date.now(); console.warn(`[jupiter] token lookup failed: ${why}`); } return undefined; };
   try {
-    const r = await fetch(`https://lite-api.jup.ag/tokens/v2/search?query=${mint}`, { signal: AbortSignal.timeout(4000) });
+    const r = await jupFetch(`https://lite-api.jup.ag/tokens/v2/search?query=${mint}`, { signal: AbortSignal.timeout(4000) });
+    if (!r) return undefined; // background work yielded Jupiter to people's checks
     if (!r.ok) return fail(r.status);
     const j = (await r.json()) as any[]; const t = Array.isArray(j) ? j.find((x) => x.id === mint) ?? null : null;
     if (t) jupStat.ok++; else jupStat.notListed++;
@@ -264,7 +266,7 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   const ex = await within(extraP, left(1900));
   const extra = ex === TIMEOUT ? null : ex;
   if (ex === TIMEOUT) unknown.push("buyer signals (not available: over time budget)");
-  return { extra, mint, decimals, supply, mintAuthority: info.mintAuthority ?? null, freezeAuthority: info.freezeAuthority ?? null, token2022: acct.value.owner !== "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+  return { extra, jupiterMissing: jup === undefined, mint, decimals, supply, mintAuthority: info.mintAuthority ?? null, freezeAuthority: info.freezeAuthority ?? null, token2022: acct.value.owner !== "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
     top1Pct, top10Pct, liquidityUsd: liqOf(market),  priceUsd: market.priceUsd, pairs: market.pairs.length,
     timingsMs: { ...timingsMs, total: Date.now() - t0 }, marketUnknown: market.failed, holderSource, holderCount: jup?.holderCount ?? null, launchpad: jup?.launchpad ?? null,
     lpNote: market.pairs.length ? `${market.pairs.length} pool(s) on ${[...new Set(market.pairs.map((p: any) => p.dexId))].join(", ")}; LP lock/burn status not verified` : null,
@@ -351,8 +353,8 @@ export async function rugCheck(mintRaw: string, chainRaw = "solana", opts: { noC
   const hit = cache.get(ck);
   if (!opts.noCache && hit && Date.now() - hit.at < CACHE_MS) return { ...hit.v, cached: true };
   if (opts.noCache) { bypass = true; try { const v = await rugCheckUncached(mintRaw, chainRaw); return { ...v, cached: false }; } finally { bypass = false; } }
-  const v = await rugCheckUncached(mintRaw, chainRaw);
-  cache.set(ck, { at: Date.now(), v });
+  const v: any = await rugCheckUncached(mintRaw, chainRaw);
+  if (!v?.facts?.jupiterMissing) cache.set(ck, { at: Date.now(), v });
   if (cache.size > 500) cache.delete(cache.keys().next().value!);
   return { ...v, cached: false };
 }

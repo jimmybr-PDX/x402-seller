@@ -7,6 +7,7 @@
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { jupFetch } from "../jup-gate.js";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 const loopLag = monitorEventLoopDelay({ resolution: 20 }); loopLag.enable();
 import { getProgramDerivedAddress, getAddressEncoder, getAddressDecoder, address } from "@solana/kit";
@@ -108,7 +109,7 @@ let noRouteFlag = false;
 /** Jupiter quote. null = no fill; noRouteFlag tells a genuine NO_ROUTES_FOUND apart from a rate limit / outage. */
 async function quote(input: string, output: string, amount: string | number): Promise<{ out: bigint; impact: number } | null> {
   noRouteFlag = false;
-  const r = await fetch(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${input}&outputMint=${output}&amount=${amount}&slippageBps=2000`, { headers: UA, signal: AbortSignal.timeout(5000) }).catch(() => null);
+  const r = await jupFetch(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${input}&outputMint=${output}&amount=${amount}&slippageBps=2000`, { headers: UA, signal: AbortSignal.timeout(5000) }).catch(() => null);
   const q: any = r ? await r.json().catch(() => null) : null;
   if (q && /NO_ROUTE|COULD_NOT_FIND/i.test(String(q.errorCode ?? q.error ?? ""))) noRouteFlag = true;
   if (!q?.outAmount) { // Oct 16: Jupiter gave nothing (not a genuine no-route) and the Solana backup is on -> price against the bonding curve

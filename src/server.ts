@@ -24,6 +24,8 @@ import { RUG_EDGE_SHORT } from "./lib/rug-extra.js";
 
 import { startLagWatch, track } from "./lib/lag.js";
 import { startPaper } from "./lib/paper/engine.js";
+import { background as jupBackground, jupGateStat } from "./lib/jup-gate.js";
+import { jupStat } from "./lib/rug.js";
 import { swapConfig } from "./lib/swap.js";
 import { registerPaper } from "./lib/paper/page.js";
 import { createCdpFacilitatorClient, getCdpDefaultSchemes, getCdpExtensionRegistrations } from "@coinbase/cdp-sdk/x402";
@@ -1391,6 +1393,7 @@ async function main() {
   app.get("/health/full", (_req, res) => {
     res.json({
       ok: true,
+      jupiter: { ...jupStat, gate: jupGateStat },
       env: X402_ENV,
       networks: NETWORKS,
       prices: PAID,
@@ -2041,7 +2044,7 @@ async function main() {
       sync: () => syncStore(),
       write: (docs, msg) => saveDocs(docs, msg),
     }); }).catch(() => {});
-    setTimeout(() => startPaper({ rugCheck: (m) => rugCheck(m, "solana"), flagged: flaggedWallets }).catch(() => {}), 20_000);
+    setTimeout(() => jupBackground.run(true, () => startPaper({ rugCheck: (m) => rugCheck(m, "solana"), flagged: flaggedWallets })).catch(() => {}), 20_000); // paper bot yields Jupiter quota to people
     startSales(PAY_TO_EVM, PUBLIC_URL);
     warmNews();
     console.log(`x402 seller listening on http://localhost:${PORT}  env=${X402_ENV} networks=${NETWORKS.join(",")} (${NETWORK_LABEL})`);

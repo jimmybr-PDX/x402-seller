@@ -1,3 +1,4 @@
+import { jupFetch } from "./jup-gate.js";
 // Buyer-facing extra signals (free sources only): Jupiter token stats + sell quote, pump.fun public trades,
 // mint-account token-2022 extensions, DexScreener socials. Every lookup is time-boxed; failures become unknowns.
 const SOL = "So11111111111111111111111111111111111111112";
@@ -72,7 +73,7 @@ export async function solanaExtra(mint: string, o: { jup: any; jupFailed?: boole
   const units = price > 0 ? Math.floor((100 / price) * 10 ** (o.decimals ?? 0)) : Math.floor(o.supply * 0.001 * 10 ** (o.decimals ?? 0));
   const gpP = goplusSol(mint); // non-blocking: raced below against a short budget
   const [quote, pump, curve] = await Promise.all([
-    units > 0 && mint !== SOL ? fetch(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${mint}&outputMint=${SOL}&amount=${units}&slippageBps=1000`, { headers: UA, signal: AbortSignal.timeout(3500) }).then((r) => r.json()).catch(() => null) : Promise.resolve(null),
+    units > 0 && mint !== SOL ? jupFetch(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${mint}&outputMint=${SOL}&amount=${units}&slippageBps=1000`, { headers: UA, signal: AbortSignal.timeout(3500) }).then((r) => (r ? r.json() : null)).catch(() => null) : Promise.resolve(null),
     isPump ? pumpLaunch(mint, jup?.dev ?? null, o.supply).catch(() => null) : Promise.resolve(null),
     isPump ? pumpCurve(mint) : Promise.resolve(null),
   ]);
