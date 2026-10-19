@@ -9,11 +9,11 @@ test("socialLinks: telegram/discord/other DexScreener socials + all websites, ht
   assert.deepEqual(l.map((x) => x.type + " " + x.url), ["twitter https://x.com/abc", "telegram https://t.me/abcgroup", "discord https://discord.gg/xyz", "tiktok https://tiktok.com/@a", "website https://abc.io/", "website http://docs.abc.io/"]);
   assert.deepEqual(socialLinks(null, null), []);
 });
-test("page renders socials as safe links with the creator note; inline scripts still parse", async () => {
+test("page renders socials as nofollow links with a creator tooltip; inline scripts still parse", async () => {
   const app = express(); const srv = app.listen(0); const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
   registerRugradarWeb(app, { publicUrl: base, port: 0, priceUsd: "0.01", speed: null, rugCheck: async () => ({}), spend: async () => null, refund: async () => {} } as any);
   const html = await (await fetch(base + "/rugradar")).text(); srv.close();
-  assert.match(html, /noopener noreferrer nofollow/); assert.match(html, /links are set by the token creator; check before trusting/); assert.match(html, /a\.target='_blank'/);
+  assert.match(html, /noopener noreferrer nofollow/); assert.ok(!/links are set by the token creator/.test(html), "long trust line dropped"); assert.match(html, /Links set by the token creator/, "kept as a tooltip only"); assert.match(html, /a\.target='_blank'/);
   for (const m of html.matchAll(/<script(?![^>]*src=)(?![^>]*application\/ld\+json)[^>]*>([\s\S]*?)<\/script>/g)) assert.doesNotThrow(() => new Function(m[1]), "inline script syntax");
   assert.match(html, /\/\^https\?:\\\/\\\/\/i/); // regex survived the template literal
 });

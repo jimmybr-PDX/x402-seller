@@ -28,7 +28,7 @@ export type Facts = {
   mintAuthority: string | null; freezeAuthority: string | null; token2022: boolean;
   top1Pct: number | null; top10Pct: number | null;
   liquidityUsd: number | null; priceUsd: number | null; pairs: number; lpNote: string | null;
-  ageHours: number | null; creator: string | null; funder: string | null;
+  ageHours: number | null; ageMinHours?: number | null; creator: string | null; funder: string | null;
   priorLaunches: number | null; priorDead: number | null;
   creatorFlagged: boolean; funderFlagged: boolean; unknown: string[]; timingsMs?: Record<string, number>; marketUnknown?: boolean; holderSource?: string | null; holderCount?: number | null; launchpad?: string | null; extra?: Extra | null;
 };
@@ -89,9 +89,30 @@ async function dsOnce(mints: string[]): Promise<any[] | null> {
 }
 const dsRaw = (mints: string[]) => retry(() => dsOnce(mints), (v) => v == null);
 async function ds(mints: string[]): Promise<any[]> { return (await dsRaw(mints)) ?? []; }
+/** Fallback market sources when the main DexScreener endpoint fails twice: DexScreener token-pairs, then GeckoTerminal pools. */
+async function dsPairsOnce(mint: string): Promise<any[] | null> {
+  try { const r = await fetch(`https://api.dexscreener.com/token-pairs/v1/solana/${mint}`, { signal: AbortSignal.timeout(3000) }); const j = r.ok ? await r.json() : null; return Array.isArray(j) ? j : null; } catch { return null; }
+}
+export async function geckoMarket(mint: string, f: typeof fetch = fetch): Promise<{ liquidityUsd: number | null; priceUsd: number | null; createdAt: number | null } | null> {
+  try {
+    const r = await f(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools?page=1`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(3000) });
+    if (r.status === 404) return { liquidityUsd: null, priceUsd: null, createdAt: null }; // GeckoTerminal answers 404 when no pool exists
+    if (!r.ok) return null;
+    const pools = ((await r.json()) as any)?.data; if (!Array.isArray(pools)) return null;
+    if (!pools.length) return { liquidityUsd: null, priceUsd: null, createdAt: null };
+    const liq = pools.reduce((a: number, p: any) => a + (Number(p?.attributes?.reserve_in_usd) || 0), 0);
+    const ts = pools.map((p: any) => Date.parse(p?.attributes?.pool_created_at ?? "")).filter((t: number) => isFinite(t));
+    return { liquidityUsd: liq, priceUsd: Number(pools[0]?.attributes?.base_token_price_usd) || null, createdAt: ts.length ? Math.min(...ts) : null };
+  } catch { return null; }
+}
 export async function marketOf(mint: string) {
-  const raw = await dsRaw([mint]);
-  if (raw == null) return { failed: true as const, pairs: [] as any[], liquidityUsd: null, priceUsd: null, createdAt: null };
+  let raw = await dsRaw([mint]);
+  if (raw == null) raw = await dsPairsOnce(mint);
+  if (raw == null) {
+    const g = await geckoMarket(mint);
+    if (g) return { failed: false as const, pairs: [] as any[], liquidityUsd: g.liquidityUsd, priceUsd: g.priceUsd, createdAt: g.createdAt, source: "geckoterminal" };
+    return { failed: true as const, pairs: [] as any[], liquidityUsd: null, priceUsd: null, createdAt: null };
+  }
   const pairs = raw.filter((p) => p.baseToken?.address === mint || p.quoteToken?.address === mint);
   const liq = pairs.reduce((a, p) => a + (p.liquidity?.usd ?? 0), 0);
   const best = pairs.sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
@@ -124,6 +145,7 @@ const mintsCreated = (tx: any): string[] => {
 const TIMEOUT = Symbol("timeout");
 const within = <T>(p: Promise<T>, ms: number): Promise<T | typeof TIMEOUT> => Promise.race([p, new Promise<typeof TIMEOUT>((r) => setTimeout(() => r(TIMEOUT), ms).unref?.())]);
 const HISTORY_MS = Number(process.env.RUG_HISTORY_MS ?? 1200);
+const OLDEST_MS = 5000; // extra age-lookup wait, dead-looking coins only
 type History = { priorLaunches: number; priorDead: number; funder: string | null } | null;
 const historyCache = new Map<string, { at: number; p: Promise<History> }>();
 export async function gatherFacts(mint: string): Promise<Facts> {
@@ -155,11 +177,21 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   const liqOf = (m: { liquidityUsd: number | null; failed: boolean }) => (!m.liquidityUsd && Number(jup?.liquidity) > 0 ? Number(jup.liquidity) : m.liquidityUsd);
   const extraP = timed("buyerSignals", marketP.then((m) => solanaExtra(mint, { jup, mintInfo: info, dsPairs: m.pairs, supply, decimals, liquidityUsd: liqOf(m) })).catch(() => null));
   const fast = !!(jup?.dev && jup.createdAt && jup.audit?.topHoldersPercentage != null);
+  const oldestP = fast ? null : cached(`oldest:${mint}`, () => oldestTx(mint, 2), (v: any) => !!v).catch(() => null);
   const [largest, market, oldest] = await Promise.all([
     fast ? null : within(rpc<any>("getTokenLargestAccounts", [mint], { timeoutMs: 1500 }), left(1300)).then((v) => (v === TIMEOUT ? null : v)).catch(() => null),
     marketP,
-    fast ? null : within(cached(`oldest:${mint}`, () => oldestTx(mint, 2), (v: any) => !!v), left(1300)).then((v) => (v === TIMEOUT ? null : v)).catch(() => null),
+    fast || !oldestP ? null : within(oldestP, left(1300)).then((v) => (v === TIMEOUT ? null : v)).catch(() => null),
   ]);
+  // Dead-looking coin (market answered, no real pool, no Jupiter data): the public-RPC age lookup is often slow from the
+  // server, and without an age the dead-token rule cannot fire. Wait longer for it here (only for such coins), retry once,
+  // and accept a lower bound (oldest signature seen) when the history is too long to read fully.
+  let old = oldest as Awaited<ReturnType<typeof oldestTx>> | null;
+  if (!fast && oldestP && !old?.time && !market.failed && !(Number(liqOf(market)) >= 100)) {
+    const w = await within(oldestP, OLDEST_MS); old = w === TIMEOUT ? null : w;
+    if (!old?.time) { const w2 = await within(oldestTx(mint, 2).catch(() => null), OLDEST_MS); old = w2 === TIMEOUT ? null : w2; }
+    timingsMs.ageRetry = Date.now() - t0;
+  }
   let top1Pct: number | null = null, top10Pct: number | null = null, holderSource: string | null = null;
   if (jup?.audit?.topHoldersPercentage != null) { top10Pct = Number(jup.audit.topHoldersPercentage); top1Pct = top10Pct / 3; holderSource = "jupiter"; } // Jupiter gives the top-holders share only; top1 is a conservative stand-in
   else if (largest?.value?.length && supply > 0) {
@@ -171,11 +203,13 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   if (fast) {
     creator = jup.dev; ageHours = (Date.now() - Date.parse(jup.createdAt)) / 3.6e6;
     if (typeof jup.audit?.devMints === "number") { priorLaunches = Math.max(0, jup.audit.devMints - 1); priorDead = Math.max(0, priorLaunches - (jup.audit.devMigrations ?? 0)); }
-  } else if (oldest?.complete) {
-    if (oldest.time) ageHours = (Date.now() / 1000 - oldest.time) / 3600;
-    const tx = await within(getTx(oldest.sig), left(1500)); creator = tx === TIMEOUT ? null : feePayer(tx);
+  } else if (old?.complete) {
+    if (old.time) ageHours = (Date.now() / 1000 - old.time) / 3600;
+    const tx = await within(getTx(old.sig), left(1500)); creator = tx === TIMEOUT ? null : feePayer(tx);
     if (!creator) unknown.push("creator (lookup over time budget)");
   } else unknown.push("creator (token has too much history for the free RPC lookup)");
+  // Incomplete history: the oldest signature we saw is a lower bound on age (used only by the dead-token rule).
+  const ageMinHours = ageHours == null && old?.time ? (Date.now() / 1000 - old.time) / 3600 : null;
   if (creator && fast) {
     if (priorDead! >= 3 && priorDead! / Math.max(1, priorLaunches!) >= 0.5) flagDeployer(creator, priorDead!, priorLaunches!);
     // Funder lookup is the slowest public-RPC step from Render: time-box it and report unknown instead of waiting.
@@ -218,7 +252,7 @@ export async function gatherFacts(mint: string): Promise<Facts> {
     top1Pct, top10Pct, liquidityUsd: liqOf(market),  priceUsd: market.priceUsd, pairs: market.pairs.length,
     timingsMs: { ...timingsMs, total: Date.now() - t0 }, marketUnknown: market.failed, holderSource, holderCount: jup?.holderCount ?? null, launchpad: jup?.launchpad ?? null,
     lpNote: market.pairs.length ? `${market.pairs.length} pool(s) on ${[...new Set(market.pairs.map((p: any) => p.dexId))].join(", ")}; LP lock/burn status not verified` : null,
-    ageHours, creator, funder, priorLaunches, priorDead, creatorFlagged: !!(creator && list[creator] && !(priorDead! >= 3)), funderFlagged: !!(funder && list[funder]), unknown };
+    ageHours, ageMinHours, creator, funder, priorLaunches, priorDead, creatorFlagged: !!(creator && list[creator] && !(priorDead! >= 3)), funderFlagged: !!(funder && list[funder]), unknown };
 }
 
 // ---------- silent validation log for "low risk" results ----------
@@ -361,8 +395,9 @@ async function rugCheckUncached(mintRaw: string, chainRaw = "solana") {
 export function isEstablished(sg: any, ageHours: number | null): boolean {
   return !!sg?.jupiterVerified && Number(sg.organicScore) >= 60 && Number(sg.marketCapUsd) >= 1e8 && ageHours != null && ageHours >= 90 * 24;
 }
-export function isDeadToken(f: { marketUnknown?: boolean; liquidityUsd: number | null; ageHours: number | null }, sg: any): boolean {
-  return !f.marketUnknown && (f.liquidityUsd == null || f.liquidityUsd < 100) && sg?.sellableOnPumpCurve !== true && !String(sg?.canSell ?? "").startsWith("yes") && f.ageHours != null && f.ageHours >= 24 * 7;
+export function isDeadToken(f: { marketUnknown?: boolean; liquidityUsd: number | null; ageHours: number | null; ageMinHours?: number | null }, sg: any): boolean {
+  const age = f.ageHours ?? f.ageMinHours ?? null;
+  return !f.marketUnknown && (f.liquidityUsd == null || f.liquidityUsd < 100) && sg?.sellableOnPumpCurve !== true && !String(sg?.canSell ?? "").startsWith("yes") && age != null && age >= 24 * 7;
 }
 
 /** Number of populated buyer-facing data fields (nested, excluding nulls), for honest comparisons. */

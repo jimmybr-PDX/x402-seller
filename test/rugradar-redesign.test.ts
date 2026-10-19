@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
 import type { AddressInfo } from "node:net";
-import { registerRugradarWeb, limitedReport, freeFacts, warningsOf, WARN, __resetEmbed } from "../src/lib/rugradar-web.js";
+import { registerRugradarWeb, limitedReport, freeFacts, warningsOf, shownLevel, WARN, __resetEmbed } from "../src/lib/rugradar-web.js";
+import { isDeadToken, geckoMarket } from "../src/lib/rug.js";
 import { swapConfig, SWAP_RULE_JS } from "../src/lib/swap.js";
 
 const DEAD = "DDDvFkQzF9KrxiqDYuHpMGi6LeZuNeCsM5VVtStTgA2E", CLEAN = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", REF = "D2hNoZ1Y5BnLzPpX2TfrYvmG6yRyD9fF5V4Hk3q7pump";
@@ -71,5 +72,38 @@ test("embed card + JSON: ring, verdict, max 3 collapsed warnings, unlock link, c
     const evm = await (await fetch(`${base}/rugradar/embed.json?token=0x${"a".repeat(40)}`)).json(); assert.equal(evm.chain, "bnb", "auto-detects the EVM chain");
     assert.equal((await fetch(`${base}/rugradar/embed?token=nope`)).status, 400); assert.equal((await fetch(`${base}/rugradar/embed.json`)).status, 400);
     assert.deepEqual(await (await fetch(`${base}/rugradar/api/chain?token=0x${"b".repeat(40)}`)).json(), { chain: "bnb" });
+  } finally { srv.closeAllConnections(); srv.close(); }
+});
+
+test("shown level never says LOW RISK while a warning is shown", () => {
+  assert.equal(shownLevel("low", []), "low"); assert.equal(shownLevel("low", [{ sev: "CAUTION" }]), "medium"); assert.equal(shownLevel("low", [{ sev: "CAUTION" }, { sev: "DANGER" }]), "high");
+  assert.equal(shownLevel("medium", []), "medium"); assert.equal(shownLevel("high", [{ sev: "CAUTION" }]), "high");
+});
+test("dead-token rule: accepts an age lower bound when the full history can't be read; still needs market data", () => {
+  const base = { marketUnknown: false, liquidityUsd: null, ageHours: null };
+  assert.equal(isDeadToken({ ...base, ageMinHours: 24 * 30 }, {}), true);
+  assert.equal(isDeadToken({ ...base, ageMinHours: 24 * 2 }, {}), false);
+  assert.equal(isDeadToken({ ...base }, {}), false, "no age at all: no rule");
+  assert.equal(isDeadToken({ ...base, marketUnknown: true, ageMinHours: 24 * 30 }, {}), false);
+  assert.equal(isDeadToken({ ...base, ageMinHours: 24 * 30 }, { canSell: "yes (Jupiter route)" }), false);
+});
+test("market fallback: GeckoTerminal 404 = no pool (market known), pools summed, errors = unknown", async () => {
+  const mk = (status: number, body: unknown) => (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+  assert.deepEqual(await geckoMarket("M", mk(404, {})), { liquidityUsd: null, priceUsd: null, createdAt: null });
+  const g = await geckoMarket("M", mk(200, { data: [{ attributes: { reserve_in_usd: "40.5", pool_created_at: "2026-01-01T00:00:00Z", base_token_price_usd: "0.001" } }, { attributes: { reserve_in_usd: "9.5", pool_created_at: "2025-12-01T00:00:00Z" } }] }));
+  assert.equal(g!.liquidityUsd, 50); assert.equal(g!.createdAt, Date.parse("2025-12-01T00:00:00Z"));
+  assert.equal(await geckoMarket("M", mk(429, {})), null);
+});
+test("free check page: free line under the ring, no quota line above, quiet credits, key as a small link; embed matches", async () => {
+  __resetEmbed();
+  const lowWithCaution = (t: string) => ({ product: "RugRadar", chain: "solana", token: t, riskScore: 10, riskLevel: "low", checks: [{ check: "age", points: 10, detail: "Very new" }], facts: { mintAuthority: null, ageHours: 5 } });
+  const { srv, base } = await start(lowWithCaution);
+  try {
+    const h = await (await fetch(`${base}/rugradar`)).text();
+    assert.match(h, /<small id="quota"><\/small>/); assert.ok(h.includes("Free check: basic warnings only. Full report unlocks more."));
+    assert.match(h, /class="btn sec wide" id="buyc"/); assert.match(h, /Prepaid credits finish checks ~2x faster/); assert.match(h, /<details class="keyd" id="keyd"><summary>Have a credit key\?<\/summary>/);
+    assert.ok(!h.includes("dev history"));
+    const e = await (await fetch(`${base}/rugradar/embed?token=${CLEAN}`)).text();
+    assert.match(e, /class="gauge g-medium"/); assert.match(e, />CAUTION</); assert.ok(!e.includes("LOW RISK")); assert.match(e, /Free check: basic warnings only\. Full report unlocks more\./); assert.match(e, /Unlock full report \u203a/);
   } finally { srv.closeAllConnections(); srv.close(); }
 });

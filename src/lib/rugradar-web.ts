@@ -117,6 +117,12 @@ export function warningsOf(checks: any): { sev: "DANGER" | "CAUTION"; title: str
   }
   return out;
 }
+/** Level shown on the ring: never LOW RISK while a warning is shown (danger -> HIGH RISK, caution -> CAUTION). */
+export function shownLevel(level: string, ws: { sev: string }[]): "low" | "medium" | "high" {
+  const l = level === "high" || level === "medium" || level === "low" ? level : "medium";
+  if (l !== "low" || !ws.length) return l;
+  return ws.some((w) => w.sev === "DANGER") ? "high" : "medium";
+}
 const DS_CHAIN: Record<string, string> = { base: "base", bsc: "bnb", ethereum: "ethereum", arbitrum: "arbitrum" };
 const chainCache = new Map<string, { at: number; c: string }>();
 /** 0x address -> the supported EVM chain with the most DexScreener liquidity (default base). Cached 1 h, 2.5 s budget. */
@@ -169,6 +175,7 @@ const CSS_BASE = `:root{--bg:#0B1020;--card:#131A2E;--line:#232C47;--tx:#EEF2F8;
 .gauge i{width:88px;height:88px;border-radius:50%;background:#0f1526;display:grid;place-items:center;font-style:normal;font-weight:900;font-size:36px;line-height:1;color:#fff}
 .gauge i small{display:block;font-size:11px;font-weight:600;color:var(--mut);text-align:center}
 .g-high{--c:var(--bad)}.g-medium{--c:var(--warn)}.g-low{--c:var(--ok)}.g-low i{color:#6CFFA0}.g-wait{--c:#3a4670;box-shadow:none}
+.verdict{flex-wrap:wrap}.vfree{flex-basis:100%;font-size:13px;font-weight:700;color:#fff;background:rgba(0,0,0,.35);border-radius:8px;padding:6px 10px;margin-top:-4px}
 .vt{font-size:24px;font-weight:900;line-height:1.1}.vt.high{color:#ff6b6b}.vt.medium{color:#fbbf24}.vt.low{color:#6CFFA0}.vl{font-size:16px;margin-top:4px}.vtrust{font-size:12px;color:var(--mut);margin-top:6px}
 .wcards{display:grid;gap:8px;margin:10px 0 6px}
 .wc{border-radius:12px;border:1px solid var(--line);background:#0F1628}.wc.d{border-left:5px solid var(--bad)}.wc.c{border-left:5px solid var(--warn)}
@@ -191,8 +198,8 @@ header{display:flex;align-items:center;justify-content:space-between;padding:12p
 .subrow{display:flex;gap:10px;align-items:center;margin:8px 0 6px;flex-wrap:wrap}
 .chainchip{appearance:none;-webkit-appearance:none;background:transparent;border:1px solid var(--acc);border-radius:999px;padding:3px 10px;font-size:13px;color:var(--tx);cursor:pointer}
 .chainchip option{background:var(--card)}.trust{font-size:13px;color:var(--mut)}
-.keyd{font-size:13px;color:var(--mut);margin:0 0 12px}.keyd summary{cursor:pointer;display:inline}.keyd input{width:100%;max-width:420px;margin-top:6px;background:#0E1528;border:1px solid var(--line);color:var(--tx);border-radius:10px;padding:10px;font-size:15px}
-#quota{display:block;font-size:12px;color:var(--mut)}#keybox{display:block;margin-top:6px;font-size:13px}
+.keyd{font-size:12px;margin:0 0 8px}.keyd summary{cursor:pointer;display:inline;list-style:none;color:var(--acc);text-decoration:underline}.keyd summary::-webkit-details-marker{display:none}.keyd input{width:100%;max-width:420px;margin-top:6px;background:#0E1528;border:1px solid var(--line);color:var(--tx);border-radius:10px;padding:10px;font-size:15px}
+#quota{display:block;font-size:12px;color:var(--mut)}#quota:empty{display:none}#keybox{display:block;margin-top:6px;font-size:13px}
 .kbtn{background:#232C47;color:var(--tx);border:0;border-radius:6px;padding:3px 9px;font-size:13px;cursor:pointer;margin-left:4px}
 .grid{display:grid;gap:16px}@media(min-width:900px){.grid{grid-template-columns:1.6fr 1fr;align-items:start}.hero h1{font-size:34px}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
@@ -204,9 +211,8 @@ header{display:flex;align-items:center;justify-content:space-between;padding:12p
 .si a::after{content:"\\2713";position:absolute;right:-5px;bottom:-5px;width:15px;height:15px;border-radius:50%;background:#22C55E;color:#04150a;font-size:10px;font-weight:900;display:grid;place-items:center}
 .si span.off{border:1px solid var(--bad);background:rgba(239,68,68,.18);color:#ffc2c2;overflow:hidden}.si span.off::before{content:"";position:absolute;left:-4px;right:-4px;top:50%;height:2px;background:var(--bad);transform:rotate(-45deg)}
 .nosoc{display:inline-block;background:rgba(239,68,68,.18);border:1px solid var(--bad);color:#ffc2c2;border-radius:999px;padding:5px 10px;font-size:13px;font-weight:700}
-.socfb{display:none;font-size:13px;font-weight:600;color:#C9D1E0;margin-top:6px}.socfb .miss{color:#ff8a8a;font-weight:700}
-@media(max-width:899px){.socfb{display:block}.socw{margin-left:0;width:100%}}
-.socnote{font-size:10px;color:#6f7990;margin-top:3px}@media(min-width:900px){.socnote{text-align:right}}
+.socfb{font-size:13px;font-weight:600;color:#C9D1E0;margin-top:6px}.socfb .miss{color:#ff8a8a;font-weight:700}
+@media(max-width:899px){.socw{margin-left:0;width:100%}}@media(min-width:900px){.socfb{text-align:right}}
 .res .verdict{margin:14px 0 10px}
 @media(max-width:899px){.res .verdict{margin:10px 0 6px;padding:12px;gap:12px;min-height:150px}.gauge{width:104px;height:104px}.gauge i{width:78px;height:78px;font-size:32px}.wcards{gap:6px}.wc summary{padding:10px 12px}.card{padding:12px}.hero h1{font-size:24px}}
 .tease{display:inline-block;margin:2px 0 0;padding:4px 10px;border-radius:999px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.5);color:#ffc2c2;font-weight:700;font-size:13px;cursor:default}
@@ -217,7 +223,7 @@ button.tease{cursor:pointer;font:inherit;font-size:13px;font-weight:700}
 .buyline{font-size:12px;color:var(--mut);text-align:center;margin-top:6px}#swapbox{margin:10px 0 4px}#swapbox small{display:block;text-align:center}
 .card h2,.card h3{margin:0 0 6px;font-size:17px}.mut{color:var(--mut);font-size:14px;margin:0 0 10px}.note{font-size:13px;color:var(--mut);margin:8px 0 10px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.wide{width:100%}
-.cred{border:2px solid var(--acc);box-shadow:0 0 18px rgba(56,189,248,.18)}
+.cred{padding:12px 14px}.cred h2{font-size:16px;margin-bottom:2px}.cred .mut{font-size:13px;margin-bottom:8px}.cred .note{font-size:12px;margin:6px 0 4px}.cred .btn{padding:9px 12px;font-size:14px}
 .wpay{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:10px 0;background:#0E1528;font-size:14px}.wpay .pack{margin:4px 6px 4px 0;font-size:14px;padding:9px 12px}.wpay select{background:#0E1528;color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:4px}
 .wpay .btn{background:var(--acc);color:#04121d;padding:9px 12px;font-size:14px;margin:4px 6px 4px 0}.wstat{margin-top:8px}.wstat code{display:block;word-break:break-all;margin:6px 0}
 .qr{background:#fff;border-radius:8px;padding:6px;display:block;margin:8px 0;width:240px;height:240px}.flash{box-shadow:0 0 0 3px var(--acc)}
@@ -294,24 +300,25 @@ function card(w,j,open){const d=el('details','wc '+(w.d?'d':'c'));if(open)d.open
 const SOC=[['X','\u{1D54F}',/^(twitter|x)$/i,'X'],['Telegram','TG',/^telegram$/i,'TG'],['Website','\u{1F310}',/^website$/i,'Web'],['Discord','DC',/^discord$/i,'Discord']];
 function host(u){try{return new URL(u).hostname.replace(/^www\./,'')}catch(e){return ''}}
 function socials(j){const raw=Array.isArray(j.socialLinks)?j.socialLinks:(j.buyer&&Array.isArray(j.buyer.socialLinks)?j.buyer.socialLinks:null);if(!raw)return null;
- const links=raw.filter(x=>x&&typeof x.url==='string'&&/^https?:\/\//i.test(x.url)),w=el('div','socw'),note=el('div','socnote','links are set by the token creator; check before trusting');
- if(!links.length){w.append(el('span','nosoc','\u26A0 No socials found'),note);return w}
+ const links=raw.filter(x=>x&&typeof x.url==='string'&&/^https?:\/\//i.test(x.url)),w=el('div','socw');w.title='Links set by the token creator';
+ if(!links.length){w.append(el('span','nosoc','\u26A0 No socials found'));return w}
  const row=el('div','soc'),have=[],miss=[];const mk=(x,name,ic)=>{const s=el('div','si'),a=el('a',null,ic);a.href=x.url;a.target='_blank';a.rel='noopener noreferrer nofollow';a.setAttribute('aria-label',name);a.title=name+': '+host(x.url);s.append(a);row.append(s)};
  SOC.forEach(([name,ic,re,shortName])=>{const x=links.find(l=>re.test(String(l.type||'')));if(x){mk(x,name,ic);have.push(shortName)}else{const s=el('div','si'),o=el('span','off',ic);o.setAttribute('aria-label',name+' missing');o.title=name+' missing';s.append(o);row.append(s);miss.push(shortName)}});
  links.filter(l=>!SOC.some(s=>s[2].test(String(l.type||'')))).slice(0,3).forEach(x=>{const n=String(x.type||'link');mk(x,n,n.slice(0,2).toUpperCase());have.push(n)});
- row.title=have.concat(miss.map(m=>m+' missing')).join(' \u00b7 ');const fb=el('div','socfb',have.join(' \u00b7 '));if(miss.length){if(have.length)fb.append(' \u00b7 ');fb.append(el('span','miss',miss.join(', ')+' missing'))}
- w.append(row,fb,note);return w}
+ row.title='Links set by the token creator';const fb=el('div','socfb',have.join(' \u00b7 '));if(miss.length){if(have.length)fb.append(' \u00b7 ');fb.append(el('span','miss',miss.join(', ')+' missing'))}
+ w.append(row,fb);return w}
 function gauge(lv,score){const g=el('div','gauge g-'+lv);g.style.setProperty('--p',lv==='low'?100:Math.max(4,Math.min(100,score)));const i=el('i',null,String(score));i.append(el('small',null,'/100'));g.append(i);return g}
 const VT={high:['HIGH RISK','Strong rug warning signs.'],medium:['CAUTION','Some rug warning signs.'],low:['LOW RISK','No danger warnings found. Not a guarantee.']};
-function verdictBox(j,ws){const lv=VT[j.riskLevel]?j.riskLevel:'medium',s=Number(j.riskScore)||0,v=el('div','verdict v-'+lv),t=el('div');let line=VT[lv][1];if(lv==='low'&&ws.some(w=>w.d))line='Few warning signs. Not a guarantee.';
- t.append(el('div','vt '+lv,VT[lv][0]),el('div','vl',line),el('div','vtrust',j.report==='limited'?'Free check: basic warnings only.':'Full report.'));v.append(gauge(lv,s),t);return v}
+function shownLevel(j,ws){const l=VT[j.riskLevel]?j.riskLevel:'medium';if(l!=='low'||!ws.length)return l;return ws.some(w=>w.d)?'high':'medium'}
+function verdictBox(j,ws){const lv=shownLevel(j,ws),s=Number(j.riskScore)||0,v=el('div','verdict v-'+lv),t=el('div');
+ t.append(el('div','vt '+lv,VT[lv][0]),el('div','vl',VT[lv][1]));if(j.report!=='limited')t.append(el('div','vtrust','Full report.'));v.append(gauge(lv,s),t);if(j.report==='limited')v.append(el('div','vfree','Free check: basic warnings only. Full report unlocks more.'));return v}
 function lockedPanel(note){const b=el('div','lock');b.id='unlock';b.append(el('span',null,'\u{1F512} '+(note||'Full report adds the danger warnings free checkers usually miss.')));const a=el('button','btn sec',OFFER.label);a.type='button';a.addEventListener('click',()=>openBuy(true));b.append(a);return b}
 function openBuy(scroll){const x=$('buyx');x.hidden=false;const w=$('wpay');if(scroll&&w){$('credits').scrollIntoView({block:'start',behavior:'smooth'});w.classList.add('flash');setTimeout(()=>w.classList.remove('flash'),1600)}}
 function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings(j.checks),fa=j.facts||{};
  const tok=el('div','tok'),info=el('div');tok.append(el('div','av',(typeof fa.token==='string'?fa.token:String(j.token||'?')).slice(0,2).toUpperCase()));
  info.append(el('b',null,(typeof fa.token==='string'?'$'+fa.token+' \u00b7 ':'')+short(j.token)),el('div','addr',[CFG.chains[j.chain]||j.chain,ageTxt(fa.ageHours)].filter(Boolean).join(' \u00b7 ')));tok.append(info);const sw=socials(j);if(sw)tok.append(sw);c.append(tok);
  c.append(verdictBox(j,ws));if(Array.isArray(j.freeFacts)&&j.freeFacts.length)c.append(el('div','ffl',j.freeFacts.join(' \u00b7 ')));
- if(typeof SWAPHOOK==='function'&&j.token===t){const sb=SWAPHOOK(j);if(sb)c.append(sb)}
+ if(typeof SWAPHOOK==='function'&&j.token===t&&shownLevel(j,ws)==='low'){const sb=SWAPHOOK(j);if(sb)c.append(sb)}
  const wc=el('div','wcards');ws.slice(0,3).forEach((w,i)=>wc.append(card(w,j,DESK&&i===0)));if(ws.length)c.append(wc);
  if(j.report==='limited'&&j.checks){const n=Number(j.hiddenWarnings)||0;if(n>0)c.append(el('span','tease','+'+n+' more warning'+(n>1?'s':'')+' in the full report'));c.append(lockedPanel())}
  else if(ws.length>3){const b=el('button','tease','+'+(ws.length-3)+' more warnings');b.type='button';b.addEventListener('click',()=>{ws.slice(3).forEach(w=>wc.append(card(w,j,false)));b.remove()});c.append(b)}
@@ -322,9 +329,8 @@ async function chainFor(t){const c=$('chain').value;if(c!=='auto')return c;if(!t
 f.addEventListener('submit',async e=>{e.preventDefault();const t=$('tok').value.trim(),k=$('key').value.trim();if(!t)return;waitCard();go.disabled=true;
  try{const c=await chainFor(t);const r=k?await fetch('/rug-check?token='+encodeURIComponent(t)+'&chain='+c,{headers:{'X-RugRadar-Key':k}}):await fetch('/rugradar/api/check?token='+encodeURIComponent(t)+'&chain='+c,{method:'POST'});
  const j=await r.json().catch(()=>({}));
- if(!r.ok){const used=j.error==='free_checks_used';msgCard(j.message||(r.status===402&&k?'Credit key not accepted or out of credits.':'Error '+r.status),r.status===402||used,used?'Free check used. Credits unlock the full report.':null);if(used)q.textContent='Free check used. Credits unlock the full report.';return}
+ if(!r.ok){const used=j.error==='free_checks_used';msgCard(j.message||(r.status===402&&k?'Credit key not accepted or out of credits.':'Error '+r.status),r.status===402||used,used?'Free check used. Credits unlock the full report.':null);return}
  render(j,t);
- if(j.free_checks_left!=null)q.textContent=j.free_checks_left>0?j.free_checks_left+' free limited check(s) left.':'Free check used. Credits unlock the full report.';
  if(j.credits_remaining!=null){q.textContent=j.credits_remaining+' credit(s) left on your key.';pill(j.credits_remaining);if(k&&KS.get()!==k)KS.set(k)}
  }catch(err){msgCard('Network error, try again.')}finally{go.disabled=false}});
 function pill(n){$('credpill').textContent=(n==null?'Credits':'Credits: '+n)+' \u00b7 Buy'}
@@ -333,7 +339,7 @@ document.querySelectorAll('a[href="#agents"]').forEach(a=>a.addEventListener('cl
 if(location.hash==='#agents')$('agents').open=true;if(location.hash==='#credits')openBuy(false);
 try{const u=new URLSearchParams(location.search),t=u.get('token'),c=u.get('chain');if(t&&t.length<=64){$('tok').value=t;if(c&&$('chain').querySelector('option[value="'+c.replace(/[^a-z]/g,'')+'"]'))$('chain').value=c}}catch(e){}
 keyUI();document.getElementById('wpayHome').append(walletPacks());
-(function(){const k=KS.get();if(!k)return;$('keyd').open=true;fetch('/credits/balance',{headers:{'X-RugRadar-Key':k}}).then(r=>r.json()).then(j=>{if(j&&j.known)pill(j.credits)}).catch(()=>{})})();
+(function(){const k=KS.get();if(!k)return;fetch('/credits/balance',{headers:{'X-RugRadar-Key':k}}).then(r=>r.json()).then(j=>{if(j&&j.known)pill(j.credits)}).catch(()=>{})})();
 `;
 
 function page(d: WebDeps) {
@@ -368,17 +374,17 @@ ${CSS_PAGE}</style></head><body><div class="wrap">
 <form id="f" class="search"><input id="tok" name="token" required autocomplete="off" spellcheck="false" placeholder="Token address (Solana mint or 0x contract)" aria-label="Token address"><button class="btn pri" id="go">Check token</button></form>
 <div class="subrow"><select id="chain" class="chainchip" aria-label="Chain" title="Chain: Auto-detect (Solana, Base, BNB, Ethereum, Arbitrum)"><option value="auto">Auto \u25BE</option>${CHAINS.map((c) => `<option value="${c}">${CHAIN_NAME[c]}</option>`).join("")}</select><span class="trust">Free \u00b7 no sign-up</span></div>
 <details class="keyd" id="keyd"><summary>Have a credit key?</summary><input id="key" placeholder="Credit key (rr_...)" autocomplete="off" aria-label="Credit key"><small id="keybox" hidden></small></details>
-<small id="quota">${FREE_COPY}</small>
+<small id="quota"></small>
 </section>
 <div class="grid" style="margin-top:14px">
 <main><div id="out" aria-live="polite"></div></main>
 <aside><section class="card cred" aria-label="Prepaid credits">
 <h2 id="credits">${fast ? `Prepaid credits finish checks ${fast} faster` : "Prepaid credits"}</h2>
 <p class="mut">$${p} per full report \u00b7 buy 1 to 1,000 \u00b7 no account.</p>
-<button class="btn pri wide" id="buyc" type="button">${fast ? `Buy credits: results ${fast} faster` : "Buy credits"}</button>
+<button class="btn sec wide" id="buyc" type="button">${fast ? `Buy credits: results ${fast} faster` : "Buy credits"}</button>
 <p class="note">${d.speed ? `With credits you don't wait on a payment for each check (measured ~${d.speed.x}x faster).` : "With credits you don't wait on a payment for each check."}</p>
 <div id="buyx" hidden><div id="wpayHome"></div><small class="mut">Agents and scripts: pay once with any x402 client: <code>GET ${U}/credits/buy?credits=${UNLOCK_CREDITS}</code> ($${(UNLOCK_CREDITS * Number(p)).toFixed(2)}). You get a secret key once; paste it under "Have a credit key?" or send it as <code>X-RugRadar-Key</code>.</small></div>
-<div class="row" style="margin-top:8px"><a class="btn ghost" href="#agents">For bots &amp; agents</a></div>
+<div style="margin-top:6px;font-size:13px"><a href="#agents">For bots &amp; agents \u203a</a></div>
 </section></aside>
 </div>
 ${agentsSection(U, p)}
@@ -402,7 +408,7 @@ export function agentSnippets(U: string) {
     x402: `# 1) call without payment -> HTTP 402 + PAYMENT-REQUIRED header (base64 JSON)\ncurl -s -o /dev/null -D - "${U}/rug-check?token=${EXAMPLE_MINT}" \\\n  | grep -i '^payment-required:' | cut -d' ' -f2 | tr -d '\\r' | base64 -d\n# 2) pick an accepts[] entry (USDC on Solana/Base/...), sign it, retry with header PAYMENT-SIGNATURE\n#    (any x402 client does steps 1-2: @x402/fetch, @x402/axios, x402 Python, CDP Agentic Wallet)`,
     credits: `# buy 10 credits once (x402, $0.10) -> {"key":"rr_..."}; or buy with Phantom/Solflare on this page\ncurl -s -H "X-RugRadar-Key: rr_YOURKEY" "${U}/rug-check?token=${EXAMPLE_MINT}"\ncurl -s -H "X-RugRadar-Key: rr_YOURKEY" ${U}/credits/balance\n# 24h watch with credits (5 credits):\ncurl -s -X POST ${U}/rugradar/watch -H "X-RugRadar-Key: rr_YOURKEY" \\\n  -H 'content-type: application/json' -d '{"token":"<mint>","hours":"24","webhook":"https://you.example/hook"}'`,
     node: `const crypto = require("crypto");\n// raw = exact request body string, header = X-RugRadar-Signature, secret = whsec_... from the watch\nfunction verify(raw, header, secret) {\n  const m = /^t=(\\d+),v1=([0-9a-f]{64})$/.exec(header || ""); if (!m) return false;\n  if (Math.abs(Date.now() / 1000 - Number(m[1])) > 300) return false;\n  const want = crypto.createHmac("sha256", secret).update(m[1] + "." + raw).digest();\n  return crypto.timingSafeEqual(want, Buffer.from(m[2], "hex"));\n}`,
-    embed: `<iframe src="${U}/rugradar/embed?token=<mint or 0x address>" width="380" height="350" style="border:0;max-width:100%" loading="lazy" title="RugRadar token risk"></iframe>`,
+    embed: `<iframe src="${U}/rugradar/embed?token=<mint or 0x address>" width="380" height="420" style="border:0;max-width:100%" loading="lazy" title="RugRadar token risk"></iframe>`,
     embedJson: `curl -s "${U}/rugradar/embed.json?token=${EXAMPLE_MINT}"\n# -> {"riskScore":0,"riskLevel":"low","verdict":"No danger warnings found. Not a guarantee.","warnings":[...],"report":"${U}/rugradar?token=..."}`,
     python: `import hmac, hashlib, re, time\ndef verify(raw: bytes, header: str, secret: str) -> bool:\n    m = re.fullmatch(r"t=(\\d+),v1=([0-9a-f]{64})", header or "")\n    if not m or abs(time.time() - int(m[1])) > 300: return False\n    want = hmac.new(secret.encode(), m[1].encode() + b"." + raw, hashlib.sha256).hexdigest()\n    return hmac.compare_digest(want, m[2])`,
   };
@@ -411,7 +417,7 @@ function agentsSection(U: string, p: string) {
   const c = agentSnippets(U), pre = (t: string) => `<pre>${escH(t)}</pre>`;
   const tools: [string, string, string][] = [
     ["rug_check", "0-100 rug risk score, plain danger warnings and a buyer summary (Solana incl. pump.fun, BNB, Base, Ethereum, Arbitrum)", `$${p}`],
-    ["token_safety", "Same engine, token-safety wording: authorities, holders, liquidity, dev history, snipers, bundles", `$${p}`],
+    ["token_safety", "Same engine, token-safety wording: authorities, holders, liquidity, dev selling, snipers, bundles", `$${p}`],
     ["honeypot_check", "Can I sell it? Sell quote / simulated sell and tax, freeze authority", `$${p}`],
     ["watch_token", "Watch one Solana token; signed webhook alert on dev sells, liquidity drop, new mint/freeze authority, score jump, can't sell", "$0.05 / 24h, $0.10 / 48h"],
   ];
@@ -447,13 +453,13 @@ export async function embedData(d: WebDeps, token: string, chain: string): Promi
   if (embedBusy >= 3) throw Object.assign(new Error("busy"), { code: "busy" });
   embedBusy++;
   try {
-    const l = limitedReport(await d.rugCheck(token, chain));
-    const lv = VERDICT[l.riskLevel] ? l.riskLevel : "medium", ws = warningsOf(l.checks);
-    const verdict = lv === "low" && ws.some((w) => w.sev === "DANGER") ? "Few warning signs. Not a guarantee." : VERDICT[lv]![1];
+    const full = await d.rugCheck(token, chain), l = limitedReport(full);
+    const degraded = !!full?.facts?.marketUnknown || (chain === "solana" && full?.facts?.ageHours == null);
+    const ws = warningsOf(l.checks), lv = shownLevel(l.riskLevel, ws), verdict = VERDICT[lv]![1];
     const v: EmbedData = { product: "RugRadar", report: "free", token, chain, riskScore: l.riskScore, riskLevel: lv, label: VERDICT[lv]![0], verdict,
       warnings: ws.slice(0, 3).map((w) => ({ severity: w.sev, title: w.title, line: w.line })), moreWarnings: Math.max(0, ws.length - 3) + (Number(l.hiddenWarnings) || 0),
       reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, disclaimer: "Danger warnings only. Not a guarantee, not financial advice.", generatedAt: new Date().toISOString() };
-    embedCache.set(k, { at: Date.now(), v }); if (embedCache.size > 300) embedCache.delete(embedCache.keys().next().value!);
+    if (!degraded) embedCache.set(k, { at: Date.now(), v }); if (embedCache.size > 300) embedCache.delete(embedCache.keys().next().value!);
     return v;
   } finally { embedBusy--; }
 }
@@ -472,7 +478,7 @@ const EMBED_CSS = `body{margin:0;padding:8px;background:transparent;color:var(--
 function embedHtml(U: string, v: EmbedData | null, msg?: string) {
   const body = v
     ? `<div class="etok"><b>${escA(v.token.slice(0, 4))}\u2026${escA(v.token.slice(-6))}</b> \u00b7 ${escA(CHAIN_NAME[v.chain] ?? v.chain)} \u00b7 free check</div>
-<div class="verdict v-${v.riskLevel}"><div class="gauge g-${v.riskLevel}" style="--p:${v.riskLevel === "low" ? 100 : Math.max(4, Math.min(100, v.riskScore))}"><i>${v.riskScore}<small>/100</small></i></div><div><div class="vt ${v.riskLevel}">${v.label}</div><div class="vl">${escA(v.verdict)}</div></div></div>
+<div class="verdict v-${v.riskLevel}"><div class="gauge g-${v.riskLevel}" style="--p:${v.riskLevel === "low" ? 100 : Math.max(4, Math.min(100, v.riskScore))}"><i>${v.riskScore}<small>/100</small></i></div><div><div class="vt ${v.riskLevel}">${v.label}</div><div class="vl">${escA(v.verdict)}</div></div><div class="vfree">Free check: basic warnings only. Full report unlocks more.</div></div>
 ${v.warnings.length ? `<div class="wcards">${v.warnings.map((w) => `<details class="wc ${w.severity === "DANGER" ? "d" : "c"}"><summary><span class="sev ${w.severity === "DANGER" ? "s3" : "s2"}">${w.severity}</span><span class="tt">${escA(w.title)}</span><span class="ch"></span></summary><p>${escA(w.line)}</p></details>`).join("")}</div>` : ""}
 <div class="efoot"><a href="${escA(v.reportUrl)}" target="_blank" rel="noopener">Unlock full report \u203a</a><span class="credit">Not a guarantee \u00b7 <b>RugRadar</b></span></div>`
     : `<p class="emsg">${escA(msg ?? "Add ?token=<address> to show a RugRadar card.")}</p><div class="efoot"><a href="${U}/rugradar" target="_blank" rel="noopener">Check a token \u203a</a><span class="credit">Not a guarantee \u00b7 <b>RugRadar</b></span></div>`;
