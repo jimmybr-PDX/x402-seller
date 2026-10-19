@@ -11,6 +11,7 @@ import { address, getAddressDecoder, pipe, createTransactionMessage, setTransact
 import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS, getTransferCheckedInstruction } from "@solana-program/token";
 import { getTransferSolInstruction } from "@solana-program/system";
 import type { Express, Request, Response } from "express";
+import { qrSvg } from "./qr.js";
 
 export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 export const PACKS: Record<string, { credits: number; usd: number }> = { "10": { credits: 10, usd: 0.1 }, "50": { credits: 50, usd: 0.4 }, "200": { credits: 200, usd: 1.5 } };
@@ -55,8 +56,20 @@ export async function createOrder(d: PayDeps, pack: string, cur: Currency) {
   else { const px = await d.solUsd(); if (!px || !(px > 1)) throw new PayError(503, "sol_price_unavailable", "SOL price unavailable right now; pay in USDC or try again."); solUsd = px; atomic = BigInt(Math.ceil((p.usd / px) * 1e9)); }
   const o: Order = { v: 1, ref, pack, credits: p.credits, usd: p.usd, cur, atomic: atomic.toString(), to: d.recipient, iat, exp: iat + ORDER_TTL_S, ...(solUsd ? { solUsd } : {}) };
   const amount = fmt(atomic, cur === "usdc" ? 6 : 9);
-  const q = new URLSearchParams({ amount, ...(cur === "usdc" ? { "spl-token": USDC_MINT } : {}), reference: ref, label: "RugRadar", message: `${p.credits} RugRadar credits` });
-  return { order: encodeOrder(o, d.secret), reference: ref, pack, credits: p.credits, priceUsd: p.usd.toFixed(2), currency: cur, amount, recipient: d.recipient, expiresAt: new Date(o.exp * 1000).toISOString(), solanaPayUrl: `solana:${d.recipient}?${q.toString().replace(/\+/g, "%20")}`, ...(solUsd ? { solUsd } : {}) };
+  return { order: encodeOrder(o, d.secret), reference: ref, pack, credits: p.credits, priceUsd: p.usd.toFixed(2), currency: cur, amount, recipient: d.recipient, expiresAt: new Date(o.exp * 1000).toISOString(), solanaPayUrl: solanaPayUrl(o), ...(solUsd ? { solUsd } : {}) };
+}
+/** Solana Pay transfer-request URL for an order (same string the order response carries; rebuilt from the signed order for the QR). */
+export function solanaPayUrl(o: Order) {
+  const amount = fmt(BigInt(o.atomic), o.cur === "usdc" ? 6 : 9);
+  const q = new URLSearchParams({ amount, ...(o.cur === "usdc" ? { "spl-token": USDC_MINT } : {}), reference: o.ref, label: "RugRadar", message: `${o.credits} RugRadar credits` });
+  return `solana:${o.to}?${q.toString().replace(/\+/g, "%20")}`;
+}
+/** QR (SVG) of a signed order's Solana Pay URL. Only signed, unexpired orders: the endpoint can't be used to make arbitrary QR codes. */
+export function orderQrSvg(d: PayDeps, tok: string) {
+  if (!d.enabled) throw new PayError(503, "wallet_pay_disabled", "Wallet checkout is not enabled yet.");
+  const o = decodeOrder(tok, d.secret); if (!o) throw new PayError(400, "invalid_order", "Unknown or tampered order.");
+  if (nowS(d) > o.exp) throw new PayError(410, "order_expired", "This quote expired; start a new one.");
+  return qrSvg(solanaPayUrl(o), { ecl: "M", px: 240 });
 }
 
 /** Unsigned transfer transaction (payer = fee payer) for wallet-standard signAndSendTransaction. Reference rides as a read-only account. */
@@ -158,5 +171,9 @@ export function registerWalletPay(app: Express, d: PayDeps) {
   app.get("/rugradar/pay/config", (_req, res) => { res.set("Cache-Control", "no-store").json(walletPayConfig(d)); });
   app.post("/rugradar/pay/order", (req, res) => { if (tooFast(req, "o", 1000)) { res.status(429).json({ error: "slow_down" }); return; } send(res, () => createOrder(d, q(req.query.pack), q(req.query.currency).toLowerCase() as Currency)); });
   app.post("/rugradar/pay/tx", (req, res) => { if (tooFast(req, "t", 1000)) { res.status(429).json({ error: "slow_down" }); return; } send(res, () => buildTx(d, q(req.query.order) || q((req.body as any)?.order), q(req.query.account) || q((req.body as any)?.account))); });
+  app.get("/rugradar/pay/qr.svg", (req, res) => {
+    try { res.set("Cache-Control", "private, max-age=1200").type("image/svg+xml").send(orderQrSvg(d, q(req.query.order))); }
+    catch (e) { const pe = e instanceof PayError ? e : new PayError(500, "qr_failed", "Could not make the QR code."); res.status(pe.status).set("Cache-Control", "no-store").json({ error: pe.code, message: pe.message }); }
+  });
   app.post("/rugradar/pay/claim", (req, res) => { if (tooFast(req, "c", 2000)) { res.status(429).json({ error: "slow_down", message: "One check every 2 seconds, please." }); return; } send(res, () => claim(d, q(req.query.order) || q((req.body as any)?.order), q(req.query.signature) || q((req.body as any)?.signature) || undefined)); });
 }

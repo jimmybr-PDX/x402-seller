@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import bs58 from "bs58";
-import { createOrder, claim, buildTx, decodeOrder, encodeOrder, checkTx, PayError, USDC_MINT, type PayDeps } from "../src/lib/solpay.js";
+import { createOrder, claim, buildTx, decodeOrder, encodeOrder, checkTx, PayError, USDC_MINT, solanaPayUrl, orderQrSvg, registerWalletPay, type PayDeps } from "../src/lib/solpay.js";
+import { qrMatrix } from "../src/lib/qr.js";
+import express from "express";
+import type { AddressInfo } from "node:net";
 
 const TO = "3a9DUWEA34ejDaMbWo96gFfuqN2TvojJewUBCA14Dg75", OTHER = "787RZwDGpjmRsG5wgnyBeWQHBuARax8Qo6P7dmDuqKeW", PAYER = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
 const sig = () => bs58.encode(randomBytes(64));
@@ -66,4 +69,30 @@ test("disabled flag: no orders, no transactions; tx builder produces a wallet tr
   const t = await buildTx(on, o.order, PAYER); assert.equal(t.encoding, "base64"); const raw = Buffer.from(t.transaction, "base64");
   const b58 = bs58.encode(raw); assert.ok(raw.length > 150); assert.ok(raw.includes(Buffer.from(bs58.decode(o.reference))), "reference account in tx"); assert.ok(raw.includes(Buffer.from(bs58.decode(TO))) === false, "USDC goes to the ATA, not the owner"); assert.ok(b58.length > 0); assert.ok(raw.includes(Buffer.from(bs58.decode("BaXAaxFZCSiCSXytiHc4u9HqjL9NMxkcDKgSoeYSpAsk"))), "pays RugRadar's USDC ATA (BaXA…)");
   const ts = await buildTx(on, (await createOrder(on, "10", "sol")).order, PAYER); assert.ok(Buffer.from(ts.transaction, "base64").includes(Buffer.from(bs58.decode(TO))));
+});
+test("QR: signed order -> same Solana Pay URL as the order response; tampered, expired and disabled refused", async () => {
+  const d = deps({}, {});
+  for (const cur of ["sol", "usdc"] as const) {
+    const o = await createOrder(d, "10", cur), dec = decodeOrder(o.order, d.secret)!;
+    assert.equal(solanaPayUrl(dec), o.solanaPayUrl); assert.ok(o.solanaPayUrl.startsWith(`solana:${TO}?`), "pays the same RugRadar wallet");
+    const svg = orderQrSvg(d, o.order); assert.match(svg, /^<svg /); assert.equal(svg, orderQrSvg(d, o.order));
+    const n = qrMatrix(o.solanaPayUrl, "M").length; assert.match(svg, new RegExp(`viewBox="0 0 ${n + 8} ${n + 8}"`));
+  }
+  const o = await createOrder(d, "50", "usdc");
+  const forged = encodeOrder({ ...decodeOrder(o.order, d.secret)!, to: OTHER }, Buffer.alloc(32, 9));
+  assert.equal(await code(Promise.resolve().then(() => orderQrSvg(d, forged))), "invalid_order");
+  assert.equal(await code(Promise.resolve().then(() => orderQrSvg(d, "not-an-order"))), "invalid_order");
+  const later = { ...d, now: () => Date.now() + 21 * 60_000 };
+  assert.equal(await code(Promise.resolve().then(() => orderQrSvg(later, o.order))), "order_expired");
+  assert.equal(await code(Promise.resolve().then(() => orderQrSvg(deps({}, {}, false), o.order))), "wallet_pay_disabled");
+});
+test("QR route: GET /rugradar/pay/qr.svg serves image/svg+xml for a valid order and JSON errors otherwise", async () => {
+  const d = deps({}, {}); const app = express(); registerWalletPay(app, d);
+  const srv = app.listen(0); const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+  try {
+    const o = await createOrder(d, "10", "sol");
+    const r = await fetch(`${base}/rugradar/pay/qr.svg?order=${encodeURIComponent(o.order)}`); assert.equal(r.status, 200); assert.match(r.headers.get("content-type") ?? "", /image\/svg\+xml/); assert.match(await r.text(), /<path d="M/);
+    const bad = await fetch(`${base}/rugradar/pay/qr.svg?order=x.y`); assert.equal(bad.status, 400); assert.equal((await bad.json() as any).error, "invalid_order");
+    const cfg = await (await fetch(`${base}/rugradar/pay/config`)).json() as any; assert.equal(cfg.recipient, TO);
+  } finally { srv.closeAllConnections(); srv.close(); }
 });
