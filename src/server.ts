@@ -54,7 +54,7 @@ import { registerWatchRoutes, watchKeyMiddleware, watchPaidHandler, createWithCr
 import { initCredits, issueKey, issueKeyOnce, isRedeemed, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell , spendN, refundN, loadDoc, saveDoc } from "./lib/credits.js";
 import { registerWalletPay, orderSecret, solUsdPublic, type PayDeps } from "./lib/solpay.js";
 import { startSales, salesStats } from "./lib/sales.js";
-import { classify, recordRejection, recordRequest, startTraffic, trafficStats, type Outcome } from "./lib/traffic.js";
+import { classify, recordRejection, recordRequest, startTraffic, trafficStats, attachDurable, type Outcome } from "./lib/traffic.js";
 import { statsHtml } from "./lib/stats-page.js";
 import { answerHtml, deleteAnswer, getAnswer, newAnswerId, pinAnswer, saveAnswer } from "./lib/answers.js";
 
@@ -1013,10 +1013,12 @@ async function main() {
     "GET /token-safety": {
       accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
       description:
-        `${RUG_EDGE_SHORT} RugRadar token safety and honeypot check: token scam check and memecoin risk score for Solana (pump.fun), BNB, Base, Ethereum, Arbitrum (chain=). 0-100 score with plain reasons. Heuristic, may be wrong. ${perCall(RUG_PRICE)}`,
+        // Oct 18: agent-job-first wording for the "token safety" / "is this token safe" / "token risk score" searches, where this
+        // route was missing from Bazaar's top 20 (rug-check already ranks #1 for rug queries).
+        `Is this token safe to buy? Call before an agent buys, swaps or recommends an unfamiliar token. Token risk score 0-100, low/medium/high verdict and plain reasons: mint/freeze authority, liquidity, top holders, dev sold %, snipers, bundles, live sell test, creator rug history. Solana (pump.fun) plus Base, BNB, Ethereum, Arbitrum via chain=. RugRadar heuristic, may be wrong; not financial advice. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
-      serviceName: "RugRadar Honeypot Check & Solana Token Safety",
-      tags: ["token safety", "token security scan", "memecoin safety", "solana token safety", "honeypot check"],
+      serviceName: "Is This Token Safe? RugRadar Token Safety Score",
+      tags: ["token safety", "is this token safe", "token risk score", "memecoin safety", "token security scan"],
       iconUrl: RUG_ICON_URL,
       extensions: {
         ...declareDiscoveryExtension({
@@ -2031,7 +2033,8 @@ async function main() {
 
   const httpServer = app.listen(PORT, "0.0.0.0", () => {
     startTraffic();
-    initCredits().catch(() => {});
+    // Oct 18: /stats counters survive restarts: restored from / saved to the private RugRadar GitHub store (traffic.json)
+    initCredits().then(() => { if (creditsStatus().store === "github") return attachDurable({ name: "private GitHub store (rugradar-credits repo, traffic.json)", load: () => loadDoc<any>("traffic.json", null), save: (d) => saveDoc("traffic.json", d, "traffic stats") }); }).catch(() => {});
     setTimeout(() => startPaper({ rugCheck: (m) => rugCheck(m, "solana"), flagged: flaggedWallets }).catch(() => {}), 20_000);
     startSales(PAY_TO_EVM, PUBLIC_URL);
     warmNews();

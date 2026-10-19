@@ -16,7 +16,9 @@ const TITLE_TAG = Buffer.from("<PAGE_TITLE>");
 
 export type GkgItem = { title: string; url: string; source: string; t: number; lc: string };
 
-const HOURS = Math.max(0, Number(process.env.NEWS_GKG_HOURS ?? 24));
+// Oct 18: default window 24 h -> 6 h: the 24 h boot backfill (97 files, ~54k articles) stalled the loop 1-2 s per file for
+// ~4 min after every boot and held ~30 MB more heap on a 512 MB instance. /news still blends HN + RSS for older items.
+const HOURS = Math.max(0, Number(process.env.NEWS_GKG_HOURS ?? 6));
 const MAX_ITEMS = 200_000;
 const BASE = "https://data.gdeltproject.org/gdeltv2/";
 

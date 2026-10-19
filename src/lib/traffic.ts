@@ -227,6 +227,12 @@ function merge(buckets: Bucket[]): Record<string, RouteCounts> {
   return out;
 }
 const total = (x: ByClass) => KLASSES.reduce((s, k) => s + x[k], 0);
+function funnel(routes: Record<string, RouteCounts>, paidRoutes: string[]) {
+  return paidRoutes.map((r) => {
+    const c = routes[r]; const views = c ? c.unpaid402.client + c.paid200 : 0;
+    return { tool: r, views, visitors: c?.visitors.client ?? 0, paid200: c?.paid200 ?? 0, selfPaid: c?.selfPaid ?? 0, conversionPct: views ? Math.round((c!.paid200 / views) * 1000) / 10 : null };
+  });
+}
 /** Compact view: client vs automated, which is what matters for "real interest". */
 function compact(routes: Record<string, RouteCounts>, paidRoutes: string[]) {
   const rows: Record<string, unknown> = {};
@@ -282,7 +288,7 @@ export function trafficStats(paidRoutes: string[], full = true) {
     since: daily[0]?.start ?? startedAt.slice(0, 10),
     trackingSince,
     processStartedAt: startedAt,
-    persistence,
+    persistence: { ...persistence, durable: durableStatus, ...(durableStatus.store ? { note: `durable: restored on boot and saved every 5 min (only when changed) to the ${durableStatus.store}; local file is a fallback` } : {}) },
     last24h: compact(merge(last24), paidRoutes),
     today: { date: dayKey(now), ...compact(merge(today), paidRoutes) },
   };
@@ -296,6 +302,11 @@ export function trafficStats(paidRoutes: string[], full = true) {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 25)
       .map(([k, n]) => ({ class: k.split(":")[0], agent: k.slice(k.indexOf(":") + 1), requests: n })),
+    toolFunnel: {
+      note: "Per paid tool: views = client callers who got the price (unpaid 402) + paid200; visitors = unique client visitors; paid200 excludes our own test wallet; conversion = paid200 / views in %. Bots, crawlers and pingers are left out.",
+      last7d: funnel(merge(last7), paidRoutes),
+      allTime: funnel(merge(daily), paidRoutes),
+    },
     daily: daily.map((b) => {
       const c = compact(b.routes, paidRoutes);
       return { date: b.start, ...c.totals };
@@ -323,6 +334,60 @@ export function trafficStats(paidRoutes: string[], full = true) {
       conversion: "paid200 / (client unpaid402 + paid200), in %",
     },
   };
+}
+
+// ---------- durable store (Oct 18) ----------
+// Render free has no disk, so data/traffic.json dies with every deploy/restart. When a durable store is attached (the
+// private RugRadar GitHub store, same repo as credits/watches), counts are restored on boot (added onto anything counted
+// since boot) and written back every few minutes, only when they changed. Visitor-hash sets are never persisted
+// (a visitor seen before and after a restart counts once per side).
+export type DurableStore = { name: string; load: () => Promise<any>; save: (doc: unknown) => Promise<void> };
+let durable: DurableStore | null = null;
+let lastDurableBody = "";
+let durableStatus: { store: string | null; restoredFrom: string | null; restoredBuckets: number; lastSavedAt: string | null; saves: number; error?: string } = { store: null, restoredFrom: null, restoredBuckets: 0, lastSavedAt: null, saves: 0 };
+function addCounts(o: RouteCounts, c: Partial<RouteCounts>) {
+  const bc = (a: ByClass, b?: Partial<ByClass>) => { if (b) for (const k of KLASSES) a[k] += Number(b[k] ?? 0) || 0; };
+  bc(o.requests, c.requests); bc(o.unpaid402, c.unpaid402); bc(o.visitors, c.visitors);
+  o.paid200 += Number(c.paid200 ?? 0) || 0; o.settleFailed += Number(c.settleFailed ?? 0) || 0; o.paymentInvalid += Number(c.paymentInvalid ?? 0) || 0;
+  o.uncharged += Number(c.uncharged ?? 0) || 0; if (c.selfPaid) o.selfPaid = (o.selfPaid ?? 0) + (Number(c.selfPaid) || 0);
+}
+/** Add saved buckets onto the live ones (exported for tests). Returns how many saved buckets were applied. */
+export function mergeSaved(j: any): number {
+  if (!j || j.v !== 1) return 0;
+  let n = 0;
+  for (const [list, saved, keep] of [[hourly, j.hourly, HOURS_KEPT], [daily, j.daily, DAYS_KEPT]] as const) {
+    for (const sb of Array.isArray(saved) ? saved : []) {
+      if (!sb || typeof sb.start !== "string") continue;
+      const b = bucket(list as Bucket[], sb.start, keep as number); n++;
+      for (const [r, c] of Object.entries((sb.routes ?? {}) as Record<string, Partial<RouteCounts>>)) addCounts(rc(b, r), c);
+      for (const [a, v] of Object.entries((sb.agents ?? {}) as Record<string, number>)) if (b.agents[a] !== undefined || Object.keys(b.agents).length < MAX_AGENT_KEYS) b.agents[a] = (b.agents[a] ?? 0) + (Number(v) || 0);
+    }
+  }
+  if (Array.isArray(j.rejections)) rejections = [...j.rejections, ...rejections].slice(-REJECTIONS_KEPT);
+  if (j.rejectionReasons && typeof j.rejectionReasons === "object") for (const [k, v] of Object.entries(j.rejectionReasons as Record<string, number>)) rejectionReasons[k] = (rejectionReasons[k] ?? 0) + (Number(v) || 0);
+  if (typeof j.trackingSince === "string" && j.trackingSince < trackingSince) trackingSince = j.trackingSince;
+  return n;
+}
+const snapshot = () => ({ v: 1, savedAt: new Date().toISOString(), trackingSince, hourly, daily, rejections, rejectionReasons });
+/** Write the counts to the durable store if they changed since the last write. Never throws. */
+export async function saveDurable(): Promise<void> {
+  if (!durable) return;
+  try {
+    const doc = snapshot(); const body = JSON.stringify({ ...doc, savedAt: "" }); // ~0.1-1 MB: one small stringify
+    if (body === lastDurableBody) return;
+    await durable.save(doc); lastDurableBody = body; durableStatus.lastSavedAt = doc.savedAt; durableStatus.saves++; delete durableStatus.error;
+  } catch (e) { durableStatus.error = String((e as Error).message ?? e).replace(/\s+/g, " ").slice(0, 120); }
+}
+/** Attach the durable store: restore once, then save every `everyMs` (default 5 min). */
+export async function attachDurable(store: DurableStore, everyMs = 5 * 60_000): Promise<void> {
+  if (durable) return;
+  durable = store; durableStatus.store = store.name;
+  try {
+    const j = await store.load();
+    durableStatus.restoredBuckets = mergeSaved(j);
+    if (j?.savedAt) durableStatus.restoredFrom = j.savedAt;
+  } catch (e) { durableStatus.error = `restore failed: ${String((e as Error).message ?? e).slice(0, 100)}`; }
+  const t = setInterval(() => void saveDurable(), everyMs); t.unref();
 }
 
 // ---------- persistence ----------
@@ -374,9 +439,11 @@ export function startTraffic(): void {
   if (persistence.mode === "file" && !saveTimer) {
     saveTimer = setInterval(save, 10 * 60_000);
     saveTimer.unref();
+    // Oct 18: on SIGTERM also flush to the durable store (max 8 s; Render waits up to 30 s), then exit.
     const onExit = () => {
       save();
-      process.exit(0);
+      console.warn("[traffic] shutdown signal: saving counts");
+      Promise.race([saveDurable(), new Promise((r) => setTimeout(r, 8000))]).finally(() => process.exit(0));
     };
     process.once("SIGTERM", onExit);
     process.once("SIGINT", onExit);
