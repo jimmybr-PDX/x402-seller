@@ -4,6 +4,7 @@
  * Page copy shows danger warnings only, in plain words; it never names how a warning was found.
  */
 import { RUG_EDGE } from "./rug-extra.js";
+import { RugBusyError } from "./rug.js";
 import { swapClientJs, type SwapCfg } from "./swap.js";
 import type { Express, Request, Response } from "express";
 import { randomBytes } from "node:crypto";
@@ -554,7 +555,7 @@ async function mcpCall(d: WebDeps, name: string, args: any, headerKey: string | 
     const left = await d.spend(key).catch(() => null);
     if (left != null) {
       try { return text({ ...(await d.rugCheck(token, chain)), paidWith: "credits", credits_remaining: left }); }
-      catch (e) { await d.refund(key); return text({ error: String((e as Error).message ?? e), refunded: true }, true); }
+      catch (e) { await d.refund(key); return text({ error: String((e as Error).message ?? e) + (e instanceof RugBusyError ? ". You weren't charged." : ""), refunded: true }, true); }
     }
   }
   // No usable key: return the live x402 payment requirement for the HTTP endpoint.
@@ -596,7 +597,7 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     }
     useFree(ip, vid);
     try { res.json({ ...limitedReport(await d.rugCheck(token, chain)), unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
-    catch (e) { refundFree(ip, vid); res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
+    catch (e) { refundFree(ip, vid); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
   });
   app.get("/sitemap.xml", (_req, res) => {
     const now = new Date().toISOString().slice(0, 10);

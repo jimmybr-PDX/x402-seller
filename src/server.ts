@@ -49,7 +49,7 @@ import { SOLANA_PRICE_SYMBOLS, SolanaInputError, solanaTokenPrice, rpc as solRpc
 import { WalletInputError, walletBalances } from "./lib/wallet.js";
 import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
-import { rugCheck, flaggedWallets, DISCLAIMER as RUG_DISCLAIMER } from "./lib/rug.js";
+import { rugCheck, RugBusyError, flaggedWallets, DISCLAIMER as RUG_DISCLAIMER } from "./lib/rug.js";
 import { registerRugradarWeb } from "./lib/rugradar-web.js";
 import { createWatcher, WATCH_PLANS, planOf, type Watch } from "./lib/watch.js";
 import { registerWatchRoutes, watchKeyMiddleware, watchPaidHandler, createWithCredits, watchConfig, type WatchRouteDeps } from "./lib/watch-routes.js";
@@ -339,7 +339,7 @@ async function main() {
     } catch (err) {
       await refund(key);
       const msg = err instanceof Error ? err.message : String(err);
-      res.status(err instanceof SolanaInputError ? 400 : 503).json({ error: err instanceof SolanaInputError ? "invalid_input" : "unavailable", message: `${msg}. Your credit was refunded.`, credits_remaining: left + 1 });
+      res.status(err instanceof SolanaInputError ? 400 : 503).json({ error: err instanceof SolanaInputError ? "invalid_input" : err instanceof RugBusyError ? "busy" : "unavailable", message: `${msg}. Your credit was refunded.`, credits_remaining: left + 1 });
     }
   });
 
@@ -1946,6 +1946,7 @@ async function main() {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (inputErrors.some((E) => err instanceof E)) res.status(400).json({ error: "bad_input", message: `${msg}. You were not charged.` });
+        else if (err instanceof RugBusyError) res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${msg}. You weren't charged.` });
         else {
           console.warn(`[${req.path}] ${msg.slice(0, 200)}`);
           res.status(503).json({ error: "rpc_unavailable", message: `${unavailable}; retry shortly. You were not charged.` });

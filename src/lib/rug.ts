@@ -326,15 +326,45 @@ export function scoreEvm(g: any, liquidityUsd: number | null, ageHours: number |
 }
 const EVM: Record<string, { id: number; ds: string }> = { base: { id: 8453, ds: "base" }, bnb: { id: 56, ds: "bsc" }, ethereum: { id: 1, ds: "ethereum" }, arbitrum: { id: 42161, ds: "arbitrum" } };
 const ALIAS: Record<string, string> = { bsc: "bnb", eth: "ethereum", arb: "arbitrum" };
+/** GoPlus is down/rate-limited/empty on purpose-built wording: "busy" is transient and never cached, charged or counted. */
+export class RugBusyError extends Error { code = "busy"; }
+type GpState = { state: "ok" | "empty" | "busy"; g?: any };
+let gpBackoff = [600, 1500];
+let gpCooldownUntil = 0, gpRetrying = 0;
+const GP_COOLDOWN_MS = 15_000, GP_MAX_RETRYING = 4;
+export function __setGoplusBackoff(ms: number[], cooldownReset = true) { gpBackoff = ms; if (cooldownReset) { gpCooldownUntil = 0; gpRetrying = 0; } }
+async function goplusOnce(addr: string, id: number, timeoutMs: number): Promise<GpState> {
+  try {
+    const r = await fetch(`https://api.gopluslabs.io/api/v1/token_security/${id}?contract_addresses=${addr}`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!r.ok) return { state: "busy" };
+    const j: any = await r.json();
+    const g = j?.result?.[addr.toLowerCase()];
+    if (g) return { state: "ok", g };
+    return { state: j?.code === 1 ? "empty" : "busy" }; // code 1 = GoPlus answered OK; anything else (rate limit, error) = busy
+  } catch { return { state: "busy" }; }
+}
+/** Up to 2 retries (600 ms, 1.5 s) when GoPlus is empty/errored/rate-limited. Shared cooldown + retry cap: under load or after a
+ *  full failure, requests make a single attempt only, so retries cannot multiply into a storm. */
+async function goplusFetch(addr: string, id: number): Promise<GpState> {
+  let v = await goplusOnce(addr, id, 6000);
+  const canRetry = () => Date.now() >= gpCooldownUntil && gpRetrying < GP_MAX_RETRYING;
+  for (let i = 0; i < gpBackoff.length && v.state !== "ok" && canRetry(); i++) {
+    gpRetrying++;
+    try { await new Promise((r) => setTimeout(r, gpBackoff[i])); v = await goplusOnce(addr, id, 4000); } finally { gpRetrying--; }
+  }
+  if (v.state === "busy") gpCooldownUntil = Date.now() + GP_COOLDOWN_MS; else if (v.state === "ok") gpCooldownUntil = 0;
+  return v;
+}
 async function evmCheck(addr: string, chain: string) {
   const c = EVM[chain]!;
-  const [gj, dsr] = await Promise.all([
-    cached(`goplus:${c.id}:${addr.toLowerCase()}`, () => retry(() => fetch(`https://api.gopluslabs.io/api/v1/token_security/${c.id}?contract_addresses=${addr}`, { signal: AbortSignal.timeout(6000) }).then((r) => r.json()) as Promise<any>, (v) => !v?.result?.[addr.toLowerCase()]), (v: any) => !!v?.result?.[addr.toLowerCase()]),
+  const [gp, dsr] = await Promise.all([
+    cached(`goplus:${c.id}:${addr.toLowerCase()}`, () => goplusFetch(addr, c.id), (v) => v.state === "ok"),
     retry(() => fetch(`https://api.dexscreener.com/tokens/v1/${c.ds}/${addr}`, { signal: AbortSignal.timeout(4000) }).then((r) => (r.ok ? r.json() : null)) as Promise<any[] | null>, (v) => v == null),
   ]);
   const marketUnknown = dsr == null;
-  const g = gj?.result?.[addr.toLowerCase()];
-  if (!g) throw new SolanaInputError(`token security data unavailable for this address on ${chain} (not a token, or the free GoPlus API is busy); you were not charged`);
+  if (gp.state === "busy") throw new RugBusyError("The data source is busy. Try again in a few seconds");
+  const g = gp.g;
+  if (!g) throw new SolanaInputError(`This doesn't look like a token on ${chain}`);
   const liq = dsr?.length ? dsr.reduce((a, p) => a + (p.liquidity?.usd ?? 0), 0) : null;
   const created = dsr?.length ? Math.min(...dsr.map((p) => p.pairCreatedAt ?? Infinity)) : null;
   const age = created && isFinite(created) ? (Date.now() - created) / 3.6e6 : null;
