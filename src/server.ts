@@ -1498,7 +1498,7 @@ async function main() {
       `- ${PUBLIC_URL}/openapi.json — OpenAPI 3.1 with x-payment-info`,
       `- ${PUBLIC_URL}/.well-known/x402 — x402 discovery document`,
       `- ${PUBLIC_URL}/health — status`,
-      `- ${PUBLIC_URL}/rugradar — free RugRadar landing page (human UI + free checks); for bots & agents: ${PUBLIC_URL}/rugradar#agents`,
+      `- ${PUBLIC_URL}/rugradar — free RugRadar landing page (human UI + free checks); for bots & agents: ${PUBLIC_URL}/rugradar#agents; add the free card to your bot or site: ${PUBLIC_URL}/rugradar#developers`,
       "",
       "## Example",
       `curl -i "${PUBLIC_URL}/report?q=What+is+the+Model+Context+Protocol%3F"   # 402 challenge`,

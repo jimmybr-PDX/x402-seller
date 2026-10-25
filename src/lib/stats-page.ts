@@ -63,7 +63,7 @@ th{font-size:.85rem;color:#555;font-weight:600}tr.total td{font-weight:700;borde
 ${rejectedLine(s.rejectedPayments)}
 <p>"Looked at price" = a likely real program or person asked for a tool and got the price, but didn't pay. "Bots/crawlers" = directory crawlers, uptime pings and other bots. Your own test calls and checks are left out.</p>
 <p>Updated ${esc(pt(s.generatedAt))}. Counts reset when the server restarts or redeploys.</p>
-<p><a href="?format=json">Raw data (JSON)</a></p>
+<p><a href="?format=json">Raw data (JSON)</a> \u00b7 <a href="/rugradar#developers">Add RugRadar to your bot or site</a></p>
 </body></html>`;
 }
 

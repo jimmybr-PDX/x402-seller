@@ -237,7 +237,9 @@ button.tease{cursor:pointer;font:inherit;font-size:13px;font-weight:700}
 details.fold{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 16px;margin:16px 0}
 code{background:#0E1528;padding:2px 6px;border-radius:6px;font-size:13px;word-break:break-all}pre{background:#0E1528;color:#9fdcf9;padding:10px;border-radius:8px;overflow-x:auto;font-size:12px}
 .agents table{width:100%;border-collapse:collapse;font-size:13px}.agents td{padding:5px 4px;border-bottom:1px solid var(--line);vertical-align:top}.agents td:first-child code{white-space:nowrap;word-break:normal}
-footer{color:var(--mut);font-size:12px;padding:20px 0 40px}
+.dev{padding:10px 14px;margin:12px 0}.dev>summary{font-size:14px}.dev p{font-size:13px;margin:10px 0 6px}.dev .cpw pre{margin:0}.dev code{font-size:12px;padding:1px 4px}.dev .cpb{display:block;margin:0 0 4px auto;background:#16203a;color:var(--tx);border:1px solid var(--line);border-radius:8px;font-size:12px;padding:3px 9px;cursor:pointer}
+.devlink{font-size:13px;padding:16px 0 0}
+footer{color:var(--mut);font-size:12px;padding:8px 0 40px}
 .soon{color:var(--mut);font-size:14px;cursor:default;user-select:none}
 @media(max-width:899px){.go{padding:11px 14px;font-size:15px}.buyline{margin-top:4px;font-size:11px}.grid{gap:10px}.quiet{margin-top:10px}details.fold{margin:10px 0;padding:12px 14px}}`;
 
@@ -338,6 +340,9 @@ f.addEventListener('submit',async e=>{e.preventDefault();const t=$('tok').value.
 function pill(n){$('credpill').textContent=(n==null?'Credits':'Credits: '+n)+' \u00b7 Buy'}
 $('credpill').addEventListener('click',e=>{e.preventDefault();openBuy(true)});$('buyc').addEventListener('click',()=>openBuy(false));
 document.querySelectorAll('a[href="#agents"]').forEach(a=>a.addEventListener('click',()=>{$('agents').open=true}));
+document.querySelectorAll('a[href="#developers"]').forEach(a=>a.addEventListener('click',()=>{$('developers').open=true}));
+const od=()=>{if(location.hash==='#developers')$('developers').open=true};od();addEventListener('hashchange',od);
+document.querySelectorAll('.cpb').forEach(b=>b.addEventListener('click',()=>{const t=b.nextElementSibling.textContent,done=()=>{b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1500)};if(navigator.clipboard)navigator.clipboard.writeText(t).then(done,()=>{});}));
 if(location.hash==='#agents')$('agents').open=true;if(location.hash==='#credits')openBuy(false);
 try{const u=new URLSearchParams(location.search),t=u.get('token'),c=u.get('chain');if(t&&t.length<=64){$('tok').value=t;if(c&&$('chain').querySelector('option[value="'+c.replace(/[^a-z]/g,'')+'"]'))$('chain').value=c}}catch(e){}
 keyUI();document.getElementById('wpayHome').append(walletPacks());
@@ -389,8 +394,10 @@ ${CSS_PAGE}</style></head><body><div class="wrap">
 <div style="margin-top:6px;font-size:13px"><a href="#agents">For bots &amp; agents \u203a</a></div>
 </section></aside>
 </div>
+${devSection(U, p)}
 ${agentsSection(U, p)}
 <details class="fold"><summary>How RugRadar works</summary><p class="mut">We turn public on-chain and market data into a 0-100 risk score with plain danger warnings. Danger warnings only: a low score is not a guarantee.</p>${faq.map(([q, a]) => `<h3 style="font-size:15px;margin:12px 0 2px">${q}</h3><p class="mut" style="margin:0">${a}</p>`).join("")}</details>
+<div class="devlink"><a href="#developers">Add RugRadar to your bot or site \u203a</a></div>
 <footer>RugRadar \u00b7 ${DISCLAIMER} Danger warnings only, never a guarantee; it never labels people.</footer>
 </div>
 <script>const CFG=${json(cfg)};
@@ -414,6 +421,16 @@ export function agentSnippets(U: string) {
     embedJson: `curl -s "${U}/rugradar/embed.json?token=${EXAMPLE_MINT}"\n# -> {"riskScore":0,"riskLevel":"low","verdict":"No danger warnings found. Not a guarantee.","warnings":[...],"report":"${U}/rugradar?token=..."}`,
     python: `import hmac, hashlib, re, time\ndef verify(raw: bytes, header: str, secret: str) -> bool:\n    m = re.fullmatch(r"t=(\\d+),v1=([0-9a-f]{64})", header or "")\n    if not m or abs(time.time() - int(m[1])) > 300: return False\n    want = hmac.new(secret.encode(), m[1].encode() + b"." + raw, hashlib.sha256).hexdigest()\n    return hmac.compare_digest(want, m[2])`,
   };
+}
+export const DEV_MINT = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+function devSection(U: string, p: string) {
+  const cp = (t: string) => `<div class="cpw"><button class="cpb" type="button" aria-label="Copy code">Copy</button><pre>${escH(t)}</pre></div>`;
+  const iframe = `<iframe src="${U}/rugradar/embed?token=${DEV_MINT}" width="380" height="420" style="border:0;max-width:100%" loading="lazy" title="RugRadar token risk"></iframe>`;
+  const curl = `curl -s "${U}/rugradar/embed.json?token=${DEV_MINT}"\n# -> {"riskScore":..,"riskLevel":"..","verdict":"..","warnings":[..],"reportUrl":"${U}/rugradar?token=.."}`;
+  return `<details class="fold dev" id="developers"><summary>For developers: add RugRadar to your bot or site</summary><div>
+<p><b>Card (iframe).</b> Free, danger warnings only. Swap in any Solana mint or 0x address.</p>${cp(iframe)}
+<p><b>JSON (free check).</b> Score, verdict, top 3 warnings and a report link.</p>${cp(curl)}
+<p><small>The full report with every warning costs $${p} per check with prepaid credits (header <code>X-RugRadar-Key</code>) or x402. Details: <a href="#agents">bots &amp; agents</a>. Heuristic, may be wrong, not financial advice.</small></p></div></details>`;
 }
 function agentsSection(U: string, p: string) {
   const c = agentSnippets(U), pre = (t: string) => `<pre>${escH(t)}</pre>`;

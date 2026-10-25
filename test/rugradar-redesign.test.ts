@@ -43,7 +43,7 @@ test("v5 page: paste box, Auto chip, free line, credits copy, folded agents with
     const { srv, base } = await start(() => deadFull(), sw);
     try {
       const h = await (await fetch(`${base}/rugradar`)).text();
-      for (const s of ['id="tok"', '<option value="auto">Auto', "Free \u00b7 no sign-up", "Prepaid credits finish checks ~2x faster", "Buy credits: results ~2x faster", "don't wait on a payment for each check (measured ~1.8x faster)", "Strong rug warning signs.", "No danger warnings found. Not a guarantee.", "No socials found", "more warning", '<details class="fold agents" id="agents">', "/rugradar/embed?token=", "/rugradar/embed.json?token="]) assert.ok(h.includes(s), s);
+      for (const s of ['id="tok"', '<option value="auto">Auto', "Free \u00b7 no sign-up", "Prepaid credits finish checks ~2x faster", "Buy credits: results ~2x faster", "don't wait on a payment for each check (measured ~1.8x faster)", "Strong rug warning signs.", "No danger warnings found. Not a guarantee.", "No socials found", "more warning", '<details class="fold agents" id="agents">', 'id="developers"', "For developers", "#developers", "/rugradar/embed?token=", "/rugradar/embed.json?token="]) assert.ok(h.includes(s), s);
       assert.equal((h.match(/<select id="chain"/g) ?? []).length, 1, "a single chain chip");
       assert.ok(!/id="watch"|More tools|Watch this token/.test(h), "no Watch feature or paid tool list in this release");
       assert.ok(h.includes("Watch token: coming soon") && h.includes("mo.id='more'"), "static coming-soon note in the More section");
@@ -52,7 +52,7 @@ test("v5 page: paste box, Auto chip, free line, credits copy, folded agents with
       for (const re of PRIVATE) assert.ok(!re.test(visible), `page must not match ${re}`);
       for (const k of ["deployer_history", "known_pattern", "shared_funder"]) assert.ok(!new RegExp(`"${k}":\\[`).test(h), `${k} has no copy on the page`);
       assert.equal(h.includes("Opens swap in your wallet"), sw.enabled, "swap line only ships when the swap is on");
-      assert.ok(Buffer.byteLength(h) < 45_000, `page ${Buffer.byteLength(h)} bytes`);
+      assert.ok(Buffer.byteLength(h) < 48_000, `page ${Buffer.byteLength(h)} bytes`);
       for (const m of h.matchAll(/<script>([\s\S]*?)<\/script>/g)) new Function(m[1]!);
     } finally { srv.closeAllConnections(); srv.close(); }
   }
