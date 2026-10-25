@@ -25,6 +25,8 @@ const git = (...a: string[]) => run(NICE[0] ?? "git", [...NICE.slice(1), ...(NIC
 export const storeStatus = () => ({ mode, lastPushAt, ...(lastError ? { error: lastError } : {}) });
 
 export async function initStore(): Promise<void> {
+  // Box run (PAPER_LOCAL=1): local disk only, never clones/pushes to GitHub. Data dir = PAPER_DATA_DIR (or PAPER_DIR). Render does not set this flag, so its behaviour is unchanged.
+  if (process.env.PAPER_LOCAL === "1") { dir = process.env.PAPER_DATA_DIR ?? process.env.PAPER_DIR ?? path.join(process.cwd(), "data", "paper-store"); fs.mkdirSync(path.join(dir, "data"), { recursive: true }); mode = "file"; return; }
   const repo = process.env.PAPER_STORE_REPO, keyB64 = process.env.PAPER_STORE_SSH_KEY_B64;
   if (!repo || !keyB64) { dir = process.env.PAPER_DIR ?? path.join(process.cwd(), "data", "paper-store"); fs.mkdirSync(path.join(dir, "data"), { recursive: true }); mode = "file"; return; }
   try {

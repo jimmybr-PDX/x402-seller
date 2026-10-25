@@ -340,7 +340,7 @@ export function trafficStats(paidRoutes: string[], full = true) {
 // ---------- durable store (Oct 18, per-instance files Oct 19) ----------
 // Render free has no disk, so data/traffic.json dies with every deploy/restart. With a durable store attached (the private
 // RugRadar GitHub store, same repo as credits/watches) each instance writes ONLY the counts it made itself to its own file
-// traffic-<instance>.json (every 5 min when changed, and on SIGTERM marked final). Two instances never write the same file,
+// traffic-<instance>.json (every 6 h when changed, and on SIGTERM marked final). Two instances never write the same file,
 // so a deploy/restart overlap cannot collide. On boot: restored = traffic.json (compacted base) + every other instance file.
 // 10 min after boot (old instance gone, its final save landed) and every 6 h: fetch the remote, add whatever the other files
 // gained since boot (that is the old instance's last minutes), then fold final/stale (>2 h) files into traffic.json and
@@ -457,8 +457,8 @@ export async function refreshDurable(now = Date.now()): Promise<void> {
   } catch (e) { durableStatus.error = `refresh: ${String((e as Error).message ?? e).replace(/\s+/g, " ").slice(0, 100)}`; }
 }
 const sumUnpaid = (d: Doc) => d.daily.reduce((s, b) => s + Object.values(b.routes).reduce((t, c) => t + c.requests.client + c.requests.crawler + c.requests.pinger + c.requests.bot + c.requests.head, 0), 0);
-/** Attach the durable store: restore once, save every `everyMs` (default 5 min), refresh 10 min after boot and every 6 h. */
-export async function attachDurable(store: DurableStore, everyMs = 5 * 60_000, refreshFirstMs = 10 * 60_000, refreshEveryMs = 6 * 3600e3): Promise<void> {
+/** Attach the durable store: restore once, save every `everyMs` (default 6 h, Oct 24 bandwidth cap; SIGTERM still saves a final copy), refresh 10 min after boot and every 6 h. */
+export async function attachDurable(store: DurableStore, everyMs = 6 * 3600e3, refreshFirstMs = 10 * 60_000, refreshEveryMs = 6 * 3600e3): Promise<void> {
   if (durable) return;
   durable = store; durableStatus.store = store.name;
   try {
