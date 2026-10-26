@@ -9,7 +9,7 @@ export const LIVE_CSS = `.lv{margin-top:12px;display:grid;gap:12px}.lb{border:1p
 .wr a{color:var(--tx);font-family:ui-monospace,Menlo,monospace;font-size:13px}.wr span{white-space:nowrap}.wr .tg{font-size:11px;font-weight:900;border-radius:5px;padding:2px 6px;margin-left:6px}.wr.h .tg{background:#22C55E;color:#04150a}.wr.s .tg{background:var(--bad);color:#fff}.wr .kd{font-size:11px;color:var(--mut);margin-left:6px}
 .lsum{font-size:13px;color:#c9d1e0;margin:0 0 6px}.l2{display:grid;gap:12px}@media(min-width:700px){.l2{grid-template-columns:1fr 1fr}}
 .tr{display:flex;justify-content:space-between;gap:8px;font-size:14px;padding:4px 0;border-bottom:1px solid var(--line)}.tr:last-child{border:0}.tr i{font-style:normal;color:var(--mut);font-size:12px}
-.rk{display:grid;grid-template-columns:1fr auto;gap:4px 10px;font-size:14px}.rk b{text-align:right}.rk .bad{color:#ff8a8a}.rk .ok{color:#6CFFA0}.lnote{font-size:11px;color:var(--mut);margin-top:6px}`;
+.rk{display:grid;grid-template-columns:1fr auto;gap:4px 10px;font-size:14px}.rk b{text-align:right}.rk .bad{color:#ff8a8a}.rk .ok{color:#6CFFA0}.lnote{font-size:11px;color:var(--mut);margin-top:6px}.lhd{font-size:12px;color:var(--mut);text-align:center;letter-spacing:.04em;padding:5px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.lend{border-top:0;padding-top:0}`;
 export const LIVE_JS = String.raw`(function(){
 var B58=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 function el(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
@@ -40,5 +40,5 @@ window.RRLive=function(j){var L=j&&j.liveReport;if(!L)return null;var box=el('di
   add('Freeze authority',R.freezeAuthority==='off'?'Off':R.freezeAuthority==='on'?'On':'Unknown',R.freezeAuthority==='off'?'ok':R.freezeAuthority==='on'?'bad':'');
   if(R.top10Pct!=null)add('Top 10 holders',pc(R.top10Pct),R.top10Pct>70?'bad':'');
   rk.append(g,el('div','lnote','May include pool/curve accounts. Danger warnings only. Not financial advice.'));box.append(rk);n++}
- return n?box:null};
+ if(!n)return null;var N=Array.isArray(j.checks)?j.checks.length:0;box.prepend(el('div','lhd','Full report \u00b7 unlocked'));box.append(el('div','lhd lend','End of report'+(N?' \u00b7 '+N+' checks run':'')));return box};
 })();`;

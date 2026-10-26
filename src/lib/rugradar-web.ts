@@ -211,12 +211,10 @@ header{display:flex;align-items:center;justify-content:space-between;padding:12p
 .tok{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.av{width:44px;height:44px;border-radius:50%;background:#2a3456;display:grid;place-items:center;font-weight:800;flex:none}
 .tok b{font-size:18px;word-break:break-all}.addr{font-size:13px;color:var(--mut)}
 .socw{margin-left:auto}.soc{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}
-.si a,.si span.off{position:relative;width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:13px;font-weight:700}
-.si a{border:1px solid #3a4670;background:#18213a;color:var(--tx)}
+.si a,.si span.off{position:relative;width:34px;height:34px;border-radius:10px;display:grid;place-items:center}.si svg{width:20px;height:20px;fill:currentColor}
+.si a{border:1px solid #3a4670;background:#18213a}.i-x{color:#fff}.i-tg{color:#26A5E4}.i-dc{color:#5865F2}.i-web{color:#8FA3BF}
 .si a::after{content:"\\2713";position:absolute;right:-5px;bottom:-5px;width:15px;height:15px;border-radius:50%;background:#22C55E;color:#04150a;font-size:10px;font-weight:900;display:grid;place-items:center}
-.si span.off{border:1px solid var(--bad);background:rgba(239,68,68,.18);color:#ffc2c2;overflow:hidden}.si span.off::before{content:"";position:absolute;left:-4px;right:-4px;top:50%;height:2px;background:var(--bad);transform:rotate(-45deg)}
-.nosoc{display:inline-block;background:rgba(239,68,68,.18);border:1px solid var(--bad);color:#ffc2c2;border-radius:999px;padding:5px 10px;font-size:13px;font-weight:700}
-.socfb{font-size:13px;font-weight:600;color:#C9D1E0;margin-top:6px}.socfb .miss{color:#ff8a8a;font-weight:700}
+.si span.off{border:1px solid #2c3550;background:#121a2e;color:#5b6582;overflow:hidden}.si span.off::before{content:"";position:absolute;left:-4px;right:-4px;top:50%;height:2px;background:#8a93aa;transform:rotate(-45deg)}
 @media(max-width:899px){.socw{margin-left:0;width:100%}}@media(min-width:900px){.socfb{text-align:right}}
 .res .verdict{margin:14px 0 10px}
 @media(max-width:899px){.res .verdict{margin:10px 0 6px;padding:12px;gap:12px;min-height:150px}.gauge{width:104px;height:104px}.gauge i{width:78px;height:78px;font-size:32px}.wcards{gap:6px}.wc summary{padding:10px 12px}.card{padding:12px}.hero h1{font-size:24px}}
@@ -305,13 +303,16 @@ const ageTxt=h=>{if(typeof h!=='number')return null;if(h<1)return Math.max(1,Mat
 function warnings(checks){const seen={},o=[];(Array.isArray(checks)?checks:[]).filter(c=>c&&Number(c.points)>0&&CFG.warn[c.check]).sort((a,b)=>b.points-a.points).forEach(c=>{const w=CFG.warn[c.check];if(seen[w[0]])return;seen[w[0]]=1;o.push({d:Number(c.points)>=15,t:w[0],l:w[1]})});return o}
 function card(w,j,open){const d=el('details','wc '+(w.d?'d':'c'));if(open)d.open=true;const s=el('summary');s.append(el('span','sev '+(w.d?'s3':'s2'),w.d?'DANGER':'CAUTION'),el('span','tt',w.t),el('span','ch'));d.append(s);
  d.append(el('p',null,w.l));return d}
-const SOC=[['X','\u{1D54F}',/^(twitter|x)$/i,'X'],['Telegram','TG',/^telegram$/i,'TG'],['Website','\u{1F310}',/^website$/i,'Web'],['Discord','DC',/^discord$/i,'Discord']];
+const SV=d=>'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="'+d+'"/></svg>';
+const ICO={x:SV('M14.2 10.2 23 0h-2l-7.7 8.8-6-8.8h-7l9.1 13.3L.3 24h2l8-9.3 6.4 9.3h7zm-2.8 3.3-1-1.4L3.2 1.6h3.2l6 8.5.9 1.3 7.7 11.1h-3.2z'),tg:SV('M12 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0m5 7.2.4.2.1.3v.5c-.1 1.9-.9 6.5-1.3 8.6q-.3 1.3-.8 1.2-1 0-2-.9l-2.6-1.8c-1.2-.8-.4-1.2.3-1.9l3.3-3.2V10H14q-.2 0-5.1 3.3-.8.5-1.3.5-.8-.1-1.9-.5-1.2-.2-1.3-.8 0-.3 1-.6z'),dc:SV('M20.3 4.4a20 20 0 0 0-4.9-1.5L14.7 4q-2.7-.3-5.4 0L8.6 3a20 20 0 0 0-5 1.5q-4.4 7-3.5 13.7 3 2.2 6 3h.1q.8-1 1.2-2l-1.9-1V18l.4-.3q6.1 2.7 12.1 0h.1l.4.3v.1l-2 1 1.3 2q3-.8 6-3h.1q.7-7.7-3.6-13.7M8 15.4c-1.2 0-2.1-1.2-2.1-2.5s1-2.4 2.1-2.4 2.2 1 2.2 2.4-1 2.4-2.2 2.4m8 0c-1.2 0-2.2-1.2-2.2-2.5s1-2.4 2.2-2.4q2 .1 2.2 2.4c0 1.3-1 2.4-2.2 2.4'),web:'<svg viewBox="0 0 24 24" aria-hidden="true" style="fill:none;stroke:currentColor;stroke-width:1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3.5 3.5 3.5 14.5 0 18M12 3c-3.5 3.5-3.5 14.5 0 18"/></svg>'};
+const SOC=[['X','x',/^(twitter|x)$/i,'X'],['Telegram','tg',/^telegram$/i,'TG'],['Website','web',/^website$/i,'Web'],['Discord','dc',/^discord$/i,'Discord']];
+const ic=(e,k)=>{if(ICO[k]){e.classList.add('i-'+k);e.innerHTML=ICO[k]}else e.textContent=k};
 function host(u){try{return new URL(u).hostname.replace(/^www\./,'')}catch(e){return ''}}
 function socials(j){const raw=Array.isArray(j.socialLinks)?j.socialLinks:(j.buyer&&Array.isArray(j.buyer.socialLinks)?j.buyer.socialLinks:null);if(!raw)return null;
  const links=raw.filter(x=>x&&typeof x.url==='string'&&/^https?:\/\//i.test(x.url)),w=el('div','socw');w.title='Links set by the token creator';
  if(!links.length){w.append(el('span','nosoc','\u26A0 No socials found'));return w}
- const row=el('div','soc'),have=[],miss=[];const mk=(x,name,ic)=>{const s=el('div','si'),a=el('a',null,ic);a.href=x.url;a.target='_blank';a.rel='noopener noreferrer nofollow';a.setAttribute('aria-label',name);a.title=name+': '+host(x.url);s.append(a);row.append(s)};
- SOC.forEach(([name,ic,re,shortName])=>{const x=links.find(l=>re.test(String(l.type||'')));if(x){mk(x,name,ic);have.push(shortName)}else{const s=el('div','si'),o=el('span','off',ic);o.setAttribute('aria-label',name+' missing');o.title=name+' missing';s.append(o);row.append(s);miss.push(shortName)}});
+ const row=el('div','soc'),have=[],miss=[];const mk=(x,name,k)=>{const s=el('div','si'),a=el('a');ic(a,k);a.href=x.url;a.target='_blank';a.rel='noopener noreferrer nofollow';a.setAttribute('aria-label',name);a.title=name+': '+host(x.url);s.append(a);row.append(s)};
+ SOC.forEach(([name,k,re,shortName])=>{const x=links.find(l=>re.test(String(l.type||'')));if(x){mk(x,name,k);have.push(shortName)}else{const s=el('div','si'),o=el('span','off');ic(o,k);o.setAttribute('role','img');o.setAttribute('aria-label',name+' missing');o.title=name+' missing';s.append(o);row.append(s);miss.push(shortName)}});
  links.filter(l=>!SOC.some(s=>s[2].test(String(l.type||'')))).slice(0,3).forEach(x=>{const n=String(x.type||'link');mk(x,n,n.slice(0,2).toUpperCase());have.push(n)});
  row.title='Links set by the token creator';const fb=el('div','socfb',have.join(' \u00b7 '));if(miss.length){if(have.length)fb.append(' \u00b7 ');fb.append(el('span','miss',miss.join(', ')+' missing'))}
  w.append(row,fb);return w}
