@@ -13,7 +13,7 @@ const WSOL = "So11111111111111111111111111111111111111112";
 const ATA_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", TOKEN_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const UA = { "user-agent": "Mozilla/5.0 (RugRadar)", accept: "application/json" };
-const CACHE_MS = Number(process.env.RUG_PAID_CACHE_MS ?? 10 * 60_000), BUDGET_MS = Number(process.env.RUG_PAID_BUDGET_MS ?? 5200), MAX_BUSY = 3;
+const CACHE_MS = Number(process.env.RUG_PAID_CACHE_MS ?? 15 * 60_000), BUDGET_MS = Number(process.env.RUG_PAID_BUDGET_MS ?? 5200), MAX_BUSY = 3;
 const r2 = (n: unknown, d = 2) => (n == null || n === "" || !isFinite(Number(n)) ? null : +Number(n).toFixed(d));
 let lastWarn = 0;
 const j = (u: string, ms = 2500) => fetch(u, { headers: UA, signal: AbortSignal.timeout(ms) }).then((r) => { if (!r.ok && Date.now() - lastWarn > 5000) { lastWarn = Date.now(); console.warn(`[rug-paid] ${new URL(u).host} HTTP ${r.status}`); } return r.ok ? r.json() : null; }).catch((e) => { if (Date.now() - lastWarn > 5000) { lastWarn = Date.now(); console.warn(`[rug-paid] ${new URL(u).host} ${e?.name ?? "error"}`); } return null; }) as Promise<any>;

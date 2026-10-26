@@ -4,7 +4,8 @@ import { stashTrades } from "./rug-paid.js";
 // mint-account token-2022 extensions, DexScreener socials. Every lookup is time-boxed; failures become unknowns.
 const SOL = "So11111111111111111111111111111111111111112";
 const UA = { "user-agent": "Mozilla/5.0 (RugRadar)", accept: "application/json" };
-const j = (u: string, ms = 3500) => fetch(u, { headers: UA, signal: AbortSignal.timeout(ms) }).then((r) => (r.ok ? r.json() : null)).catch(() => null) as Promise<any>;
+let lastWarn = 0;
+const j = (u: string, ms = 3500) => fetch(u, { headers: UA, signal: AbortSignal.timeout(ms) }).then((r) => { if (!r.ok && Date.now() - lastWarn > 5000) { lastWarn = Date.now(); console.warn(`[rug-extra] ${new URL(u).host} HTTP ${r.status}`); } return r.ok ? r.json() : null; }).catch((e) => { if (Date.now() - lastWarn > 5000) { lastWarn = Date.now(); console.warn(`[rug-extra] ${new URL(u).host} ${e?.name ?? "error"}`); } return null; }) as Promise<any>;
 const r2 = (n: number | null | undefined, d = 2) => (n == null || !isFinite(Number(n)) ? null : +Number(n).toFixed(d));
 import { goplusSol, goplusChecks } from "./goplus-sol.js";
 export type Extra = { signals: Record<string, unknown>; checks: { check: string; points: number; detail: string }[]; unknown: string[]; ms: number };
@@ -29,7 +30,9 @@ export async function pumpCurve(mint: string): Promise<{ active: boolean; comple
 export async function pumpLaunch(mint: string, dev: string | null, supply: number) {
   const trades: any[] = []; let cursor = ""; let complete = false;
   for (let p = 0; p < 4; p++) {
-    const d = await j(`https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, 3000);
+    const u = `https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+    let d = await j(u, 2500);
+    if (!d?.trades) { await new Promise((r) => setTimeout(r, 400)); d = await j(u, 2500); } // free API sometimes rate-limits Render: one quick retry
     if (!d?.trades) return null;
     trades.push(...d.trades);
     if (!d.pagination?.hasMore) { complete = true; break; }

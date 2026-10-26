@@ -199,7 +199,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:12p
 .pill{border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:14px;color:var(--tx)}
 .hero h1{font-size:26px;line-height:1.15;margin:6px 0 4px}.hero p{margin:0 0 12px;color:var(--mut);font-size:15px}
 .search{display:flex;gap:8px;flex-wrap:wrap}.search input{flex:1 1 260px;min-width:0;background:#0E1528;border:2px solid var(--acc);color:var(--tx);border-radius:12px;padding:14px;font-size:16px}
-.search input::placeholder{color:#7d88a0}
+.search input::placeholder{color:#7d88a0}.tw{position:relative;flex:1 1 260px;display:flex;min-width:0}.tw input{flex:1;padding-right:44px}.clr{position:absolute;right:4px;top:50%;transform:translateY(-50%);background:0;border:0;color:var(--mut);font-size:24px;line-height:1;padding:8px 12px;cursor:pointer}
 .btn{display:inline-block;border:0;border-radius:12px;padding:14px 18px;font-weight:700;font-size:16px;cursor:pointer;text-align:center}.pri{background:var(--acc);color:#04121d}.go{background:#22C55E;color:#04150a;width:100%}.ghost{background:transparent;border:1px solid var(--line);color:var(--tx)}.btn:disabled{opacity:.6;cursor:not-allowed}
 .subrow{display:flex;gap:10px;align-items:center;margin:8px 0 6px;flex-wrap:wrap}
 .chainchip{appearance:none;-webkit-appearance:none;background:transparent;border:1px solid var(--acc);border-radius:999px;padding:3px 10px;font-size:13px;color:var(--tx);cursor:pointer}
@@ -354,6 +354,7 @@ const od=()=>{if(location.hash==='#developers')$('developers').open=true};od();a
 document.querySelectorAll('.cpb').forEach(b=>b.addEventListener('click',()=>{const t=b.nextElementSibling.textContent,done=()=>{b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1500)};if(navigator.clipboard)navigator.clipboard.writeText(t).then(done,()=>{});}));
 if(location.hash==='#agents')$('agents').open=true;if(location.hash==='#credits')openBuy(false);
 try{const u=new URLSearchParams(location.search),t=u.get('token'),c=u.get('chain');if(t&&t.length<=64){$('tok').value=t;if(c&&$('chain').querySelector('option[value="'+c.replace(/[^a-z]/g,'')+'"]'))$('chain').value=c}}catch(e){}
+{const tk=$('tok'),cl=$('clr'),cs=()=>{cl.hidden=!tk.value};tk.addEventListener('input',cs);cl.addEventListener('click',()=>{tk.value='';cs();tk.focus()});cs()}
 keyUI();document.getElementById('wpayHome').append(walletPacks());
 (function(){const k=KS.get();if(!k)return;fetch('/credits/balance',{headers:{'X-RugRadar-Key':k}}).then(r=>r.json()).then(j=>{if(j&&j.known)pill(j.credits)}).catch(()=>{})})();
 `;
@@ -387,7 +388,7 @@ ${CSS_PAGE}</style></head><body><div class="wrap">
 <section class="hero" aria-label="Token checker">
 <h1>Is this token a rug? Check before you buy.</h1>
 <p>Paste an address. Plain danger warnings in seconds.</p>
-<form id="f" class="search"><input id="tok" name="token" required autocomplete="off" spellcheck="false" placeholder="Token address (Solana mint or 0x contract)" aria-label="Token address"><button class="btn pri" id="go">Check token</button></form>
+<form id="f" class="search"><span class="tw"><input id="tok" name="token" required autocomplete="off" spellcheck="false" placeholder="Token address (Solana mint or 0x contract)" aria-label="Token address"><button type="button" id="clr" class="clr" aria-label="Clear" hidden>\u00d7</button></span><button class="btn pri" id="go">Check token</button></form>
 <div class="subrow"><select id="chain" class="chainchip" aria-label="Chain" title="Chain: Auto-detect (Solana, Base, BNB, Ethereum, Arbitrum)"><option value="auto">Auto \u25BE</option>${CHAINS.map((c) => `<option value="${c}">${CHAIN_NAME[c]}</option>`).join("")}</select><span class="trust">Free \u00b7 no sign-up</span></div>
 <details class="keyd" id="keyd"><summary>Have a credit key?</summary><input id="key" type="password" placeholder="Credit key (rr_...)" autocomplete="off" aria-label="Credit key"><small id="keybox" hidden></small></details>
 <small id="quota"></small>
