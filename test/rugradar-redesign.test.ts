@@ -65,7 +65,7 @@ test("embed card + JSON: ring, verdict, max 3 collapsed warnings, unlock link, c
     assert.equal(r.status, 200); assert.match(r.headers.get("content-security-policy") ?? "", /frame-ancestors \*/);
     assert.match(h, /class="gauge g-high"/); assert.match(h, /HIGH RISK/); assert.match(h, /Strong rug warning signs\./);
     assert.equal((h.match(/<details class="wc/g) ?? []).length, 3); assert.ok(!/<details[^>]* open/.test(h), "collapsed");
-    assert.match(h, /Unlock full report \u203a/); assert.match(h, /Not a guarantee \u00b7 <b>RugRadar<\/b>/); assert.match(h, /width:360px/);
+    assert.match(h, /Unlock live chart \+ full report - \$0\.01 \u203a/); assert.match(h, /Not a guarantee \u00b7 <b>RugRadar<\/b>/); assert.match(h, /width:360px/);
     assert.ok(!/<script/i.test(h), "no scripts in the embed"); assert.ok(!/Buy this token|swap/i.test(h));
     for (const re of PRIVATE) assert.ok(!re.test(h), `embed must not match ${re}`);
     const j = await (await fetch(`${base}/rugradar/embed.json?token=${DEAD}`)).json();
@@ -103,9 +103,9 @@ test("free check page: free line under the ring, no quota line above, quiet cred
   try {
     const h = await (await fetch(`${base}/rugradar`)).text();
     assert.match(h, /<small id="quota"><\/small>/); assert.ok(h.includes("Free check: basic warnings only. Full report unlocks more."));
-    assert.match(h, /class="btn sec wide" id="buyc"/); assert.match(h, /Prepaid credits finish checks ~2x faster/); assert.match(h, /<details class="keyd" id="keyd"><summary>Have a credit key\?<\/summary>/);
+    assert.match(h, /class="linkbtn" id="buyc"/); assert.match(h, /Prepaid credits finish checks ~2x faster/); assert.match(h, /<details class="keyd" id="keyd"><summary>Have a credit key\?<\/summary>/);
     assert.ok(!h.includes("dev history"));
     const e = await (await fetch(`${base}/rugradar/embed?token=${CLEAN}`)).text();
-    assert.match(e, /class="gauge g-medium"/); assert.match(e, />CAUTION</); assert.ok(!e.includes("LOW RISK")); assert.match(e, /Free check: basic warnings only\. Full report unlocks more\./); assert.match(e, /Unlock full report \u203a/);
+    assert.match(e, /class="gauge g-medium"/); assert.match(e, />CAUTION</); assert.ok(!e.includes("LOW RISK")); assert.match(e, /Free check: basic warnings only\. Full report unlocks more\./); assert.match(e, /Unlock live chart \+ full report - \$0\.01 \u203a/);
   } finally { srv.closeAllConnections(); srv.close(); }
 });

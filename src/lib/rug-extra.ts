@@ -1,4 +1,5 @@
 import { jupFetch } from "./jup-gate.js";
+import { stashTrades } from "./rug-paid.js";
 // Buyer-facing extra signals (free sources only): Jupiter token stats + sell quote, pump.fun public trades,
 // mint-account token-2022 extensions, DexScreener socials. Every lookup is time-boxed; failures become unknowns.
 const SOL = "So11111111111111111111111111111111111111112";
@@ -34,6 +35,7 @@ export async function pumpLaunch(mint: string, dev: string | null, supply: numbe
     if (!d.pagination?.hasMore) { complete = true; break; }
     cursor = d.pagination.nextCursor;
   }
+  try { stashTrades(mint, trades, complete); } catch {} // kept 10 min for the paid report (no extra fetch)
   const amt = (t: any) => Number(t.baseAmount || 0);
   const devT = dev ? trades.filter((t) => t.userAddress === dev) : [];
   const devBought = devT.filter((t) => t.type === "buy").reduce((a, t) => a + amt(t), 0);

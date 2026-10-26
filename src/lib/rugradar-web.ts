@@ -5,6 +5,7 @@
  */
 import { RUG_EDGE } from "./rug-extra.js";
 import { RugBusyError } from "./rug.js";
+import { LIVE_JS } from "./rugradar-live.js";
 import { swapClientJs, type SwapCfg } from "./swap.js";
 import type { Express, Request, Response } from "express";
 import { randomBytes } from "node:crypto";
@@ -12,6 +13,8 @@ import { randomBytes } from "node:crypto";
 export type WebDeps = {
   publicUrl: string; port: number; priceUsd: string; speed: { creditS: number; paidS: number; x: number } | null;
   rugCheck: (t: string, chain: string) => Promise<any>;
+  /** Paid-path check with the live-report blocks (MCP credit-key calls); defaults to rugCheck. */
+  paidCheck?: (t: string, chain: string) => Promise<any>;
   spend: (k: string) => Promise<number | null>; refund: (k: string) => Promise<void>;
   /** RugRadar Watch + Alert (optional): create a watch paid with credits; config for prices/destinations. */
   watch?: { create: (key: string, args: any) => Promise<any>; config: () => any };
@@ -49,6 +52,7 @@ export function limitedReport(full: any) {
     product: "RugRadar", report: "limited", chain: full?.chain ?? null, token: full?.token ?? null, riskScore: score, riskLevel: level, scoring: "basic score (mint/freeze authority, top holders, age, liquidity, dead token)",
     verdict: level === "high" ? "Multiple high-risk patterns found." : level === "medium" ? "Some high-risk patterns found." : "No major high-risk patterns found in the basic checks.",
     reasons: checks.filter((c: any) => c.points > 0).map((c: any) => c.detail), checks,
+    moreWarnings: Math.max(0, warningsOf(checks).length - 3) + all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length,
     hiddenWarnings: all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length,
     socialLinks: Array.isArray(links) ? links : null, freeFacts: freeFacts(full),
     facts: { mintAuthority: pick("mintAuthority"), freezeAuthority: pick("freezeAuthority"), top1Pct: pick("top1Pct"), top10Pct: pick("top10Pct"), holderCount: pick("holderCount"), ageHours: pick("ageHours"), liquidityUsd: pick("liquidityUsd") },
@@ -224,7 +228,7 @@ button.tease{cursor:pointer;font:inherit;font-size:13px;font-weight:700}
 .buyline{font-size:12px;color:var(--mut);text-align:center;margin-top:6px}#swapbox{margin:10px 0 4px}#swapbox small{display:block;text-align:center}
 .card h2,.card h3{margin:0 0 6px;font-size:17px}.mut{color:var(--mut);font-size:14px;margin:0 0 10px}.note{font-size:13px;color:var(--mut);margin:8px 0 10px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.wide{width:100%}
-.cred{padding:12px 14px}.cred h2{font-size:16px;margin-bottom:2px}.cred .mut{font-size:13px;margin-bottom:8px}.cred .note{font-size:12px;margin:6px 0 4px}.cred .btn{padding:9px 12px;font-size:14px}
+.cred{padding:10px 14px;background:transparent}.cred h2{font-size:14px;font-weight:600;color:var(--mut);margin-bottom:2px}.linkbtn{background:none;border:0;padding:0;color:var(--acc);text-decoration:underline;font-size:13px;cursor:pointer}.cred .mut{font-size:13px;margin-bottom:8px}.cred .note{font-size:12px;margin:6px 0 4px}.cred .btn{padding:9px 12px;font-size:14px}
 .wpay{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:10px 0;background:#0E1528;font-size:14px}.wpay .pack{margin:4px 6px 4px 0;font-size:14px;padding:9px 12px}.wpay select{background:#0E1528;color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:4px}
 .wpay .btn{background:var(--acc);color:#04121d;padding:9px 12px;font-size:14px;margin:4px 6px 4px 0}.wstat{margin-top:8px}.wstat code{display:block;word-break:break-all;margin:6px 0}
 .qr{background:#fff;border-radius:8px;padding:6px;display:block;margin:8px 0;width:240px;height:240px}.flash{box-shadow:0 0 0 3px var(--acc)}
@@ -316,16 +320,18 @@ const VT={high:['HIGH RISK','Strong rug warning signs.'],medium:['CAUTION','Some
 function shownLevel(j,ws){const l=VT[j.riskLevel]?j.riskLevel:'medium';if(l!=='low'||!ws.length)return l;return ws.some(w=>w.d)?'high':'medium'}
 function verdictBox(j,ws){const lv=shownLevel(j,ws),s=Number(j.riskScore)||0,v=el('div','verdict v-'+lv),t=el('div');
  t.append(el('div','vt '+lv,VT[lv][0]),el('div','vl',VT[lv][1]));if(j.report!=='limited')t.append(el('div','vtrust','Full report.'));v.append(gauge(lv,s),t);if(j.report==='limited')v.append(el('div','vfree','Free check: basic warnings only. Full report unlocks more.'));return v}
-function lockedPanel(note){const b=el('div','lock');b.id='unlock';b.append(el('span',null,'\u{1F512} '+(note||'Full report adds the danger warnings free checkers usually miss.')));const a=el('button','btn sec',OFFER.label);a.type='button';a.addEventListener('click',()=>openBuy(true));b.append(a);return b}
+function lockedPanel(note){const b=el('div','lock');b.id='unlock';b.append(el('span',null,'\u{1F512} '+(note||'Full report: live chart, dev and sniper wallets, biggest buys and sells, sell test.')));const a=el('button','btn pri',CFG.cta);a.type='button';a.addEventListener('click',()=>openBuy(true));b.append(a);return b}
 function openBuy(scroll){const x=$('buyx');x.hidden=false;const w=$('wpay');if(scroll&&w){$('credits').scrollIntoView({block:'start',behavior:'smooth'});w.classList.add('flash');setTimeout(()=>w.classList.remove('flash'),1600)}}
+let LIVEP=null;function liveLoad(){if(!LIVEP)LIVEP=new Promise((ok,no)=>{const s=document.createElement('script');s.src='/rugradar/live.js';s.onload=ok;s.onerror=()=>{LIVEP=null;no()};document.head.append(s)});return LIVEP}
 function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings(j.checks),fa=j.facts||{};
  const tok=el('div','tok'),info=el('div');tok.append(el('div','av',(typeof fa.token==='string'?fa.token:String(j.token||'?')).slice(0,2).toUpperCase()));
  info.append(el('b',null,(typeof fa.token==='string'?'$'+fa.token+' \u00b7 ':'')+short(j.token)),el('div','addr',[CFG.chains[j.chain]||j.chain,ageTxt(fa.ageHours)].filter(Boolean).join(' \u00b7 ')));tok.append(info);const sw=socials(j);if(sw)tok.append(sw);c.append(tok);
  c.append(verdictBox(j,ws));if(Array.isArray(j.freeFacts)&&j.freeFacts.length)c.append(el('div','ffl',j.freeFacts.join(' \u00b7 ')));
  if(typeof SWAPHOOK==='function'&&j.token===t&&shownLevel(j,ws)==='low'){const sb=SWAPHOOK(j);if(sb)c.append(sb)}
  const wc=el('div','wcards');ws.slice(0,3).forEach((w,i)=>wc.append(card(w,j,DESK&&i===0)));if(ws.length)c.append(wc);
- if(j.report==='limited'&&j.checks){const n=Number(j.hiddenWarnings)||0;if(n>0)c.append(el('span','tease','+'+n+' more warning'+(n>1?'s':'')+' in the full report'));c.append(lockedPanel())}
+ if(j.report==='limited'&&j.checks){const n=Number(j.moreWarnings!=null?j.moreWarnings:j.hiddenWarnings)||0;if(n>0)c.append(el('span','tease','+'+n+' more warning'+(n>1?'s':'')+' in the full report'));c.append(lockedPanel())}
  else if(ws.length>3){const b=el('button','tease','+'+(ws.length-3)+' more warnings');b.type='button';b.addEventListener('click',()=>{ws.slice(3).forEach(w=>wc.append(card(w,j,false)));b.remove()});c.append(b)}
+ if(j.liveReport){const h=el('div');c.append(h);liveLoad().then(()=>{const b=window.RRLive(j);if(b)h.append(b)}).catch(()=>{})}
  const mo=el('details','quiet');mo.id='more';mo.append(el('summary',null,'More'));const ws2=el('div','sub soon');ws2.append(el('span',null,'\u{1F514} Watch token: coming soon'));mo.append(ws2);c.append(mo);
  c.append(el('div','disc','Danger warnings only. Not a guarantee, not financial advice.'));out.append(c)}
 function waitCard(){out.textContent='';const c=el('div','card res'),v=el('div','verdict'),t=el('div');t.append(el('div','vt','Checking\u2026'),el('div','vl','Usually a few seconds.'));v.append(gauge('wait',0),t);v.querySelector('i').firstChild.textContent='\u2026';c.append(v);out.append(c)}
@@ -364,7 +370,7 @@ function page(d: WebDeps) {
       description: "Free Solana rug check and honeypot checker: 0-100 token risk score with plain danger warnings for Solana, BNB, Base, Ethereum and Arbitrum.", offers: { "@type": "Offer", price: p, priceCurrency: "USD" } },
     { "@context": "https://schema.org", "@type": "FAQPage", mainEntity: faq.map(([q, a]) => ({ "@type": "Question", name: q, acceptedAnswer: { "@type": "Answer", text: a } })) },
   ];
-  const cfg = { offer: unlockOffer(U, p), warn: WARN, chains: CHAIN_NAME, p };
+  const cfg = { offer: unlockOffer(U, p), warn: WARN, chains: CHAIN_NAME, p, cta: `Unlock live chart + full report - $${p}` };
   const swapJs = d.swap?.enabled ? "\n" + swapClientJs(d.swap) + "\nconst SWAPHOOK=swapBox;" : "";
   const json = (o: unknown) => JSON.stringify(o).replace(/</g, "\\u003c");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -389,7 +395,7 @@ ${CSS_PAGE}</style></head><body><div class="wrap">
 <aside><section class="card cred" aria-label="Prepaid credits">
 <h2 id="credits">${fast ? `Prepaid credits finish checks ${fast} faster` : "Prepaid credits"}</h2>
 <p class="mut">$${p} per full report \u00b7 buy 1 to 1,000 \u00b7 no account.</p>
-<button class="btn sec wide" id="buyc" type="button">${fast ? `Buy credits: results ${fast} faster` : "Buy credits"}</button>
+<button class="linkbtn" id="buyc" type="button">${fast ? `Buy credits: results ${fast} faster` : "Buy credits"}</button>
 <p class="note">${d.speed ? `With credits you don't wait on a payment for each check (measured ~${d.speed.x}x faster).` : "With credits you don't wait on a payment for each check."}</p>
 <div id="buyx" hidden><div id="wpayHome"></div><small class="mut">Agents and scripts: pay once with any x402 client: <code>GET ${U}/credits/buy?credits=${UNLOCK_CREDITS}</code> ($${(UNLOCK_CREDITS * Number(p)).toFixed(2)}). You get a secret key once; paste it under "Have a credit key?" or send it as <code>X-RugRadar-Key</code>.</small></div>
 <div style="margin-top:6px;font-size:13px"><a href="#agents">For bots &amp; agents \u203a</a></div>
@@ -428,9 +434,14 @@ function devSection(U: string, p: string) {
   const cp = (t: string) => `<div class="cpw"><button class="cpb" type="button" aria-label="Copy code">Copy</button><pre>${escH(t)}</pre></div>`;
   const iframe = `<iframe src="${U}/rugradar/embed?token=${DEV_MINT}" width="380" height="420" style="border:0;max-width:100%" loading="lazy" title="RugRadar token risk"></iframe>`;
   const curl = `curl -s "${U}/rugradar/embed.json?token=${DEV_MINT}"\n# -> {"riskScore":..,"riskLevel":"..","verdict":"..","warnings":[..],"reportUrl":"${U}/rugradar?token=.."}`;
+  const payEx = `# one-time: x402 pays per call (USDC); any x402 client does the 402 -> sign -> retry
+curl -s "${U}/rug-check?token=${DEV_MINT}"   # 402 + PAYMENT-REQUIRED header
+# repeat use: buy credits once (x402, 10 credits = $0.10) -> {"key":"rr_..."}, then:
+curl -s -H "X-RugRadar-Key: rr_YOURKEY" "${U}/rug-check?token=${DEV_MINT}"`;
   return `<details class="fold dev" id="developers"><summary>For developers: add RugRadar to your bot or site</summary><div>
 <p><b>Card (iframe).</b> Free, danger warnings only. Swap in any Solana mint or 0x address.</p>${cp(iframe)}
 <p><b>JSON (free check).</b> Score, verdict, top 3 warnings and a report link.</p>${cp(curl)}
+<p><b>Paid full report: pay once, or repeat with a key.</b> One-time x402 payment, or buy credits once and send the key on every call:</p>${cp(payEx)}
 <p><small>The full report with every warning costs $${p} per check with prepaid credits (header <code>X-RugRadar-Key</code>) or x402. Details: <a href="#agents">bots &amp; agents</a>. Heuristic, may be wrong, not financial advice.</small></p></div></details>`;
 }
 function agentsSection(U: string, p: string) {
@@ -494,13 +505,14 @@ const EMBED_CSS = `body{margin:0;padding:8px;background:transparent;color:var(--
 .emb .verdict{gap:12px;padding:12px;border-radius:12px}.emb .gauge{width:88px;height:88px}.emb .gauge i{width:66px;height:66px;font-size:28px}.emb .gauge i small{font-size:10px}
 .emb .vt{font-size:20px}.emb .vl{font-size:14px;margin-top:3px}
 .emb .wcards{gap:6px;margin:8px 0}.emb .wc summary{gap:8px;padding:8px 10px;font-size:14px}.emb .wc p{padding:0 10px 8px;font-size:13px;white-space:normal}.emb .sev{font-size:10px;padding:2px 6px}
-.efoot{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;color:var(--mut)}.efoot a{font-weight:700;font-size:13px;white-space:nowrap}.credit{font-size:11px;color:#6f7990}.emsg{font-size:14px;margin:6px 0}`;
+.efoot{flex-wrap:wrap;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;color:var(--mut)}.efoot a{font-weight:700;font-size:13px;white-space:nowrap}.credit{font-size:11px;color:#6f7990}.emsg{font-size:14px;margin:6px 0}`;
 function embedHtml(U: string, v: EmbedData | null, msg?: string) {
   const body = v
     ? `<div class="etok"><b>${escA(v.token.slice(0, 4))}\u2026${escA(v.token.slice(-6))}</b> \u00b7 ${escA(CHAIN_NAME[v.chain] ?? v.chain)} \u00b7 free check</div>
 <div class="verdict v-${v.riskLevel}"><div class="gauge g-${v.riskLevel}" style="--p:${v.riskLevel === "low" ? 100 : Math.max(4, Math.min(100, v.riskScore))}"><i>${v.riskScore}<small>/100</small></i></div><div><div class="vt ${v.riskLevel}">${v.label}</div><div class="vl">${escA(v.verdict)}</div></div><div class="vfree">Free check: basic warnings only. Full report unlocks more.</div></div>
 ${v.warnings.length ? `<div class="wcards">${v.warnings.map((w) => `<details class="wc ${w.severity === "DANGER" ? "d" : "c"}"><summary><span class="sev ${w.severity === "DANGER" ? "s3" : "s2"}">${w.severity}</span><span class="tt">${escA(w.title)}</span><span class="ch"></span></summary><p>${escA(w.line)}</p></details>`).join("")}</div>` : ""}
-<div class="efoot"><a href="${escA(v.reportUrl)}" target="_blank" rel="noopener">Unlock full report \u203a</a><span class="credit">Not a guarantee \u00b7 <b>RugRadar</b></span></div>`
+${v.moreWarnings > 0 ? `<div class="emsg"><b>+${v.moreWarnings} more warning${v.moreWarnings > 1 ? "s" : ""} in the full report</b></div>` : ""}
+<div class="efoot"><a href="${escA(v.reportUrl)}" target="_blank" rel="noopener">Unlock live chart + full report - $0.01 \u203a</a><span class="credit">Not a guarantee \u00b7 <b>RugRadar</b></span></div>`
     : `<p class="emsg">${escA(msg ?? "Add ?token=<address> to show a RugRadar card.")}</p><div class="efoot"><a href="${U}/rugradar" target="_blank" rel="noopener">Check a token \u203a</a><span class="credit">Not a guarantee \u00b7 <b>RugRadar</b></span></div>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>RugRadar token risk card</title>
 <style>${CSS_BASE}
@@ -554,7 +566,7 @@ async function mcpCall(d: WebDeps, name: string, args: any, headerKey: string | 
   if (key) {
     const left = await d.spend(key).catch(() => null);
     if (left != null) {
-      try { return text({ ...(await d.rugCheck(token, chain)), paidWith: "credits", credits_remaining: left }); }
+      try { return text({ ...(await (d.paidCheck ?? d.rugCheck)(token, chain)), paidWith: "credits", credits_remaining: left }); }
       catch (e) { await d.refund(key); return text({ error: String((e as Error).message ?? e) + (e instanceof RugBusyError ? ". You weren't charged." : ""), refunded: true }, true); }
     }
   }
@@ -569,6 +581,7 @@ async function mcpCall(d: WebDeps, name: string, args: any, headerKey: string | 
 export function registerRugradarWeb(app: Express, d: WebDeps) {
   const html = page(d);
   app.get("/rugradar", (_req, res) => { res.set("Cache-Control", "public, max-age=300").type("html").send(html); });
+  app.get("/rugradar/live.js", (_req, res) => { res.set("Cache-Control", "public, max-age=86400").type("application/javascript").send(LIVE_JS); });
   app.get("/rugradar/embed", async (req: Request, res: Response) => {
     const r = await embedFor(d, req);
     res.status(r.status).set({ "Cache-Control": r.status === 200 ? "public, max-age=300" : "no-store", "Content-Security-Policy": "frame-ancestors *" }).type("html").send(embedHtml(d.publicUrl, r.v, r.msg));
@@ -596,7 +609,7 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
       res.status(a.reason === "slow_down" ? 429 : 402).json({ error: a.reason, message: msg, buyCredits: `${d.publicUrl}/credits/buy?credits=100`, ...(a.reason === "slow_down" ? {} : { lockedSignals: LOCKED_SIGNALS, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd) }) }); return;
     }
     useFree(ip, vid);
-    try { res.json({ ...limitedReport(await d.rugCheck(token, chain)), unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
+    try { res.json({ ...limitedReport(await d.rugCheck(token, chain)), reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
     catch (e) { refundFree(ip, vid); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
   });
   app.get("/sitemap.xml", (_req, res) => {

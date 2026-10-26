@@ -49,6 +49,7 @@ import { SOLANA_PRICE_SYMBOLS, SolanaInputError, solanaTokenPrice, rpc as solRpc
 import { WalletInputError, walletBalances } from "./lib/wallet.js";
 import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
+import { paidRugCheck } from "./lib/rug-paid.js";
 import { rugCheck, RugBusyError, flaggedWallets, DISCLAIMER as RUG_DISCLAIMER } from "./lib/rug.js";
 import { registerRugradarWeb } from "./lib/rugradar-web.js";
 import { createWatcher, WATCH_PLANS, planOf, type Watch } from "./lib/watch.js";
@@ -334,7 +335,7 @@ async function main() {
     try {
       const token = String(req.query.token ?? req.query.mint ?? "").trim();
       if (!token) throw new SolanaInputError("token is required");
-      const out = await rugCheck(token, String(req.query.chain ?? "").trim() || (token.startsWith("0x") ? "base" : "solana"), { noCache: req.query.nocache === "1" });
+      const out = await paidRugCheck(token, String(req.query.chain ?? "").trim() || (token.startsWith("0x") ? "base" : "solana"), { noCache: req.query.nocache === "1" });
       res.set("X-RugRadar-Credits", String(left)).json({ ...out, paidWith: "credits", credits_remaining: left });
     } catch (err) {
       await refund(key);
@@ -1322,7 +1323,7 @@ async function main() {
       howToPay: `x402 v2: decode the base64 JSON in this response's PAYMENT-REQUIRED header (one accepts entry per network: ${NETWORK_NAMES.join(", ")}; USDC), sign with any x402 client (e.g. @x402/fetch wrapFetchWithPayment), then retry the same request with the PAYMENT-SIGNATURE header.`,
       exampleInput: info.input?.queryParams ?? info.input?.body ?? null,
       exampleOutput: info.output?.example ?? null,
-      ...(RUG_PATHS.has(path) ? { credits: creditTip() } : {}),
+      ...(RUG_PATHS.has(path) ? { credits: creditTip(), creditKey: `Repeat use: buy credits once (${PUBLIC_URL}/credits/buy?credits=10, paid via x402) to get a key, then send header X-RugRadar-Key: <key> on each call instead of paying per request.` } : {}),
       more: { examples: `${PUBLIC_URL}/examples`, llms: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json` },
     };
     return () => ({ contentType: "application/json", body });
@@ -1530,7 +1531,7 @@ async function main() {
   app.get("/watch", watchPaidHandler(watchDeps, decodeB64Json));
   const watchTimer = setInterval(() => { track("watch checks", () => watcher.tick()).catch(() => {}); }, 30_000); watchTimer.unref?.();
   process.once("SIGTERM", () => { watcher.flush().catch(() => {}); });
-  registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), spend, refund, watch: { create: (k, a) => createWithCredits(watchDeps, k, a), config: () => watchConfig(watchDeps) }, swap: swapConfig() });
+  registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), paidCheck: (t, c) => paidRugCheck(t, c), spend, refund, watch: { create: (k, a) => createWithCredits(watchDeps, k, a), config: () => watchConfig(watchDeps) }, swap: swapConfig() });
   app.get("/icon.png", (_req, res) => {
     if (!ICON_PNG) return res.redirect(302, "/icon.svg");
     res.type("image/png").set("Cache-Control", "public, max-age=86400").send(ICON_PNG);
@@ -1979,7 +1980,7 @@ async function main() {
       async (req) => {
         const token = qs(req.query.token) || qs(req.query.mint);
         if (!token) throw new SolanaInputError("token is required (Solana mint address, or Base 0x contract with chain=base)");
-        return { ...(await rugCheck(token, qs(req.query.chain) || (token.startsWith("0x") ? "base" : "solana"), { noCache: req.query.nocache === "1" })), tip: creditTip() };
+        return { ...(await paidRugCheck(token, qs(req.query.chain) || (token.startsWith("0x") ? "base" : "solana"), { noCache: req.query.nocache === "1" })), tip: creditTip() };
       },
       [SolanaInputError],
       "Public Solana RPC / token data APIs did not answer",
