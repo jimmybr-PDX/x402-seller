@@ -15,7 +15,8 @@ const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", TOKEN_2022 
 const UA = { "user-agent": "Mozilla/5.0 (RugRadar)", accept: "application/json" };
 const CACHE_MS = Number(process.env.RUG_PAID_CACHE_MS ?? 10 * 60_000), BUDGET_MS = Number(process.env.RUG_PAID_BUDGET_MS ?? 5200), MAX_BUSY = 3;
 const r2 = (n: unknown, d = 2) => (n == null || n === "" || !isFinite(Number(n)) ? null : +Number(n).toFixed(d));
-const j = (u: string, ms = 2500) => fetch(u, { headers: UA, signal: AbortSignal.timeout(ms) }).then((r) => (r.ok ? r.json() : null)).catch(() => null) as Promise<any>;
+let lastWarn = 0;
+const j = (u: string, ms = 2500) => fetch(u, { headers: UA, signal: AbortSignal.timeout(ms) }).then((r) => { if (!r.ok && Date.now() - lastWarn > 5000) { lastWarn = Date.now(); console.warn(`[rug-paid] ${new URL(u).host} HTTP ${r.status}`); } return r.ok ? r.json() : null; }).catch((e) => { if (Date.now() - lastWarn > 5000) { lastWarn = Date.now(); console.warn(`[rug-paid] ${new URL(u).host} ${e?.name ?? "error"}`); } return null; }) as Promise<any>;
 
 // ---------- pump.fun trade stash (filled by pumpLaunch, no extra fetches) ----------
 export type CTrade = { w: string; k: "buy" | "sell"; sol: number; usd: number | null; amt: number; ts: number; slot: string };
@@ -29,15 +30,15 @@ export function stashTrades(mint: string, raw: any[], complete: boolean) {
 export function __clearPaid() { stash.clear(); cache.clear(); }
 
 // ---------- lookups ----------
+const poolCache = new Map<string, string>();
 async function findPool(mint: string): Promise<string | null> {
-  const d = await j(`https://api.dexscreener.com/token-pairs/v1/solana/${mint}`, 3000);
-  if (Array.isArray(d) && d.length) {
-    const best = [...d].filter((p) => B58.test(String(p?.pairAddress ?? ""))).sort((a, b) => (Number(b.liquidity?.usd) || 0) - (Number(a.liquidity?.usd) || 0))[0];
-    if (best) return best.pairAddress;
-  }
-  const g = await j(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools?page=1`, 3000);
-  const a = g?.data?.[0]?.attributes?.address;
-  return typeof a === "string" && B58.test(a) ? a : null;
+  const hit = poolCache.get(mint); if (hit) return hit;
+  const pick = (d: any) => { const best = Array.isArray(d) ? [...d].filter((p) => B58.test(String(p?.pairAddress ?? ""))).sort((a, b) => (Number(b.liquidity?.usd) || 0) - (Number(a.liquidity?.usd) || 0))[0] : null; return best?.pairAddress as string | undefined; };
+  let a = pick(await j(`https://api.dexscreener.com/token-pairs/v1/solana/${mint}`, 2500));
+  if (!a) { const d2 = await j(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, 2500); a = pick(d2?.pairs?.filter((p: any) => p?.chainId === "solana")); }
+  if (!a) { const g = await j(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools?page=1`, 2500); const x = g?.data?.[0]?.attributes?.address; a = typeof x === "string" && B58.test(x) ? x : undefined; }
+  if (a) { poolCache.set(mint, a); if (poolCache.size > 300) poolCache.delete(poolCache.keys().next().value!); }
+  return a ?? null;
 }
 export type Fill = { side: "buy" | "sell"; sol: number | null; usd: number | null; at: string };
 async function geckoFills(pool: string): Promise<Fill[] | null> {
