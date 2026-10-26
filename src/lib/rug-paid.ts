@@ -69,7 +69,7 @@ async function balances(wallets: string[], mint: string, token2022: boolean): Pr
 }
 
 // ---------- block builders ----------
-export type WalletRow = { address: string; holdingPct: number | null; status: "holding" | "sold"; tags?: string[] };
+export type WalletRow = { address: string; holdingPct: number | null; status: "holding" | "sold" | "unknown"; tags?: string[] };
 const SOLD_BELOW = 0.05; // sold = holds under 5% of what it bought
 export function walletRows(trades: CTrade[], complete: boolean, creator: string | null, supply: number, bal: Map<string, number> | null) {
   const out: { dev: WalletRow[] | null; sn: any | null } = { dev: null, sn: null };
@@ -128,7 +128,7 @@ async function build(mint: string, full: any) {
   const rows = st ? walletRows(st.trades, st.complete, creator, supply, bal) : (creator && bal && (bal.get(creator) ?? 0) > 0 ? { dev: [{ address: creator, holdingPct: supply > 0 ? r2((bal.get(creator)! / supply) * 100, 4) : null, status: "holding" as const }], sn: null } : { dev: null, sn: null });
   return {
     chart: pool ? { pool, embedUrl: chartUrl(pool) } : null,
-    devWallets: rows.dev, sniperBundle: rows.sn,
+    devWallets: rows.dev ?? (creator ? [{ address: creator, holdingPct: null, status: "unknown" }] : null), sniperBundle: rows.sn,
     biggestBuys: fills?.length ? topFills(fills, "buy") : null, biggestSells: fills?.length ? topFills(fills, "sell") : null,
     tradesBasis: fills?.length ? (st ? `last ${st.trades.length} trades` : "recent pool trades") : null,
   };

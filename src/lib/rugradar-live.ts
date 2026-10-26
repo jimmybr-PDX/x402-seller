@@ -5,7 +5,7 @@
  */
 export const LIVE_CSS = `.lv{margin-top:12px;display:grid;gap:12px}.lb{border:1px solid var(--line);border-radius:12px;background:#0F1628;padding:12px}.lb h3{margin:0 0 8px;font-size:15px}.lb h3 small{font-weight:400;color:var(--mut);font-size:12px;margin-left:6px}
 .lchart{width:100%;height:340px;border:0;border-radius:8px;background:#0b1020;display:block}@media(max-width:899px){.lchart{height:300px}}
-.wr{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:7px 10px;margin:5px 0;border-radius:8px;font-size:14px;border-left:4px solid}.wr.h{border-color:#22C55E;background:rgba(34,197,94,.10)}.wr.s{border-color:var(--bad);background:rgba(239,68,68,.12)}
+.wr{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:7px 10px;margin:5px 0;border-radius:8px;font-size:14px;border-left:4px solid}.wr.h{border-color:#22C55E;background:rgba(34,197,94,.10)}.wr.u{border-color:#64748b;background:rgba(100,116,139,.10)}.wr.u .tg{background:#334155;color:#cbd5e1}.wr.s{border-color:var(--bad);background:rgba(239,68,68,.12)}
 .wr a{color:var(--tx);font-family:ui-monospace,Menlo,monospace;font-size:13px}.wr span{white-space:nowrap}.wr .tg{font-size:11px;font-weight:900;border-radius:5px;padding:2px 6px;margin-left:6px}.wr.h .tg{background:#22C55E;color:#04150a}.wr.s .tg{background:var(--bad);color:#fff}.wr .kd{font-size:11px;color:var(--mut);margin-left:6px}
 .lsum{font-size:13px;color:#c9d1e0;margin:0 0 6px}.l2{display:grid;gap:12px}@media(min-width:700px){.l2{grid-template-columns:1fr 1fr}}
 .tr{display:flex;justify-content:space-between;gap:8px;font-size:14px;padding:4px 0;border-bottom:1px solid var(--line)}.tr:last-child{border:0}.tr i{font-style:normal;color:var(--mut);font-size:12px}
@@ -18,9 +18,9 @@ function ago(t){var s=Math.max(0,(Date.now()-Date.parse(t))/1000);if(!isFinite(s
 function usd(n){return n==null?'':n>=1000?'$'+(n/1000).toFixed(1).replace(/\.0$/,'')+'k':'$'+(n>=10?Math.round(n):n.toFixed(2))}
 function pc(n){return n==null?'?':(n<0.01&&n>0?'<0.01':n.toFixed(n<10?2:1).replace(/\.?0+$/,'')||'0')+'%'}
 function blk(title,sub){var b=el('div','lb'),h=el('h3',null,title);if(sub)h.append(el('small',null,sub));b.append(h);return b}
-function row(w,kind){if(!w||!B58.test(String(w.address)))return null;var sold=w.status==='sold',r=el('div','wr '+(sold?'s':'h')),a=el('a',null,sh(w.address));a.href='https://solscan.io/account/'+w.address;a.target='_blank';a.rel='noopener noreferrer nofollow';
+function row(w,kind){if(!w||!B58.test(String(w.address)))return null;var unk=w.status==='unknown',sold=w.status==='sold',r=el('div','wr '+(sold?'s':unk?'u':'h')),a=el('a',null,sh(w.address));a.href='https://solscan.io/account/'+w.address;a.target='_blank';a.rel='noopener noreferrer nofollow';
  var l=el('span');l.append(a);if(kind&&w.tags&&w.tags.length)l.append(el('span','kd',w.tags.join('/')));
- var r2=el('span',null,sold?(w.holdingPct?pc(w.holdingPct)+' left':''):pc(w.holdingPct)+' of supply');r2.append(el('span','tg',sold?'Sold':'Holding'));r.append(l,r2);return r}
+ var r2=el('span',null,unk?'':sold?(w.holdingPct?pc(w.holdingPct)+' left':''):pc(w.holdingPct)+' of supply');r2.append(el('span','tg',sold?'Sold':unk?'Status unavailable':'Holding'));r.append(l,r2);return r}
 function fills(title,xs){if(!Array.isArray(xs)||!xs.length)return null;var b=blk(title);xs.forEach(function(f){var t=el('div','tr'),v=f.usd!=null?usd(f.usd):'',s=f.sol!=null?f.sol+' SOL':'';t.append(el('span',null,[s,v&&s?'('+v+')':v].filter(Boolean).join(' ')),el('i',null,ago(f.at)));b.append(t)});return b}
 window.RRLive=function(j){var L=j&&j.liveReport;if(!L)return null;var box=el('div','lv'),n=0;
  try{if(!document.getElementById('lvcss')){var s=el('style',null,${JSON.stringify(LIVE_CSS)});s.id='lvcss';document.head.append(s)}}catch(e){}
@@ -30,6 +30,7 @@ window.RRLive=function(j){var L=j&&j.liveReport;if(!L)return null;var box=el('di
  var S=L.sniperBundle;if(S&&Array.isArray(S.shown)&&S.shown.length){var sb=blk('Sniper / bundle wallets',S.count+' total');
   sb.append(el('p','lsum','Held '+pc(S.startPct)+' of supply at the start \u00b7 hold '+pc(S.nowPct)+' now \u00b7 '+S.stillHolding+' of '+S.count+' still holding'));
   S.shown.forEach(function(w){var r=row(w,1);if(r)sb.append(r)});if(S.count>S.shown.length)sb.append(el('div','lnote','Top '+S.shown.length+' by size shown.'));box.append(sb);n++}
+ if(!(S&&Array.isArray(S.shown)&&S.shown.length)){var nb=blk('Sniper / bundle wallets');nb.append(el('div','lnote','Early-buyer wallets could not be read for this token (its launch trades were not captured).'));box.append(nb);n++}
  var bs=el('div','l2'),bb=fills('Top 5 biggest buys',L.biggestBuys),sl=fills('Top 5 biggest sells',L.biggestSells);if(bb)bs.append(bb);if(sl)bs.append(sl);if(bb||sl){box.append(bs);if(L.tradesBasis)bs.append(el('div','lnote','From the '+L.tradesBasis+'.'));n++}
  var R=L.risk;if(R){var rk=blk('Risk checks'),g=el('div','rk');
   var add=function(k,v,cls){g.append(el('span',null,k),el('b',cls||'',v))};

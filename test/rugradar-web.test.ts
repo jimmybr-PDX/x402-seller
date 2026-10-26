@@ -73,7 +73,7 @@ test("buy box: Phantom/Solflare packs live in #credits (one copy), SOL default, 
     assert.match(credits, /Buy credits: results ~2x faster.*measured ~1\.8x faster.*<div id="wpayHome"><\/div>.*x402 client/s, "pack box sits in Buy credits, x402 text kept for agents");
     assert.match(h, /document\.getElementById\('wpayHome'\)\.append\(walletPacks\(\)\)/); assert.equal((h.match(/append\(walletPacks\(\)\)/g) ?? []).length, 1, "only one pack box (no duplicate ids)");
     assert.match(h, /\[\['sol','SOL'\],\['usdc','USDC'\]\]/, "SOL first = default, USDC selectable");
-    assert.match(h, /id="keybox" hidden/); assert.match(h, /localStorage\.setItem\('rr_key',k\)/); assert.match(h, /bt\('Show'/); assert.match(h, /bt\('Copy'/); assert.match(h, /bt\('Forget'/); assert.match(h, /KS\.set\(c\.j\.key\)/);
+    assert.match(h, /id="keybox" hidden/); assert.match(h, /localStorage\.setItem\('rr_key',k\)/); assert.match(h, /bt\('Show'/); assert.match(h, /bt\('Copy'/); assert.match(h, /bt\('Forget'/); assert.match(h, /KS\.set\(kk\)/);
     assert.match(h, /\/rugradar\/pay\/qr\.svg\?order=/); assert.match(h, /pollClaim\(od\.order,null,ws,240,5000,true\)/, "auto-confirm polls the existing claim endpoint");
     assert.match(h, /https:\/\/phantom\.com\/ul\/browse\//); assert.match(h, /https:\/\/solflare\.com\/ul\/v1\/browse\//);
     assert.ok(!/<script[^>]+src=/i.test(h), "no external scripts");
