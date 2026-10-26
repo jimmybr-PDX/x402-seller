@@ -13,7 +13,7 @@ const WSOL = "So11111111111111111111111111111111111111112";
 const ATA_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", TOKEN_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const UA = { "user-agent": "Mozilla/5.0 (RugRadar)", accept: "application/json" };
-const CACHE_MS = Number(process.env.RUG_PAID_CACHE_MS ?? 10 * 60_000), BUDGET_MS = Number(process.env.RUG_PAID_BUDGET_MS ?? 4500), MAX_BUSY = 3;
+const CACHE_MS = Number(process.env.RUG_PAID_CACHE_MS ?? 10 * 60_000), BUDGET_MS = Number(process.env.RUG_PAID_BUDGET_MS ?? 5200), MAX_BUSY = 3;
 const r2 = (n: unknown, d = 2) => (n == null || n === "" || !isFinite(Number(n)) ? null : +Number(n).toFixed(d));
 const j = (u: string, ms = 2500) => fetch(u, { headers: UA, signal: AbortSignal.timeout(ms) }).then((r) => (r.ok ? r.json() : null)).catch(() => null) as Promise<any>;
 
@@ -41,7 +41,9 @@ async function findPool(mint: string): Promise<string | null> {
 }
 export type Fill = { side: "buy" | "sell"; sol: number | null; usd: number | null; at: string };
 async function geckoFills(pool: string): Promise<Fill[] | null> {
-  const d = await j(`https://api.geckoterminal.com/api/v2/networks/solana/pools/${pool}/trades`, 3000);
+  const url = `https://api.geckoterminal.com/api/v2/networks/solana/pools/${pool}/trades`;
+  let d = await j(url, 2200);
+  if (!Array.isArray(d?.data)) { await new Promise((r) => setTimeout(r, 300)); d = await j(url, 2200); } // free API sometimes rate-limits Render's shared IP: one quick retry
   if (!Array.isArray(d?.data)) return null;
   return d.data.map((x: any): Fill | null => {
     const a = x?.attributes; if (!a || (a.kind !== "buy" && a.kind !== "sell")) return null;
@@ -125,7 +127,7 @@ async function build(mint: string, full: any) {
   if (st?.complete) { const pre = walletRows(st.trades, true, creator, supply, null); for (const r of [...(pre.dev ?? []), ...(pre.sn?.shown ?? [])]) wallets.add(r.address); }
   const balP = st ? balances([...wallets], mint, !!f.token2022) : creator ? balances([creator], mint, !!f.token2022) : Promise.resolve(null);
   const [pool, fills, bal] = await Promise.all([poolP, fillsP, balP]);
-  const rows = st ? walletRows(st.trades, st.complete, creator, supply, bal) : (creator && bal && (bal.get(creator) ?? 0) > 0 ? { dev: [{ address: creator, holdingPct: supply > 0 ? r2((bal.get(creator)! / supply) * 100, 4) : null, status: "holding" as const }], sn: null } : { dev: null, sn: null });
+  const rows = st ? walletRows(st.trades, st.complete, creator, supply, bal) : (creator && bal && bal.has(creator) ? { dev: [{ address: creator, holdingPct: supply > 0 ? r2((bal.get(creator)! / supply) * 100, 4) : null, status: bal.get(creator)! > 0 ? "holding" as const : "sold" as const }], sn: null } : { dev: null, sn: null });
   return {
     chart: pool ? { pool, embedUrl: chartUrl(pool) } : null,
     devWallets: rows.dev ?? (creator ? [{ address: creator, holdingPct: null, status: "unknown" }] : null), sniperBundle: rows.sn,
@@ -142,7 +144,7 @@ export async function liveReport(mint: string, full: any): Promise<Record<string
       busy++;
       const p = build(mint, full).catch(() => null).finally(() => { busy--; });
       h = { at: Date.now(), p }; cache.set(mint, h); if (cache.size > 300) cache.delete(cache.keys().next().value!);
-      p.then((v) => { if (v == null || (!v.chart && !v.devWallets && !v.sniperBundle && !v.biggestBuys)) { if (cache.get(mint) === h) cache.delete(mint); } }); // empty/failed results are not kept
+      p.then((v) => { if (v && v.chart && !v.biggestBuys && h) h.at = Date.now() - CACHE_MS + 30_000; /* fills missing: retry after 30s, not 10 min */ if (v == null || (!v.chart && !v.devWallets && !v.sniperBundle && !v.biggestBuys)) { if (cache.get(mint) === h) cache.delete(mint); } }); // empty/failed results are not kept
     }
     const got = await Promise.race([h.p, new Promise<null>((r) => setTimeout(() => r(null), BUDGET_MS).unref?.())]);
     return got ? { ...base, ...got } : base;
