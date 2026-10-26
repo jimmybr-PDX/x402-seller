@@ -36,6 +36,8 @@ export const heliusWsUrl = () => (KEY ? `wss://mainnet.helius-rpc.com/?api-key=$
 export const isHeliusUrl = (u: string) => u.includes("helius-rpc.com");
 export const PUBLIC_RPC_HTTP = PUBLIC_HTTP;
 export function noteWs(bytes: number) { today().wsBytes += bytes; }
+/** Extra HTTP credits spent outside rpcUrl() (RugRadar fallback) so the daily/monthly totals stay true. */
+export function noteHttp(n = 1) { today().http += n; }
 export function noteWsConnect() { today().wsConnects++; }
 export function heliusStatus() {
   const days = Object.entries(heliusDaily).sort().slice(-31);

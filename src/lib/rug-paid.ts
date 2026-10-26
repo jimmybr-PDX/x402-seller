@@ -7,6 +7,7 @@
  */
 import { rugCheck } from "./rug.js";
 import { rpc } from "./solana.js";
+import { heliusLaunchTrades } from "./rug-helius.js";
 
 const B58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const WSOL = "So11111111111111111111111111111111111111112";
@@ -27,7 +28,7 @@ export function stashTrades(mint: string, raw: any[], complete: boolean) {
   stash.delete(mint); stash.set(mint, { at: Date.now(), trades, complete });
   if (stash.size > 60) stash.delete(stash.keys().next().value!);
 }
-export function __clearPaid() { stash.clear(); cache.clear(); }
+export function __clearPaid() { stash.clear(); cache.clear(); heliusFailed.clear(); }
 
 // ---------- lookups ----------
 const poolCache = new Map<string, string>();
@@ -86,7 +87,7 @@ export function walletRows(trades: CTrade[], complete: boolean, creator: string 
     if (now != null && (now > 0 || bought > 0 || sells > 0)) out.dev = [{ address: creator, holdingPct: pct(now), status: bought > 0 ? (now < bought * SOLD_BELOW ? "sold" : "holding") : now > 0 ? "holding" : "sold" }];
   }
   if (complete && trades.length && supply > 0) {
-    const asc = [...trades].sort((a, b) => a.ts - b.ts), t0 = asc[0]!.ts, slot0 = asc[0]!.slot;
+    const asc = [...trades].sort((a, b) => a.ts - b.ts || (a.slot < b.slot ? -1 : a.slot > b.slot ? 1 : 0)), t0 = asc[0]!.ts, slot0 = asc[0]!.slot;
     const buys = asc.filter((t) => t.k === "buy" && t.w !== creator);
     const sniper = new Set(buys.filter((t) => t.ts - t0 <= 10_000).map((t) => t.w)), bundle = new Set(buys.filter((t) => t.slot === slot0).map((t) => t.w));
     const early = buys.filter((t) => t.ts - t0 <= 10_000 || t.slot === slot0);
@@ -96,9 +97,8 @@ export function walletRows(trades: CTrade[], complete: boolean, creator: string 
       const sorted = ws.sort((a, b) => start(b) - start(a));
       const shown = sorted.slice(0, 10);
       const rows: WalletRow[] = shown.map((w) => { const now = nowOf(w), s = start(w); return { address: w, holdingPct: pct(now), status: now != null && now < s * SOLD_BELOW ? "sold" : "holding", tags: [sniper.has(w) ? "sniper" : "", bundle.has(w) ? "bundle" : ""].filter(Boolean) } as WalletRow; });
-      const shownSet = new Set(shown);
-      const nowTotal = ws.reduce((a, w) => a + (shownSet.has(w) ? nowOf(w) ?? net(w) : net(w)), 0);
-      out.sn = { count: ws.length, snipers: sniper.size, bundled: bundle.size, startPct: pct(amtOf(early)), nowPct: pct(nowTotal), stillHolding: ws.filter((w) => (shownSet.has(w) ? nowOf(w) ?? net(w) : net(w)) >= start(w) * SOLD_BELOW).length, shown: rows };
+      const nowTotal = ws.reduce((a, w) => a + (nowOf(w) ?? net(w)), 0);
+      out.sn = { count: ws.length, snipers: sniper.size, bundled: bundle.size, startPct: pct(amtOf(early)), nowPct: pct(nowTotal), stillHolding: ws.filter((w) => (nowOf(w) ?? net(w)) >= start(w) * SOLD_BELOW).length, shown: rows };
     }
   }
   return out;
@@ -118,17 +118,26 @@ export const chartUrl = (pool: string) => `https://www.geckoterminal.com/solana/
 // ---------- build (cached 10 min per mint, concurrency capped, deduped) ----------
 const cache = new Map<string, { at: number; p: Promise<any> }>();
 let busy = 0;
+const heliusFailed = new Set<string>(); // mints whose Helius fallback errored: retried after 2 min, not 15
 async function build(mint: string, full: any) {
   const f = full?.facts ?? {}, supply = Number(f.supply) || 0, creator = typeof f.creator === "string" && B58.test(f.creator) ? f.creator : null;
   const st = stash.get(mint) && Date.now() - stash.get(mint)!.at < CACHE_MS ? stash.get(mint)! : null;
   const poolP = findPool(mint).catch(() => null);
   const fillsP: Promise<Fill[] | null> = st?.trades.length ? Promise.resolve(st.trades.map((t) => ({ side: t.k, sol: r2(t.sol, 3), usd: t.usd != null ? r2(t.usd, 2) : null, at: new Date(t.ts).toISOString() }))) : poolP.then((p) => (p ? geckoFills(p) : null)).catch(() => null);
+  // pump.fun's trade API is blocked from Render (HTTP 403): when the stash has no full launch history, read the launch on-chain via Helius (<= 18 credits, cached with the rest).
+  const fb = !st?.complete && mint.endsWith("pump") ? await heliusLaunchTrades(mint).catch(() => null) : null;
+  if (!st?.complete && mint.endsWith("pump") && !fb) heliusFailed.add(mint); else heliusFailed.delete(mint);
+  if (heliusFailed.size > 300) heliusFailed.delete(heliusFailed.keys().next().value!);
+  const useFb = !st?.complete && !!fb?.complete && fb.trades.length > 0;
+  const trades = useFb ? fb!.trades : st?.trades ?? [], complete = useFb || !!st?.complete;
   const wallets = new Set<string>();
   if (creator) wallets.add(creator);
-  if (st?.complete) { const pre = walletRows(st.trades, true, creator, supply, null); for (const r of [...(pre.dev ?? []), ...(pre.sn?.shown ?? [])]) wallets.add(r.address); }
-  const balP = st ? balances([...wallets], mint, !!f.token2022) : creator ? balances([creator], mint, !!f.token2022) : Promise.resolve(null);
+  if (useFb) for (const t of trades) wallets.add(t.w);
+  else if (st?.complete) { const pre = walletRows(st.trades, true, creator, supply, null); for (const r of [...(pre.dev ?? []), ...(pre.sn?.shown ?? [])]) wallets.add(r.address); }
+  const balP = st || useFb ? balances([...wallets], mint, !!f.token2022) : creator ? balances([creator], mint, !!f.token2022) : Promise.resolve(null);
   const [pool, fills, bal] = await Promise.all([poolP, fillsP, balP]);
-  const rows = st ? walletRows(st.trades, st.complete, creator, supply, bal) : (creator && bal && bal.has(creator) ? { dev: [{ address: creator, holdingPct: supply > 0 ? r2((bal.get(creator)! / supply) * 100, 4) : null, status: bal.get(creator)! > 0 ? "holding" as const : "sold" as const }], sn: null } : { dev: null, sn: null });
+  const rows = (st || useFb) && !(useFb && !bal) ? walletRows(trades, complete, creator, supply, bal) : (creator && bal && bal.has(creator) ? { dev: [{ address: creator, holdingPct: supply > 0 ? r2((bal.get(creator)! / supply) * 100, 4) : null, status: bal.get(creator)! > 0 ? "holding" as const : "sold" as const }], sn: null } : { dev: null, sn: null });
+  if (useFb && rows.sn) rows.sn.basis = `first ${trades.length} on-chain trades`;
   return {
     chart: pool ? { pool, embedUrl: chartUrl(pool) } : null,
     devWallets: rows.dev ?? (creator ? [{ address: creator, holdingPct: null, status: "unknown" }] : null), sniperBundle: rows.sn,
@@ -145,7 +154,7 @@ export async function liveReport(mint: string, full: any): Promise<Record<string
       busy++;
       const p = build(mint, full).catch(() => null).finally(() => { busy--; });
       h = { at: Date.now(), p }; cache.set(mint, h); if (cache.size > 300) cache.delete(cache.keys().next().value!);
-      p.then((v) => { if (v && v.chart && !v.biggestBuys && h) h.at = Date.now() - CACHE_MS + 30_000; /* fills missing: retry after 30s, not 10 min */ if (v == null || (!v.chart && !v.devWallets && !v.sniperBundle && !v.biggestBuys)) { if (cache.get(mint) === h) cache.delete(mint); } }); // empty/failed results are not kept
+      p.then((v) => { if (v && h && heliusFailed.has(mint)) h.at = Date.now() - CACHE_MS + 120_000; else if (v && v.chart && !v.biggestBuys && h) h.at = Date.now() - CACHE_MS + 30_000; /* fills missing: retry after 30s, not 10 min */ if (v == null || (!v.chart && !v.devWallets && !v.sniperBundle && !v.biggestBuys)) { if (cache.get(mint) === h) cache.delete(mint); } }); // empty/failed results are not kept
     }
     const got = await Promise.race([h.p, new Promise<null>((r) => setTimeout(() => r(null), BUDGET_MS).unref?.())]);
     return got ? { ...base, ...got } : base;
