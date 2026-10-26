@@ -88,6 +88,10 @@ const CREDIT_GAP_S: number | null = 1.7; // measured 2026-10-13 (scripts/rugrada
 const CREDIT_SPEED = { creditS: 2.3, paidS: 4.0, x: 1.8 };
 const creditTip = () => (CREDIT_GAP_S ? `Tip: buy RugRadar credits (${PUBLIC_URL}/credits/buy?credits=N, $0.01 each) to skip the ~${CREDIT_GAP_S}s payment wait.` : `Tip: buy RugRadar credits (${PUBLIC_URL}/credits/buy?credits=N, $0.01 each) and send X-RugRadar-Key to skip payment on each check.`);
 const RUG_PATHS = new Set(["/rug-check", "/token-safety", "/honeypot-check"]);
+/** One free line pointing research-tool users at RugRadar. Added as an optional `see_also` field (never replaces or renames an existing one). */
+const RUGRADAR_SEE_ALSO = "Also: check any token for rugs, $0.01 (Solana, Base, BNB, Ethereum): https://x402-seller-pmlm.onrender.com/rugradar";
+const withSeeAlso = <T,>(out: T): T => (out && typeof out === "object" && !Array.isArray(out) && !("see_also" in (out as object)) ? { ...(out as object), see_also: RUGRADAR_SEE_ALSO } as T : out);
+const SEE_ALSO_PATHS = new Set(["/report", "/read", "/check", "/news", "/price", "/solana-price", "/balance", "/tx", "/gas", "/search"]);
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
 // PNG: the Bazaar re-hosts PNG/JPEG icons; our SVG icon never showed up in listings
 const ICON_URL = `${PUBLIC_URL}/icon.png`;
@@ -1323,6 +1327,7 @@ async function main() {
       howToPay: `x402 v2: decode the base64 JSON in this response's PAYMENT-REQUIRED header (one accepts entry per network: ${NETWORK_NAMES.join(", ")}; USDC), sign with any x402 client (e.g. @x402/fetch wrapFetchWithPayment), then retry the same request with the PAYMENT-SIGNATURE header.`,
       exampleInput: info.input?.queryParams ?? info.input?.body ?? null,
       exampleOutput: info.output?.example ?? null,
+      ...(SEE_ALSO_PATHS.has(path) ? { see_also: RUGRADAR_SEE_ALSO } : {}),
       ...(RUG_PATHS.has(path) ? { credits: creditTip(), creditKey: `Repeat use: buy credits once (${PUBLIC_URL}/credits/buy?credits=10, paid via x402) to get a key, then send header X-RugRadar-Key: <key> on each call instead of paying per request.` } : {}),
       more: { examples: `${PUBLIC_URL}/examples`, llms: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json` },
     };
@@ -1814,7 +1819,7 @@ async function main() {
     }
     // Shareable permalink (free page). Removed again if the payment does not settle.
     const id = newAnswerId();
-    const out = { ...body, permalink: `${PUBLIC_URL}/a/${id}` };
+    const out = withSeeAlso({ ...body, permalink: `${PUBLIC_URL}/a/${id}` });
     saveAnswer(id, out);
     res.on("finish", () => { if (!decodeB64Json(res.getHeader("payment-response"))?.success) deleteAnswer(id); });
     res.json(out);
@@ -1834,7 +1839,7 @@ async function main() {
         res.status(422).json({ ...out, message: `${(out as any).message ?? "Page could not be read"}. You were not charged.` });
         return;
       }
-      res.json(out);
+      res.json(withSeeAlso(out));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (err instanceof InputError) res.status(400).json({ error: "bad_input", message: `${msg}. You were not charged.` });
@@ -1851,7 +1856,7 @@ async function main() {
       return;
     }
     try {
-      res.json(await checkX402Endpoint(target, method));
+      res.json(withSeeAlso(await checkX402Endpoint(target, method)));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(err instanceof InputError ? 400 : 422).json({ error: err instanceof InputError ? "bad_input" : "check_failed", message: `${msg}. You were not charged.` });
@@ -1876,7 +1881,7 @@ async function main() {
         res.status(422).json({ ...out, message: "No matching headlines in the window; try broader keywords or more hours. You were not charged." });
         return;
       }
-      res.json(out);
+      res.json(withSeeAlso(out));
     } catch (err) {
       res.status(503).json({ error: "news_unavailable", message: `${err instanceof Error ? err.message : String(err)}. You were not charged.` });
     }
@@ -1901,7 +1906,7 @@ async function main() {
         res.status(422).json({ ...out, message: "No relevant results from any search source; try different keywords. You were not charged." });
         return;
       }
-      res.json(out);
+      res.json(withSeeAlso(out));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (err instanceof InputError) res.status(400).json({ error: "bad_input", message: `${msg}. You were not charged.` });
@@ -1924,7 +1929,7 @@ async function main() {
         res.status(422).json({ ...out, message: `${out.message}. You were not charged.` });
         return;
       }
-      res.json(out);
+      res.json(withSeeAlso(out));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (err instanceof PriceInputError || err instanceof SolanaInputError) res.status(400).json({ error: "bad_input", message: `${msg}. You were not charged.` });
@@ -1934,7 +1939,7 @@ async function main() {
 
   /** Shared handler shape: input errors -> 400, { error } results -> 422, anything else -> 503. Never charged on non-2xx. */
   const onchainHandler =
-    (run: (req: Request) => Promise<any>, inputErrors: Array<new (...a: any[]) => Error>, unavailable: string) =>
+    (run: (req: Request) => Promise<any>, inputErrors: Array<new (...a: any[]) => Error>, unavailable: string, seeAlso = false) =>
     async (req: Request, res: Response) => {
       res.locals.paidHandlerRan = true;
       try {
@@ -1943,7 +1948,7 @@ async function main() {
           res.status(422).json({ ...out, message: `${out.message ?? out.error}. You were not charged.` });
           return;
         }
-        res.json(out);
+        res.json(seeAlso ? withSeeAlso(out) : out);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (inputErrors.some((E) => err instanceof E)) res.status(400).json({ error: "bad_input", message: `${msg}. You were not charged.` });
@@ -1996,6 +2001,7 @@ async function main() {
       },
       [SolanaInputError],
       "Public Solana RPC nodes did not answer",
+      true,
     ),
   );
   app.get(
@@ -2008,6 +2014,7 @@ async function main() {
       },
       [WalletInputError],
       "Public RPC nodes did not answer",
+      true,
     ),
   );
   app.get(
@@ -2020,11 +2027,12 @@ async function main() {
       },
       [TxInputError],
       "Public RPC nodes did not answer",
+      true,
     ),
   );
   app.get(
     "/gas",
-    onchainHandler(async (req) => gasNow(qs(req.query.chain) || undefined), [GasInputError], "Public RPC nodes did not answer"),
+    onchainHandler(async (req) => gasNow(qs(req.query.chain) || undefined), [GasInputError], "Public RPC nodes did not answer", true),
   );
 
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {

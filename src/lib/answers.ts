@@ -51,6 +51,7 @@ ${points.length ? `<h2 style="font-size:1.05rem">Key points</h2><ul>${points.map
 <h2 style="font-size:1.05rem">Sources</h2>
 ${srcs.map((s) => `<div class="src" id="s${s.id}">[${s.id}] <a href="${esc(s.url)}" rel="noopener nofollow">${esc(s.title)}</a><br><small>${esc(s.publisher ?? s.provider)}${s.published ? ` · ${esc(s.published)}` : ""}</small>${s.quote ? `<blockquote>“${esc(s.quote)}”</blockquote>` : ""}</div>`).join("")}
 <footer>Answered by <a href="${esc(serviceUrl)}">${esc(serviceName)} — x402</a>: cited answers for AI agents, $0.01 per question. · <a href="?format=json">JSON</a><br>
+<small>Also: check any token for rugs, $0.01 (Solana, Base, BNB, Ethereum): <a href="${esc(serviceUrl.replace(/\/llms\.txt$/, ""))}/rugradar">${esc(serviceUrl.replace(/\/llms\.txt$/, ""))}/rugradar</a></small><br>
 <small>This page is kept temporarily and may disappear when the server restarts.</small></footer>
 </body></html>`;
 }
