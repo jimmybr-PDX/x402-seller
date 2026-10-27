@@ -52,7 +52,7 @@ test("v5 page: paste box, Auto chip, free line, credits copy, folded agents with
       for (const re of PRIVATE) assert.ok(!re.test(visible), `page must not match ${re}`);
       for (const k of ["deployer_history", "known_pattern", "shared_funder"]) assert.ok(!new RegExp(`"${k}":\\[`).test(h), `${k} has no copy on the page`);
       assert.equal(h.includes("Opens swap in your wallet"), sw.enabled, "swap line only ships when the swap is on");
-      assert.ok(Buffer.byteLength(h) < 49_800, `page ${Buffer.byteLength(h)} bytes`);
+      assert.ok(Buffer.byteLength(h) < 54_300, `page ${Buffer.byteLength(h)} bytes`);
       for (const m of h.matchAll(/<script>([\s\S]*?)<\/script>/g)) new Function(m[1]!);
     } finally { srv.closeAllConnections(); srv.close(); }
   }
@@ -107,5 +107,31 @@ test("free check page: free line under the ring, no quota line above, quiet cred
     assert.ok(!h.includes("dev history"));
     const e = await (await fetch(`${base}/rugradar/embed?token=${CLEAN}`)).text();
     assert.match(e, /class="gauge g-medium"/); assert.match(e, />CAUTION</); assert.ok(!e.includes("LOW RISK")); assert.match(e, /Free check: basic warnings only\. Full report unlocks more\./); assert.match(e, /Unlock live chart \+ full report - \$0\.01 \u203a/);
+  } finally { srv.closeAllConnections(); srv.close(); }
+});
+
+test("share text: free score, label and top warning titles only; X intent URL; under 270 chars; never safety wording; no locked fields", async () => {
+  const { SHARE_JS } = await import("../src/lib/rugradar-web.js");
+  const { rrShareText, rrReportText, rrLink } = new Function(SHARE_JS + "; return {rrShareText,rrReportText,rrLink};")() as Record<string, (...a: any[]) => string>;
+  const O = "https://x402-seller-pmlm.onrender.com", titles = warningsOf(deadFull().checks).map((w) => w.title);
+  const t = rrShareText!(60, "HIGH RISK", titles, DEAD, "solana", O, "0.01");
+  assert.equal(t, `Checked this token on RugRadar \u2014 60 HIGH RISK. Creator can mint more + Dead token: no way to sell. Full report $0.01. ${O}/rugradar?token=${DEAD}&s=x2`);
+  assert.ok(t.length <= 270);
+  assert.equal(rrLink!(O, "0xAbC0000000000000000000000000000000000001", "base"), `${O}/rugradar?token=0xAbC0000000000000000000000000000000000001&chain=base&s=x2`);
+  const long = rrShareText!(15, "CAUTION", ["x".repeat(400), "y"], DEAD, "solana", O, "0.01");
+  assert.ok(long.length <= 270 && long.includes("\u2026") && long.endsWith("&s=x2"), long.length + "");
+  assert.equal(rrShareText!(0, "LOW RISK", [], DEAD, "solana", O, "0.01"), `Checked this token on RugRadar \u2014 0 LOW RISK. Full report $0.01. ${O}/rugradar?token=${DEAD}&s=x2`);
+  const r = rrReportText!(60, "HIGH RISK", titles, DEAD, "solana", O);
+  assert.equal(r.split("\n").length, 2 + titles.length - 1 + 2 > 0 ? 2 + Math.min(titles.length, 3) + 1 : 0);
+  for (const x of [t, r, long]) for (const re of [...PRIVATE, /\bclean\b|\bgood\b|sniper|dev (sold|holding)|can.you.sell|chart|wallet/i]) assert.ok(!re.test(x.replace(/rugradar\?token=\S+/g, "")), `${re} in ${x}`);
+});
+test("page ships the share buttons for free results only, free-only auto-run from ?token=, same 1200x630 preview image, within the size caps", async () => {
+  const { srv, base } = await start(() => deadFull());
+  try {
+    const h = await (await fetch(`${base}/rugradar?token=${DEAD}&s=x2`)).text();
+    for (const s of ["Share on X", "https://x.com/intent/post?text=", "Copy report", "Copy link", "function shotMode", "navigator.share", "execCommand('copy')", "shareBar(j,ws)", "f.dataset.free", "preview-x402-v2.png", 'content="1200"', 'content="630"']) assert.ok(h.includes(s), s);
+    assert.ok(/c\.append\(lockedPanel\(\)\);c\.append\(shareBar\(j,ws\)\)\}/.test(h), "share bar only inside the limited (free) branch");
+    assert.ok(Buffer.byteLength(h) < 54_300, `page ${Buffer.byteLength(h)} bytes`);
+    for (const re of PRIVATE) assert.ok(!re.test(h.replace(SWAP_RULE_JS, "")), `${re}`);
   } finally { srv.closeAllConnections(); srv.close(); }
 });

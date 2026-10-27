@@ -245,11 +245,21 @@ code{background:#0E1528;padding:2px 6px;border-radius:6px;font-size:13px;word-br
 .devlink{font-size:13px;padding:16px 0 0}
 footer{color:var(--mut);font-size:12px;padding:8px 0 40px}
 .soon{color:var(--mut);font-size:14px;cursor:default;user-select:none}
+.shr{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 0}.shr .btn{flex:1 1 auto;padding:10px 12px;font-size:14px}.xb{background:#EEF2F8;color:#0B1020}
+.shot{position:fixed;inset:0;z-index:50;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:14px;overflow:auto}.shot .shr{width:100%;max-width:420px;margin:0}
+.shc{width:100%;max-width:420px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}.shc .verdict{margin:0 0 10px}.shw{display:flex;gap:8px;align-items:center;font-weight:700;font-size:15px;padding:9px 10px;margin-bottom:6px;border-radius:10px;background:#0F1628}.shw.d{border-left:4px solid var(--bad)}.shw.c{border-left:4px solid var(--warn)}
+.sha{font-size:12px;color:var(--mut);word-break:break-all;margin:10px 0 8px}.shm{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--mut)}.shm img{border-radius:50%}.shm b{color:var(--tx)}
 @media(max-width:899px){.go{padding:11px 14px;font-size:15px}.buyline{margin-top:4px;font-size:11px}.grid{gap:10px}.quiet{margin-top:10px}details.fold{margin:10px 0;padding:12px 14px}}`;
 
 
+/** Pure share-text helpers (also unit-tested). Only the free score, label, warning titles and address ever go in. */
+export const SHARE_JS = String.raw`function rrLink(o,a,c){return o+'/rugradar?token='+encodeURIComponent(a)+(c&&/^0x/i.test(a)?'&chain='+encodeURIComponent(c):'')+'&s=x2'}
+function rrShareText(sc,lb,ws,a,c,o,p){const L=rrLink(o,a,c),h='Checked this token on RugRadar \u2014 '+sc+' '+lb+'.',t=' Full report $'+p+'. '+L,room=270-h.length-t.length-2;let w=ws.slice(0,2).join(' + ');if(w.length>room)w=ws[0]||'';if(w.length>room)w=room>9?w.slice(0,room-1).trim()+'\u2026':'';return h+(w?' '+w+'.':'')+t}
+function rrReportText(sc,lb,ws,a,c,o){return 'RugRadar \u2014 '+sc+' '+lb+'\n'+ws.slice(0,3).map(x=>'\u2022 '+x).join('\n')+(ws.length?'\n':'')+a+'\n'+rrLink(o,a,c)}
+`;
+
 /** Page client JS (no template interpolation on purpose; config arrives as CFG). */
-const PAGE_JS = String.raw`const WALLETS=[],WAPI={register:(...ws)=>{ws.forEach(w=>{if(w&&w.features&&w.features['solana:signAndSendTransaction']&&w.features['standard:connect']&&!WALLETS.includes(w))WALLETS.push(w)});return()=>{}}};
+const PAGE_JS = String.raw`${SHARE_JS}const WALLETS=[],WAPI={register:(...ws)=>{ws.forEach(w=>{if(w&&w.features&&w.features['solana:signAndSendTransaction']&&w.features['standard:connect']&&!WALLETS.includes(w))WALLETS.push(w)});return()=>{}}};
 window.addEventListener('wallet-standard:register-wallet',e=>{try{e.detail(WAPI)}catch(x){}});try{window.dispatchEvent(new CustomEvent('wallet-standard:app-ready',{detail:WAPI}))}catch(x){}
 let PAYCFG=null;const payCfg=fetch('/rugradar/pay/config').then(r=>r.json()).then(j=>PAYCFG=j).catch(()=>null);
 const B58='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -325,13 +335,26 @@ function verdictBox(j,ws){const lv=shownLevel(j,ws),s=Number(j.riskScore)||0,v=e
 function lockedPanel(note){const b=el('div','lock');b.id='unlock';b.append(el('span',null,'\u{1F512} '+(note||'Full report: live chart, dev and sniper wallets, biggest buys and sells, sell test.')));const a=el('button','btn pri',CFG.cta);a.type='button';a.addEventListener('click',()=>openBuy(true));b.append(a);return b}
 function openBuy(scroll){const x=$('buyx');x.hidden=false;const w=$('wpay');if(scroll&&w){$('credits').scrollIntoView({block:'start',behavior:'smooth'});w.classList.add('flash');setTimeout(()=>w.classList.remove('flash'),1600)}}
 let LIVEP=null;function liveLoad(){if(!LIVEP)LIVEP=new Promise((ok,no)=>{const s=document.createElement('script');s.src='/rugradar/live.js?v=${LIVE_V}';s.onload=ok;s.onerror=()=>{LIVEP=null;no()};document.head.append(s)});return LIVEP}
+function rrCopy(t,b){const o=b.dataset.l||(b.dataset.l=b.textContent),d=()=>{b.textContent='Copied';setTimeout(()=>b.textContent=o,1500)},fb=()=>{const x=document.createElement('textarea');x.value=t;x.setAttribute('readonly','');x.style.cssText='position:fixed;top:0;left:0;opacity:0';document.body.append(x);x.select();x.setSelectionRange(0,t.length);try{document.execCommand('copy')&&d()}catch(e){}x.remove()};if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(d,fb);else fb()}
+function shotMode(j,ws,lv,sc,lb,txt){const bd=el('div','shot'),c=el('div','shc'),v=el('div','verdict v-'+lv),t=el('div'),prev=document.activeElement;t.append(el('div','vt '+lv,lb),el('div','vl',VT[lv][1]));v.append(gauge(lv,sc),t);c.append(v);
+ ws.slice(0,3).forEach(w=>{const r=el('div','shw '+(w.d?'d':'c'));r.append(el('span','sev '+(w.d?'s3':'s2'),w.d?'DANGER':'CAUTION'),el('span',null,w.t));c.append(r)});
+ const fa=j.facts||{};c.append(el('div','sha',(typeof fa.token==='string'?'$'+fa.token+' \u00b7 ':'')+String(j.token||'')));
+ const mk=el('div','shm'),im=el('img');im.src='/rugradar/rug-radar-64.png';im.width=18;im.height=18;im.alt='';mk.append(im,el('b',null,'RugRadar'),el('span',null,'free check'));c.append(mk);
+ const row=el('div','shr'),cl=()=>{bd.remove();document.removeEventListener('keydown',kd);document.body.style.overflow='';if(prev&&prev.focus)prev.focus()},kd=e=>{if(e.key==='Escape')cl()};
+ const bk=el('button','btn sec','\u2190 Back');bk.type='button';bk.addEventListener('click',cl);row.append(bk);
+ if(navigator.share){const sb=el('button','btn sec','Share');sb.type='button';sb.addEventListener('click',()=>{try{navigator.share({text:txt}).catch(()=>{})}catch(e){}});row.append(sb)}
+ bd.addEventListener('click',e=>{if(e.target===bd)cl()});bd.append(c,row);document.body.append(bd);document.body.style.overflow='hidden';document.addEventListener('keydown',kd);bk.focus()}
+function shareBar(j,ws){const lv=shownLevel(j,ws),sc=Number(j.riskScore)||0,lb=VT[lv][0],a=String(j.token||''),tl=ws.map(w=>w.t),b=el('div','shr');
+ const txt=rrShareText(sc,lb,tl,a,j.chain,CFG.u,CFG.p),x=el('a','btn xb','Share on X');x.href='https://x.com/intent/post?text='+encodeURIComponent(txt);x.target='_blank';x.rel='noopener noreferrer';
+ const bt=(n,f)=>{const y=el('button','btn sec',n);y.type='button';y.addEventListener('click',()=>f(y));return y};
+ b.append(x,bt('Share',()=>shotMode(j,ws,lv,sc,lb,txt)),bt('Copy report',y=>rrCopy(rrReportText(sc,lb,tl,a,j.chain,CFG.u),y)),bt('Copy link',y=>rrCopy(rrLink(CFG.u,a,j.chain),y)));return b}
 function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings(j.checks),fa=j.facts||{};
  const tok=el('div','tok'),info=el('div');tok.append(el('div','av',(typeof fa.token==='string'?fa.token:String(j.token||'?')).slice(0,2).toUpperCase()));
  info.append(el('b',null,(typeof fa.token==='string'?'$'+fa.token+' \u00b7 ':'')+short(j.token)),el('div','addr',[CFG.chains[j.chain]||j.chain,ageTxt(fa.ageHours)].filter(Boolean).join(' \u00b7 ')));tok.append(info);const sw=socials(j);if(sw)tok.append(sw);c.append(tok);
  c.append(verdictBox(j,ws));if(Array.isArray(j.freeFacts)&&j.freeFacts.length)c.append(el('div','ffl',j.freeFacts.join(' \u00b7 ')));
  if(typeof SWAPHOOK==='function'&&j.token===t&&shownLevel(j,ws)==='low'){const sb=SWAPHOOK(j);if(sb)c.append(sb)}
  const wc=el('div','wcards');ws.slice(0,3).forEach((w,i)=>wc.append(card(w,j,DESK&&i===0)));if(ws.length)c.append(wc);
- if(j.report==='limited'&&j.checks){const n=Number(j.moreWarnings!=null?j.moreWarnings:j.hiddenWarnings)||0;if(n>0)c.append(el('span','tease','+'+n+' more warning'+(n>1?'s':'')+' in the full report'));c.append(lockedPanel())}
+ if(j.report==='limited'&&j.checks){const n=Number(j.moreWarnings!=null?j.moreWarnings:j.hiddenWarnings)||0;if(n>0)c.append(el('span','tease','+'+n+' more warning'+(n>1?'s':'')+' in the full report'));c.append(lockedPanel());c.append(shareBar(j,ws))}
  else if(ws.length>3){const b=el('button','tease','+'+(ws.length-3)+' more warnings');b.type='button';b.addEventListener('click',()=>{ws.slice(3).forEach(w=>wc.append(card(w,j,false)));b.remove()});c.append(b)}
  if(j.liveReport){const h=el('div');c.append(h);liveLoad().then(()=>{const b=window.RRLive(j);if(b)h.append(b)}).catch(()=>{})}
  const mo=el('details','quiet');mo.id='more';mo.append(el('summary',null,'More'));const ws2=el('div','sub soon');ws2.append(el('span',null,'\u{1F514} Watch token: coming soon'));mo.append(ws2);c.append(mo);
@@ -339,7 +362,7 @@ function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings
 function waitCard(){out.textContent='';const c=el('div','card res'),v=el('div','verdict'),t=el('div');t.append(el('div','vt','Checking\u2026'),el('div','vl','Usually a few seconds.'));v.append(gauge('wait',0),t);v.querySelector('i').firstChild.textContent='\u2026';c.append(v);out.append(c)}
 function msgCard(text,lock,note){out.textContent='';const c=el('div','card res');c.append(el('p',null,text));if(lock)c.append(lockedPanel(note));out.append(c)}
 async function chainFor(t){const c=$('chain').value;if(c!=='auto')return c;if(!t.startsWith('0x'))return 'solana';try{const r=await fetch('/rugradar/api/chain?token='+encodeURIComponent(t));const j=await r.json();return j.chain||'base'}catch(e){return 'base'}}
-f.addEventListener('submit',async e=>{e.preventDefault();const t=$('tok').value.trim(),k=$('key').value.trim();if(!t)return;waitCard();go.disabled=true;
+f.addEventListener('submit',async e=>{e.preventDefault();const t=$('tok').value.trim(),k=f.dataset.free?'':$('key').value.trim();delete f.dataset.free;if(!t)return;waitCard();go.disabled=true;
  try{const c=await chainFor(t);const r=k?await fetch('/rug-check?token='+encodeURIComponent(t)+'&chain='+c,{headers:{'X-RugRadar-Key':k}}):await fetch('/rugradar/api/check?token='+encodeURIComponent(t)+'&chain='+c,{method:'POST'});
  const j=await r.json().catch(()=>({}));
  if(!r.ok){const used=j.error==='free_checks_used';msgCard(j.message||(r.status===402&&k?'Credit key not accepted or out of credits.':'Error '+r.status),r.status===402||used,used?'Free check used. Credits unlock the full report.':null);return}
@@ -353,7 +376,7 @@ document.querySelectorAll('a[href="#developers"]').forEach(a=>a.addEventListener
 const od=()=>{if(location.hash==='#developers')$('developers').open=true};od();addEventListener('hashchange',od);
 document.querySelectorAll('.cpb').forEach(b=>b.addEventListener('click',()=>{const t=b.nextElementSibling.textContent,done=()=>{b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1500)};if(navigator.clipboard)navigator.clipboard.writeText(t).then(done,()=>{});}));
 if(location.hash==='#agents')$('agents').open=true;if(location.hash==='#credits')openBuy(false);
-try{const u=new URLSearchParams(location.search),t=u.get('token'),c=u.get('chain');if(t&&t.length<=64){$('tok').value=t;if(c&&$('chain').querySelector('option[value="'+c.replace(/[^a-z]/g,'')+'"]'))$('chain').value=c}}catch(e){}
+try{const u=new URLSearchParams(location.search),t=u.get('token'),c=u.get('chain');if(t&&t.length<=64){$('tok').value=t;if(c&&$('chain').querySelector('option[value="'+c.replace(/[^a-z]/g,'')+'"]'))$('chain').value=c;if(/^[A-Za-z0-9]{20,64}$/.test(t))setTimeout(()=>{f.dataset.free='1';f.dispatchEvent(new Event('submit',{cancelable:true}))},0)}}catch(e){}
 {const tk=$('tok'),cl=$('clr'),cs=()=>{cl.hidden=!tk.value};tk.addEventListener('input',cs);cl.addEventListener('click',()=>{tk.value='';cs();tk.focus()});cs()}
 keyUI();document.getElementById('wpayHome').append(walletPacks());
 (function(){const k=KS.get();if(!k)return;fetch('/credits/balance',{headers:{'X-RugRadar-Key':k}}).then(r=>r.json()).then(j=>{if(j&&j.known)pill(j.credits)}).catch(()=>{})})();
@@ -373,7 +396,7 @@ function page(d: WebDeps) {
       description: "Free Solana rug check and honeypot checker: 0-100 token risk score with plain danger warnings for Solana, BNB, Base, Ethereum and Arbitrum.", offers: { "@type": "Offer", price: p, priceCurrency: "USD" } },
     { "@context": "https://schema.org", "@type": "FAQPage", mainEntity: faq.map(([q, a]) => ({ "@type": "Question", name: q, acceptedAnswer: { "@type": "Answer", text: a } })) },
   ];
-  const cfg = { offer: unlockOffer(U, p), warn: WARN, chains: CHAIN_NAME, p, cta: `Unlock live chart + full report - $${p}` };
+  const cfg = { u: U, offer: unlockOffer(U, p), warn: WARN, chains: CHAIN_NAME, p, cta: `Unlock live chart + full report - $${p}` };
   const swapJs = d.swap?.enabled ? "\n" + swapClientJs(d.swap) + "\nconst SWAPHOOK=swapBox;" : "";
   const json = (o: unknown) => JSON.stringify(o).replace(/</g, "\\u003c");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
