@@ -39,7 +39,7 @@ test("page has SEO title, description, JSON-LD, disclaimer; sitemap lists /rugra
   try {
     const h = await (await fetch(`${base}/rugradar`)).text();
     assert.match(h, /<title>RugRadar: Free Solana Rug Check & Honeypot Checker/); assert.match(h, /name="description"/); assert.match(h, /application\/ld\+json/); assert.match(h, /FAQPage/);
-    assert.match(h, /Do your own research/); assert.match(h, /1\.8x faster/); assert.match(h, /1 free limited check per visitor, then credits for the full report\./); assert.match(h, /function lockedPanel/); assert.match(h, /function walletPacks/); assert.match(h, /\/rugradar\/pay\/config/); assert.match(h, /j\.report==='limited'&&j\.checks/); assert.match(h, /Unlock full report \u2014 10 credits for \$0\.10/); assert.match(h, /credits\/buy\?credits=10/); assert.ok(!/scammer/i.test(h));
+    assert.match(h, /Do your own research/); assert.match(h, /1\.8x faster/); assert.match(h, /1 free limited check every day per visitor, then credits for the full report\./); assert.match(h, /function lockedPanel/); assert.match(h, /function walletPacks/); assert.match(h, /\/rugradar\/pay\/config/); assert.match(h, /j\.report==='limited'&&j\.checks/); assert.match(h, /Unlock full report \u2014 10 credits for \$0\.10/); assert.match(h, /credits\/buy\?credits=10/); assert.ok(!/scammer/i.test(h));
     assert.match(await (await fetch(`${base}/sitemap.xml`)).text(), /\/rugradar<\/loc>/);
   } finally { srv.closeAllConnections(); srv.close(); }
 });
