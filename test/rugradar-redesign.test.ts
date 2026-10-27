@@ -52,7 +52,7 @@ test("v5 page: paste box, Auto chip, free line, credits copy, folded agents with
       for (const re of PRIVATE) assert.ok(!re.test(visible), `page must not match ${re}`);
       for (const k of ["deployer_history", "known_pattern", "shared_funder"]) assert.ok(!new RegExp(`"${k}":\\[`).test(h), `${k} has no copy on the page`);
       assert.equal(h.includes("Opens swap in your wallet"), sw.enabled, "swap line only ships when the swap is on");
-      assert.ok(Buffer.byteLength(h) < 55_450, `page ${Buffer.byteLength(h)} bytes`);
+      assert.ok(Buffer.byteLength(h) < 58_050, `page ${Buffer.byteLength(h)} bytes`);
       for (const m of h.matchAll(/<script>([\s\S]*?)<\/script>/g)) new Function(m[1]!);
     } finally { srv.closeAllConnections(); srv.close(); }
   }
@@ -125,13 +125,15 @@ test("share text: free score, label and top warning titles only; X intent URL; u
   assert.equal(r.split("\n").length, 2 + titles.length - 1 + 2 > 0 ? 2 + Math.min(titles.length, 3) + 1 : 0);
   for (const x of [t, r, long]) for (const re of [...PRIVATE, /\bclean\b|\bgood\b|sniper|dev (sold|holding)|can.you.sell|chart|wallet/i]) assert.ok(!re.test(x.replace(/rugradar\?token=\S+/g, "")), `${re} in ${x}`);
 });
-test("page ships the share buttons for free results only, free-only auto-run from ?token=, same 1200x630 preview image, within the size caps", async () => {
+test("page ships the share buttons for free AND full results, free-only auto-run from ?token=, same 1200x630 preview image, within the size caps", async () => {
   const { srv, base } = await start(() => deadFull());
   try {
     const h = await (await fetch(`${base}/rugradar?token=${DEAD}&s=x2`)).text();
     for (const s of ["Share on X", "https://x.com/intent/post?text=", "Copy report", "Copy link", "function shotMode", "navigator.share", "execCommand('copy')", "shareBar(j,ws)", "f.dataset.free", "preview-x402-v2.png", 'content="1200"', 'content="630"']) assert.ok(h.includes(s), s);
-    assert.ok(/c\.append\(lockedPanel\(\)\);c\.append\(shareBar\(j,ws\)\)\}/.test(h), "share bar only inside the limited (free) branch");
-    assert.ok(Buffer.byteLength(h) < 55_450, `page ${Buffer.byteLength(h)} bytes`);
+    assert.ok(/c\.append\(lockedPanel\(\)\);c\.append\(shareBar\(j,ws\)\)\}/.test(h), "free branch unchanged: share bar under the free result");
+    assert.ok(/else\{if\(ws\.length>3\)[\s\S]*?if\(Array\.isArray\(j\.checks\)\)\{const fr=rrFree\(j\.checks,CFG\.lim,CFG\.warn\);c\.append\(shareBar\(\{riskScore:fr\.sc,riskLevel:fr\.lv,token:j\.token,chain:j\.chain,facts:fa\},fr\.ws\)\)\}\}/.test(h), "full-report branch shows the share bar, built from the free score and warnings only");
+    assert.ok(h.includes('"lim":["mint_authority","freeze_authority","mint_function","holders","liquidity","age","dead_token"]'), "page config carries the free check list");
+    assert.ok(Buffer.byteLength(h) < 58_050, `page ${Buffer.byteLength(h)} bytes`);
     for (const re of PRIVATE) assert.ok(!re.test(h.replace(SWAP_RULE_JS, "")), `${re}`);
   } finally { srv.closeAllConnections(); srv.close(); }
 });

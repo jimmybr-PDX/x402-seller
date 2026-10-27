@@ -6,6 +6,7 @@
 import { RUG_EDGE } from "./rug-extra.js";
 import { RugBusyError } from "./rug.js";
 import { LIVE_JS } from "./rugradar-live.js";
+import { CLEAN_JS } from "./token-name.js";
 import type { Recent } from "./rugradar-recent.js";
 import { swapClientJs, type SwapCfg } from "./swap.js";
 import type { Express, Request, Response } from "express";
@@ -59,7 +60,7 @@ export function limitedReport(full: any) {
     moreWarnings: Math.max(0, warningsOf(checks).length - 3) + all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length,
     hiddenWarnings: all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length,
     socialLinks: Array.isArray(links) ? links : null, freeFacts: freeFacts(full),
-    facts: { mintAuthority: pick("mintAuthority"), freezeAuthority: pick("freezeAuthority"), top1Pct: pick("top1Pct"), top10Pct: pick("top10Pct"), holderCount: pick("holderCount"), ageHours: pick("ageHours"), liquidityUsd: pick("liquidityUsd") },
+    facts: { tokenName: pick("tokenName"), tokenSymbol: pick("tokenSymbol"), tokenImage: pick("tokenImage"), mintAuthority: pick("mintAuthority"), freezeAuthority: pick("freezeAuthority"), top1Pct: pick("top1Pct"), top10Pct: pick("top10Pct"), holderCount: pick("holderCount"), ageHours: pick("ageHours"), liquidityUsd: pick("liquidityUsd") },
     lockedSignals: LOCKED_SIGNALS, unlock: "Credits unlock the full report (paste a credit key above, or send X-RugRadar-Key).",
     disclaimer: full?.disclaimer ?? DISCLAIMER, generatedAt: full?.generatedAt ?? new Date().toISOString(),
   };
@@ -212,7 +213,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:12p
 #recent{max-width:100%;margin:0 0 8px}.kbtn{background:#232C47;color:var(--tx);border:0;border-radius:6px;padding:3px 9px;font-size:13px;cursor:pointer;margin-left:4px}
 .grid{display:grid;gap:16px}@media(min-width:900px){.grid{grid-template-columns:1.6fr 1fr;align-items:start}.hero h1{font-size:34px}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
-.tok{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.av{width:44px;height:44px;border-radius:50%;background:#2a3456;display:grid;place-items:center;font-weight:800;flex:none}
+.tok{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.av{width:44px;height:44px;border-radius:50%;background:#2a3456;display:grid;place-items:center;font-weight:800;flex:none;overflow:hidden}.av img{width:100%;height:100%;object-fit:cover}
 .tok b{font-size:18px;word-break:break-all}.addr{font-size:13px;color:var(--mut)}
 .socw{margin-left:auto}.soc{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}
 .si a,.si span.off{position:relative;width:34px;height:34px;border-radius:10px;display:grid;place-items:center}.si svg{width:20px;height:20px;fill:currentColor}
@@ -256,9 +257,12 @@ footer{color:var(--mut);font-size:12px;padding:8px 0 40px}
 
 
 /** Pure share-text helpers (also unit-tested). Only the free score, label, warning titles and address ever go in. */
-export const SHARE_JS = String.raw`function rrLink(o,a,c){return o+'/rugradar?token='+encodeURIComponent(a)+(c&&/^0x/i.test(a)?'&chain='+encodeURIComponent(c):'')+'&s=x2'}
-function rrShareText(sc,lb,ws,a,c,o,p){const L=rrLink(o,a,c),h='Checked this token on RugRadar \u2014 '+sc+' '+lb+'.',t=' Full report $'+p+'. '+L,room=270-h.length-t.length-2;let w=ws.slice(0,2).join(' + ');if(w.length>room)w=ws[0]||'';if(w.length>room)w=room>9?w.slice(0,room-1).trim()+'\u2026':'';return h+(w?' '+w+'.':'')+t}
-function rrReportText(sc,lb,ws,a,c,o){return 'RugRadar \u2014 '+sc+' '+lb+'\n'+ws.slice(0,3).map(x=>'\u2022 '+x).join('\n')+(ws.length?'\n':'')+a+'\n'+rrLink(o,a,c)}
+export const SHARE_JS = CLEAN_JS + String.raw`function rrLink(o,a,c){return o+'/rugradar?token='+encodeURIComponent(a)+(c&&/^0x/i.test(a)?'&chain='+encodeURIComponent(c):'')+'&s=x2'}
+function rrNm(n){n=String(n||'');const d=n.charAt(0)==='$',x=rrClean(n,33);return d&&x&&!/\s/.test(x)?'$'+x:x}
+function rrShareText(sc,lb,ws,a,c,o,p,n){n=rrNm(n);const L=rrLink(o,a,c),h='Checked '+(n||'this token')+' on RugRadar \u2014 '+sc+' '+lb+'.',t=' Full report $'+p+'. '+L,room=270-h.length-t.length-2;let w=ws.slice(0,2).join(' + ');if(w.length>room)w=ws[0]||'';if(w.length>room)w=room>9?w.slice(0,room-1).trim()+'\u2026':'';return h+(w?' '+w+'.':'')+t}
+function rrReportText(sc,lb,ws,a,c,o,n){n=rrNm(n);return 'RugRadar \u2014 '+(n?n+' \u2014 ':'')+sc+' '+lb+'\n'+ws.slice(0,3).map(x=>'\u2022 '+x).join('\n')+(ws.length?'\n':'')+a+'\n'+rrLink(o,a,c)}
+function rrFree(ch,L,W){ch=Array.isArray(ch)?ch:[];const b=ch.filter(c=>c&&L.indexOf(c.check)>=0&&c.check!=='dead_token').map(c=>({check:c.check,points:Number(c.points)||0})),sm=b.reduce((a,c)=>a+c.points,0),d=ch.find(c=>c&&c.check==='dead_token'),xs=d?[{check:'dead_token',points:Math.max(5,60-sm)}].concat(b):b,sc=Math.min(100,xs.reduce((a,c)=>a+c.points,0)),seen={},ws=[];
+xs.filter(c=>c.points>0&&W[c.check]).sort((a,c)=>c.points-a.points).forEach(c=>{const w=W[c.check];if(seen[w[0]])return;seen[w[0]]=1;ws.push({d:c.points>=15,t:w[0],l:w[1]})});return {sc:sc,lv:sc>=50?'high':sc>=25?'medium':'low',ws:ws}}
 `;
 
 /** Page client JS (no template interpolation on purpose; config arrives as CFG). */
@@ -341,24 +345,25 @@ let LIVEP=null;function liveLoad(){if(!LIVEP)LIVEP=new Promise((ok,no)=>{const s
 function rrCopy(t,b){const o=b.dataset.l||(b.dataset.l=b.textContent),d=()=>{b.textContent='Copied';setTimeout(()=>b.textContent=o,1500)},fb=()=>{const x=document.createElement('textarea');x.value=t;x.setAttribute('readonly','');x.style.cssText='position:fixed;top:0;left:0;opacity:0';document.body.append(x);x.select();x.setSelectionRange(0,t.length);try{document.execCommand('copy')&&d()}catch(e){}x.remove()};if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(d,fb);else fb()}
 function shotMode(j,ws,lv,sc,lb,txt){const bd=el('div','shot'),c=el('div','shc'),v=el('div','verdict v-'+lv),t=el('div'),prev=document.activeElement;t.append(el('div','vt '+lv,lb),el('div','vl',VT[lv][1]));v.append(gauge(lv,sc),t);c.append(v);
  ws.slice(0,3).forEach(w=>{const r=el('div','shw '+(w.d?'d':'c'));r.append(el('span','sev '+(w.d?'s3':'s2'),w.d?'DANGER':'CAUTION'),el('span',null,w.t));c.append(r)});
- const fa=j.facts||{};c.append(el('div','sha',(typeof fa.token==='string'?'$'+fa.token+' \u00b7 ':'')+String(j.token||'')));
+ const tk=rrTok(j.facts);c.append(el('div','sha',(tk.line?tk.line+' \u00b7 ':'')+String(j.token||'')));
  const mk=el('div','shm'),im=el('img');im.src='/rugradar/rug-radar-64.png';im.width=18;im.height=18;im.alt='';mk.append(im,el('b',null,'RugRadar'),el('span',null,'free check'));c.append(mk);
  const row=el('div','shr'),cl=()=>{bd.remove();document.removeEventListener('keydown',kd);document.body.style.overflow='';if(prev&&prev.focus)prev.focus()},kd=e=>{if(e.key==='Escape')cl()};
  const bk=el('button','btn sec','\u2190 Back');bk.type='button';bk.addEventListener('click',cl);row.append(bk);
  if(navigator.share){const sb=el('button','btn sec','Share');sb.type='button';sb.addEventListener('click',()=>{try{navigator.share({text:txt}).catch(()=>{})}catch(e){}});row.append(sb)}
  bd.addEventListener('click',e=>{if(e.target===bd)cl()});bd.append(c,row);document.body.append(bd);document.body.style.overflow='hidden';document.addEventListener('keydown',kd);bk.focus()}
 function shareBar(j,ws){const lv=shownLevel(j,ws),sc=Number(j.riskScore)||0,lb=VT[lv][0],a=String(j.token||''),tl=ws.map(w=>w.t),b=el('div','shr');
- const txt=rrShareText(sc,lb,tl,a,j.chain,CFG.u,CFG.p),x=el('a','btn xb','Share on X');x.href='https://x.com/intent/post?text='+encodeURIComponent(txt);x.target='_blank';x.rel='noopener noreferrer';
+ const nm=rrTok(j.facts).share,txt=rrShareText(sc,lb,tl,a,j.chain,CFG.u,CFG.p,nm),x=el('a','btn xb','Share on X');x.href='https://x.com/intent/post?text='+encodeURIComponent(txt);x.target='_blank';x.rel='noopener noreferrer';
  const bt=(n,f)=>{const y=el('button','btn sec',n);y.type='button';y.addEventListener('click',()=>f(y));return y};
- b.append(x,bt('Share',()=>shotMode(j,ws,lv,sc,lb,txt)),bt('Copy report',y=>rrCopy(rrReportText(sc,lb,tl,a,j.chain,CFG.u),y)),bt('Copy link',y=>rrCopy(rrLink(CFG.u,a,j.chain),y)));return b}
-function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings(j.checks),fa=j.facts||{};
- const tok=el('div','tok'),info=el('div');tok.append(el('div','av',(typeof fa.token==='string'?fa.token:String(j.token||'?')).slice(0,2).toUpperCase()));
- info.append(el('b',null,(typeof fa.token==='string'?'$'+fa.token+' \u00b7 ':'')+short(j.token)),el('div','addr',[CFG.chains[j.chain]||j.chain,ageTxt(fa.ageHours)].filter(Boolean).join(' \u00b7 ')));tok.append(info);const sw=socials(j);if(sw)tok.append(sw);c.append(tok);
+ b.append(x,bt('Share',()=>shotMode(j,ws,lv,sc,lb,txt)),bt('Copy report',y=>rrCopy(rrReportText(sc,lb,tl,a,j.chain,CFG.u,nm),y)),bt('Copy link',y=>rrCopy(rrLink(CFG.u,a,j.chain),y)));return b}
+function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings(j.checks),fa=j.facts||{},tk=rrTok(fa);
+ const tok=el('div','tok'),info=el('div'),lt=(tk.s||tk.n||String(j.token||'?')).slice(0,2).toUpperCase(),av=el('div','av',lt);if(tk.img){const im=el('img');im.alt='';im.referrerPolicy='no-referrer';im.loading='lazy';im.onerror=()=>{im.remove();av.textContent=lt};im.src=tk.img;av.textContent='';av.append(im)}tok.append(av);
+ info.append(el('b',null,tk.line||short(j.token)),el('div','addr',[tk.line?short(j.token):null,CFG.chains[j.chain]||j.chain,ageTxt(fa.ageHours)].filter(Boolean).join(' \u00b7 ')));tok.append(info);const sw=socials(j);if(sw)tok.append(sw);c.append(tok);
  c.append(verdictBox(j,ws));if(Array.isArray(j.freeFacts)&&j.freeFacts.length)c.append(el('div','ffl',j.freeFacts.join(' \u00b7 ')));
  if(typeof SWAPHOOK==='function'&&j.token===t&&shownLevel(j,ws)==='low'){const sb=SWAPHOOK(j);if(sb)c.append(sb)}
  const wc=el('div','wcards');ws.slice(0,3).forEach((w,i)=>wc.append(card(w,j,DESK&&i===0)));if(ws.length)c.append(wc);
  if(j.report==='limited'&&j.checks){const n=Number(j.moreWarnings!=null?j.moreWarnings:j.hiddenWarnings)||0;if(n>0)c.append(el('span','tease','+'+n+' more warning'+(n>1?'s':'')+' in the full report'));c.append(lockedPanel());c.append(shareBar(j,ws))}
- else if(ws.length>3){const b=el('button','tease','+'+(ws.length-3)+' more warnings');b.type='button';b.addEventListener('click',()=>{ws.slice(3).forEach(w=>wc.append(card(w,j,false)));b.remove()});c.append(b)}
+ else{if(ws.length>3){const b=el('button','tease','+'+(ws.length-3)+' more warnings');b.type='button';b.addEventListener('click',()=>{ws.slice(3).forEach(w=>wc.append(card(w,j,false)));b.remove()});c.append(b)}
+  if(Array.isArray(j.checks)){const fr=rrFree(j.checks,CFG.lim,CFG.warn);c.append(shareBar({riskScore:fr.sc,riskLevel:fr.lv,token:j.token,chain:j.chain,facts:fa},fr.ws))}}
  if(j.liveReport){const h=el('div');c.append(h);liveLoad().then(()=>{const b=window.RRLive(j);if(b)h.append(b)}).catch(()=>{})}
  const mo=el('details','quiet');mo.id='more';mo.append(el('summary',null,'More'));const ws2=el('div','sub soon');ws2.append(el('span',null,'\u{1F514} Watch token: coming soon'));mo.append(ws2);c.append(mo);
  c.append(el('div','disc','Danger warnings only. Not a guarantee, not financial advice.'));out.append(c)}
@@ -403,7 +408,7 @@ function page(d: WebDeps) {
       description: "Free Solana rug check and honeypot checker: 0-100 token risk score with plain danger warnings for Solana, BNB, Base, Ethereum and Arbitrum.", offers: { "@type": "Offer", price: p, priceCurrency: "USD" } },
     { "@context": "https://schema.org", "@type": "FAQPage", mainEntity: faq.map(([q, a]) => ({ "@type": "Question", name: q, acceptedAnswer: { "@type": "Answer", text: a } })) },
   ];
-  const cfg = { u: U, offer: unlockOffer(U, p), warn: WARN, chains: CHAIN_NAME, p, cta: `Unlock live chart + full report - $${p}` };
+  const cfg = { u: U, offer: unlockOffer(U, p), warn: WARN, lim: [...LIMITED_CHECKS], chains: CHAIN_NAME, p, cta: `Unlock live chart + full report - $${p}` };
   const swapJs = d.swap?.enabled ? "\n" + swapClientJs(d.swap) + "\nconst SWAPHOOK=swapBox;" : "";
   const json = (o: unknown) => JSON.stringify(o).replace(/</g, "\\u003c");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

@@ -5,6 +5,7 @@ import { solanaExtra, evmExtra, buyerSummary, type Extra } from "./rug-extra.js"
  */
 import fs from "node:fs";
 import { jupFetch } from "./jup-gate.js";
+import { pickTokenMeta, type TokenMeta } from "./token-name.js";
 import path from "node:path";
 import { rpc, SolanaInputError } from "./solana.js";
 
@@ -32,7 +33,7 @@ export type Facts = {
   ageHours: number | null; ageMinHours?: number | null; creator: string | null; funder: string | null;
   priorLaunches: number | null; priorDead: number | null;
   creatorFlagged: boolean; funderFlagged: boolean; unknown: string[]; timingsMs?: Record<string, number>; marketUnknown?: boolean; holderSource?: string | null; holderCount?: number | null; launchpad?: string | null; extra?: Extra | null;
-};
+} & Partial<TokenMeta>;
 export type Reason = { check: string; points: number; detail: string };
 
 /** Pure scoring: points add up to a 0-100 risk score. */
@@ -120,6 +121,15 @@ export async function marketOf(mint: string) {
   return { failed: false as const, pairs, liquidityUsd: pairs.length ? liq : null, priceUsd: best?.priceUsd ? Number(best.priceUsd) : null, createdAt: pairs.length ? Math.min(...pairs.map((p) => p.pairCreatedAt ?? Infinity)) : null };
 }
 
+/** Name/symbol/image of `addr` from DexScreener pairs already fetched (no extra call). Best-liquidity pair first. */
+export function dsMeta(addr: string, pairs: any[] | null | undefined): { name?: unknown; symbol?: unknown; image?: unknown }[] {
+  const a = addr.toLowerCase(), out: { name?: unknown; symbol?: unknown; image?: unknown }[] = [];
+  for (const p of [...(pairs ?? [])].sort((x, y) => (y?.liquidity?.usd ?? 0) - (x?.liquidity?.usd ?? 0))) {
+    const t = String(p?.baseToken?.address ?? "").toLowerCase() === a ? p.baseToken : String(p?.quoteToken?.address ?? "").toLowerCase() === a ? p.quoteToken : null;
+    if (t) out.push({ name: t.name, symbol: t.symbol, image: p?.info?.imageUrl });
+  }
+  return out;
+}
 // Jupiter token info. undefined = Jupiter did not answer (rate limit / timeout), null = answered, token not listed.
 export const jupStat = { ok: 0, notListed: 0, failed: 0, lastStatus: null as number | string | null };
 let jupLogAt = 0;
@@ -268,6 +278,7 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   if (ex === TIMEOUT) unknown.push("buyer signals (not available: over time budget)");
   return { extra, jupiterMissing: jup === undefined, mint, decimals, supply, mintAuthority: info.mintAuthority ?? null, freezeAuthority: info.freezeAuthority ?? null, token2022: acct.value.owner !== "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
     top1Pct, top10Pct, liquidityUsd: liqOf(market),  priceUsd: market.priceUsd, pairs: market.pairs.length,
+    ...pickTokenMeta([{ name: jup?.name, symbol: jup?.symbol, image: jup?.icon }, ...dsMeta(mint, market.pairs), ...(info.extensions ?? []).filter((x: any) => x?.extension === "tokenMetadata").map((x: any) => ({ name: x.state?.name, symbol: x.state?.symbol }))]),
     timingsMs: { ...timingsMs, total: Date.now() - t0 }, marketUnknown: market.failed, holderSource, holderCount: jup?.holderCount ?? null, launchpad: jup?.launchpad ?? null,
     lpNote: market.pairs.length ? `${market.pairs.length} pool(s) on ${[...new Set(market.pairs.map((p: any) => p.dexId))].join(", ")}; LP lock/burn status not verified` : null,
     ageHours, ageMinHours, creator, funder, priorLaunches, priorDead, creatorFlagged: !!(creator && list[creator] && !(priorDead! >= 3)), funderFlagged: !!(funder && list[funder]), unknown };
@@ -369,7 +380,8 @@ async function evmCheck(addr: string, chain: string) {
   const created = dsr?.length ? Math.min(...dsr.map((p) => p.pairCreatedAt ?? Infinity)) : null;
   const age = created && isFinite(created) ? (Date.now() - created) / 3.6e6 : null;
   const price = dsr?.[0]?.priceUsd ? Number(dsr[0].priceUsd) : null;
-  return { ...scoreEvm(g, liq, age, marketUnknown), confidence: marketUnknown ? "medium" : "high", unknownSignals: marketUnknown ? ["liquidity", "age"] : [], facts: { buyer: evmExtra(g, dsr), token: g.token_symbol, creator: g.creator_address || null, owner: g.owner_address || null, holderCount: Number(g.holder_count || 0), liquidityUsd: liq, priceUsd: price, ageHours: age && +age.toFixed(1), buyTax: g.buy_tax, sellTax: g.sell_tax }, price, liq };
+  const meta = pickTokenMeta([{ name: g.token_name, symbol: g.token_symbol }, ...dsMeta(addr, dsr)]);
+  return { ...scoreEvm(g, liq, age, marketUnknown), confidence: marketUnknown ? "medium" : "high", unknownSignals: marketUnknown ? ["liquidity", "age"] : [], facts: { buyer: evmExtra(g, dsr), ...meta, token: meta.tokenSymbol, creator: g.creator_address || null, owner: g.owner_address || null, holderCount: Number(g.holder_count || 0), liquidityUsd: liq, priceUsd: price, ageHours: age && +age.toFixed(1), buyTax: g.buy_tax, sellTax: g.sell_tax }, price, liq };
 }
 export const CHAINS = ["solana", "base", "bnb", "ethereum", "arbitrum"] as const; // EVM chains: add to EVM map (GoPlus chain id + DexScreener slug)
 

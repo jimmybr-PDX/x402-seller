@@ -6,6 +6,7 @@
  * in a debounced batch so a burst of unlocks is one commit. Nothing is held in memory except writes not yet flushed.
  */
 import { hashKey } from "./credits.js";
+import { cleanTokenText } from "./token-name.js";
 
 export const RECENT_MAX = 20, RECENT_TTL_MS = 30 * 86_400_000, RECENT_ENTRY_BYTES = 32_000, RECENT_FLUSH_MS = 15_000;
 export type RecentItem = { address: string; chain: string; name: string; score: number; at: number; report: unknown };
@@ -15,7 +16,6 @@ export type RecentStore = { load: (name: string) => Promise<Doc | null>; save: (
 const docName = (key: string) => `recent-${hashKey(key).slice(0, 32)}.json`;
 export const recentId = (chain: string, address: string) => `${chain}:${address.startsWith("0x") ? address.toLowerCase() : address}`;
 const shortAddr = (a: string) => (a.length > 14 ? `${a.slice(0, 4)}\u2026${a.slice(-6)}` : a);
-const clean = (s: unknown) => String(s ?? "").replace(/[\u0000-\u001f\u007f<>]/g, "").trim().slice(0, 32);
 
 export function createRecent(store: RecentStore, opts: { flushMs?: number; now?: () => number } = {}) {
   const now = opts.now ?? Date.now, flushMs = opts.flushMs ?? RECENT_FLUSH_MS;
@@ -52,7 +52,7 @@ export function createRecent(store: RecentStore, opts: { flushMs?: number; now?:
         if (!address || address.length > 64 || !chain || !Number.isFinite(score)) return false;
         let body: any = report;
         if (Buffer.byteLength(JSON.stringify(body)) > RECENT_ENTRY_BYTES) { body = { ...report }; delete body.liveReport; if (Buffer.byteLength(JSON.stringify(body)) > RECENT_ENTRY_BYTES) return false; }
-        const sym = clean(report?.facts?.token), name = sym ? `$${sym}` : shortAddr(address);
+        const fx = report?.facts, sym = cleanTokenText(fx?.tokenSymbol ?? fx?.token, 20), nm = cleanTokenText(fx?.tokenName, 32), name = sym ? (/\s/.test(sym) ? sym : `$${sym}`) : nm || shortAddr(address);
         const name_ = docName(key), id = recentId(chain, address);
         const items = fresh(await read(name_)).filter((i) => recentId(i.chain, i.address) !== id);
         items.unshift({ address, chain, name, score: Math.round(score), at: now(), report: body });
