@@ -52,6 +52,7 @@ import { GasInputError, gasNow } from "./lib/gas.js";
 import { paidRugCheck } from "./lib/rug-paid.js";
 import { rugCheck, RugBusyError, flaggedWallets, DISCLAIMER as RUG_DISCLAIMER } from "./lib/rug.js";
 import { registerRugradarWeb } from "./lib/rugradar-web.js";
+import { createRecent } from "./lib/rugradar-recent.js";
 import { createWatcher, WATCH_PLANS, planOf, type Watch } from "./lib/watch.js";
 import { registerWatchRoutes, watchKeyMiddleware, watchPaidHandler, createWithCredits, watchConfig, type WatchRouteDeps } from "./lib/watch-routes.js";
 import { initCredits, issueKey, issueKeyOnce, isRedeemed, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell , spendN, refundN, loadDoc, saveDoc, saveDocs, listDocs, syncStore } from "./lib/credits.js";
@@ -258,6 +259,8 @@ const ERRORS_DOC =
 
 async function main() {
   const app = express();
+  // RugRadar "Recent": last 20 unlocked full reports per credit key, same durable store as the credits (one small doc per key).
+  const recent = createRecent({ load: (n) => loadDoc<any>(n, null), save: (docs, msg) => saveDocs(docs, msg) });
   // RugRadar Watch + Alert: public RugRadar engine only (no Helius, no private signals); watches persist in the private credit store.
   const watcher = createWatcher({
     rugCheck: (m) => rugCheck(m, "solana", { noCache: true }),
@@ -275,7 +278,7 @@ async function main() {
   app.use(express.json());
 
   // Interest tracker (counts only; visitor = salted hash of IP+UA, raw IPs never stored).
-  const FREE_LABELS = new Set(["/", "/health", "/stats", "/examples", "/llms.txt", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png", "/favicon.ico", "/rugradar", "/credits/balance", "/sitemap.xml", "/mcp", "/rugradar/api/check"]);
+  const FREE_LABELS = new Set(["/", "/health", "/stats", "/examples", "/llms.txt", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png", "/favicon.ico", "/rugradar", "/credits/balance", "/sitemap.xml", "/mcp", "/rugradar/api/check", "/rugradar/api/recent"]);
   app.use((req: Request, res: Response, next: NextFunction) => {
     const method = req.method;
     // HEAD on a paid route: answer like GET without payment (402 + PAYMENT-REQUIRED, no body) instead of
@@ -340,6 +343,7 @@ async function main() {
       const token = String(req.query.token ?? req.query.mint ?? "").trim();
       if (!token) throw new SolanaInputError("token is required");
       const out = await paidRugCheck(token, String(req.query.chain ?? "").trim() || (token.startsWith("0x") ? "base" : "solana"), { noCache: req.query.nocache === "1" });
+      void recent.save(key, out); // full report unlocked with a credit key (this path spent the credit); never throws
       res.set("X-RugRadar-Credits", String(left)).json({ ...out, paidWith: "credits", credits_remaining: left });
     } catch (err) {
       await refund(key);
@@ -1535,8 +1539,8 @@ async function main() {
   registerWatchRoutes(app, watchDeps);
   app.get("/watch", watchPaidHandler(watchDeps, decodeB64Json));
   const watchTimer = setInterval(() => { track("watch checks", () => watcher.tick()).catch(() => {}); }, 30_000); watchTimer.unref?.();
-  process.once("SIGTERM", () => { watcher.flush().catch(() => {}); });
-  registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), paidCheck: (t, c) => paidRugCheck(t, c), spend, refund, watch: { create: (k, a) => createWithCredits(watchDeps, k, a), config: () => watchConfig(watchDeps) }, swap: swapConfig() });
+  process.once("SIGTERM", () => { watcher.flush().catch(() => {}); recent.flush().catch(() => {}); });
+  registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), paidCheck: (t, c) => paidRugCheck(t, c), spend, refund, recent, balance: creditBalance, watch: { create: (k, a) => createWithCredits(watchDeps, k, a), config: () => watchConfig(watchDeps) }, swap: swapConfig() });
   app.get("/icon.png", (_req, res) => {
     if (!ICON_PNG) return res.redirect(302, "/icon.svg");
     res.type("image/png").set("Cache-Control", "public, max-age=86400").send(ICON_PNG);

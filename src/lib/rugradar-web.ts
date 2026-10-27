@@ -6,6 +6,7 @@
 import { RUG_EDGE } from "./rug-extra.js";
 import { RugBusyError } from "./rug.js";
 import { LIVE_JS } from "./rugradar-live.js";
+import type { Recent } from "./rugradar-recent.js";
 import { swapClientJs, type SwapCfg } from "./swap.js";
 import type { Express, Request, Response } from "express";
 import { randomBytes, createHash } from "node:crypto";
@@ -23,6 +24,8 @@ export type WebDeps = {
   swap?: SwapCfg;
   /** Optional chain detector for 0x addresses (tests inject one; default asks DexScreener). */
   detectChain?: (token: string) => Promise<string>;
+  /** Recent full reports per credit key (optional) and the key check it needs (balance is null for an unknown key). */
+  recent?: Recent; balance?: (k: string) => Promise<number | null>;
 };
 export const FREE_PER_VISITOR = 1;
 export const FREE_COPY = "1 free limited check every day per visitor, then credits for the full report.";
@@ -206,7 +209,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:12p
 .chainchip option{background:var(--card)}.trust{font-size:13px;color:var(--mut)}
 .keyd{font-size:12px;margin:0 0 8px}.keyd summary{cursor:pointer;display:inline;list-style:none;color:var(--acc);text-decoration:underline}.keyd summary::-webkit-details-marker{display:none}.keyd input{width:100%;max-width:420px;margin-top:6px;background:#0E1528;border:1px solid var(--line);color:var(--tx);border-radius:10px;padding:10px;font-size:15px}
 #quota{display:block;font-size:12px;color:var(--mut)}#quota:empty{display:none}#keybox{display:block;margin-top:6px;font-size:13px}
-.kbtn{background:#232C47;color:var(--tx);border:0;border-radius:6px;padding:3px 9px;font-size:13px;cursor:pointer;margin-left:4px}
+#recent{max-width:100%;margin:0 0 8px}.kbtn{background:#232C47;color:var(--tx);border:0;border-radius:6px;padding:3px 9px;font-size:13px;cursor:pointer;margin-left:4px}
 .grid{display:grid;gap:16px}@media(min-width:900px){.grid{grid-template-columns:1.6fr 1fr;align-items:start}.hero h1{font-size:34px}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
 .tok{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.av{width:44px;height:44px;border-radius:50%;background:#2a3456;display:grid;place-items:center;font-weight:800;flex:none}
@@ -298,7 +301,7 @@ let POLL=0;async function pollClaim(order,sig,st,tries,ms,auto){const id=++POLL;
   if(!auto)st.textContent=(c.j.message||'Waiting for confirmation...')+' ('+(i+1)+'/'+tries+')';await new Promise(r=>setTimeout(r,ms))}
  if(id!==POLL)return;
  st.append(el('p',null,'Still not confirmed. Your order is saved; use the check button again in a minute.'))}
-const KS={get(){try{return localStorage.getItem('rr_key')||''}catch(e){return ''}},set(k){try{localStorage.setItem('rr_key',k)}catch(e){}keyUI()},del(){try{localStorage.removeItem('rr_key')}catch(e){}keyUI()}};
+const KS={get(){try{return localStorage.getItem('rr_key')||''}catch(e){return ''}},set(k){try{localStorage.setItem('rr_key',k)}catch(e){}keyUI();recentLoad()},del(){try{localStorage.removeItem('rr_key')}catch(e){}keyUI();recentLoad()}};
 function keyUI(){const b=document.getElementById('keybox'),k=KS.get();b.textContent='';b.hidden=!k;if(!k)return;const mask=k.slice(0,3)+'\u2026'+k.slice(-4),c=el('code',null,mask);let on=false;
  const bt=(t,f)=>{const x=el('button','kbtn',t);x.type='button';x.addEventListener('click',f);return x};
  const sh=bt('Show',()=>{on=!on;c.textContent=on?k:mask;sh.textContent=on?'Hide':'Show'});
@@ -367,8 +370,12 @@ f.addEventListener('submit',async e=>{e.preventDefault();const t=$('tok').value.
  const j=await r.json().catch(()=>({}));
  if(!r.ok){const used=j.error==='free_checks_used';msgCard(j.message||(r.status===402&&k?'Credit key not accepted or out of credits.':'Error '+r.status),r.status===402||used,used?'Free check used. Credits unlock the full report.':null);return}
  render(j,t);
- if(j.credits_remaining!=null){q.textContent=j.credits_remaining+' credit(s) left on your key.';pill(j.credits_remaining);if(k&&KS.get()!==k)KS.set(k)}
+ if(j.credits_remaining!=null){q.textContent=j.credits_remaining+' credit(s) left on your key.';pill(j.credits_remaining);if(k&&KS.get()!==k)KS.set(k);else recentLoad()}
  }catch(err){msgCard('Network error, try again.')}finally{go.disabled=false}});
+const RK=()=>$('key').value.trim()||KS.get(),RS=$('recent');
+function recentLoad(){const k=RK();RS.hidden=true;if(!k)return;fetch('/rugradar/api/recent',{headers:{'X-RugRadar-Key':k}}).then(r=>r.ok?r.json():null).then(j=>{if(!j||!j.items||!j.items.length||RK()!==k)return;RS.textContent='';RS.append(new Option('Recent ('+j.items.length+')',''));j.items.forEach(i=>RS.append(new Option(i.name+' \u00b7 '+i.shortAddress+' \u00b7 '+i.score,i.chain+'|'+i.address)));RS.hidden=false}).catch(()=>{})}
+RS.addEventListener('change',async()=>{const v=RS.value;if(!v)return;const p=v.split('|'),k=RK();RS.selectedIndex=0;waitCard();try{const r=await fetch('/rugradar/api/recent/report?chain='+encodeURIComponent(p[0])+'&token='+encodeURIComponent(p[1]),{headers:{'X-RugRadar-Key':k}}),j=await r.json().catch(()=>({}));if(!r.ok){msgCard(j.message||'Saved report not found.');recentLoad();return}$('tok').value=p[1];if($('chain').querySelector('option[value="'+p[0]+'"]'))$('chain').value=p[0];render(j,p[1]);q.textContent='Saved report from '+new Date(j.savedAt).toLocaleDateString()+'. No credit used.';if(j.credits_remaining!=null)pill(j.credits_remaining)}catch(e){msgCard('Network error, try again.')}});
+$('key').addEventListener('change',recentLoad);
 function pill(n){$('credpill').textContent=(n==null?'Credits':'Credits: '+n)+' \u00b7 Buy'}
 $('credpill').addEventListener('click',e=>{e.preventDefault();openBuy(true)});$('buyc').addEventListener('click',()=>openBuy(false));
 document.querySelectorAll('a[href="#agents"]').forEach(a=>a.addEventListener('click',()=>{$('agents').open=true}));
@@ -378,7 +385,7 @@ document.querySelectorAll('.cpb').forEach(b=>b.addEventListener('click',()=>{con
 if(location.hash==='#agents')$('agents').open=true;if(location.hash==='#credits')openBuy(false);
 try{const u=new URLSearchParams(location.search),t=u.get('token'),c=u.get('chain');if(t&&t.length<=64){$('tok').value=t;if(c&&$('chain').querySelector('option[value="'+c.replace(/[^a-z]/g,'')+'"]'))$('chain').value=c;if(/^[A-Za-z0-9]{20,64}$/.test(t))setTimeout(()=>{f.dataset.free='1';f.dispatchEvent(new Event('submit',{cancelable:true}))},0)}}catch(e){}
 {const tk=$('tok'),cl=$('clr'),cs=()=>{cl.hidden=!tk.value};tk.addEventListener('input',cs);cl.addEventListener('click',()=>{tk.value='';cs();tk.focus()});cs()}
-keyUI();document.getElementById('wpayHome').append(walletPacks());
+keyUI();recentLoad();document.getElementById('wpayHome').append(walletPacks());
 (function(){const k=KS.get();if(!k)return;fetch('/credits/balance',{headers:{'X-RugRadar-Key':k}}).then(r=>r.json()).then(j=>{if(j&&j.known)pill(j.credits)}).catch(()=>{})})();
 `;
 
@@ -414,6 +421,7 @@ ${CSS_PAGE}</style></head><body><div class="wrap">
 <form id="f" class="search"><span class="tw"><input id="tok" name="token" required autocomplete="off" spellcheck="false" placeholder="Token address (Solana mint or 0x contract)" aria-label="Token address"><button type="button" id="clr" class="clr" aria-label="Clear" hidden>\u00d7</button></span><button class="btn pri" id="go">Check token</button></form>
 <div class="subrow"><select id="chain" class="chainchip" aria-label="Chain" title="Chain: Auto-detect (Solana, Base, BNB, Ethereum, Arbitrum)"><option value="auto">Auto \u25BE</option>${CHAINS.map((c) => `<option value="${c}">${CHAIN_NAME[c]}</option>`).join("")}</select><span class="trust">Free \u00b7 no sign-up</span></div>
 <details class="keyd" id="keyd"><summary>Have a credit key?</summary><input id="key" type="password" placeholder="Credit key (rr_...)" autocomplete="off" aria-label="Credit key"><small id="keybox" hidden></small></details>
+<select id="recent" class="chainchip" hidden aria-label="Recent full reports"></select>
 <small id="quota"></small>
 </section>
 <div class="grid" style="margin-top:14px">
@@ -637,6 +645,25 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     useFree(ip, vid);
     try { res.json({ ...limitedReport(await d.rugCheck(token, chain)), reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
     catch (e) { refundFree(ip, vid); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
+  });
+  // Recent unlocked reports for a credit key. Free to read: never spends a credit or a free check; the key is checked on every call.
+  const recentKey = async (req: Request, res: Response): Promise<{ key: string; credits: number } | null> => {
+    res.set("Cache-Control", "no-store");
+    const key = String(req.header("x-rugradar-key") ?? "").trim();
+    if (!d.recent || !d.balance) { res.status(404).json({ error: "not_available" }); return null; }
+    const credits = key && key.length <= 200 ? await d.balance(key).catch(() => null) : null;
+    if (credits == null) { res.status(401).json({ error: key ? "invalid_key" : "missing_key", message: key ? "Credit key not recognized." : "Send your credit key in the X-RugRadar-Key header." }); return null; }
+    return { key, credits };
+  };
+  app.get("/rugradar/api/recent", async (req: Request, res: Response) => {
+    const k = await recentKey(req, res); if (!k) return;
+    res.json({ items: await d.recent!.list(k.key) });
+  });
+  app.get("/rugradar/api/recent/report", async (req: Request, res: Response) => {
+    const k = await recentKey(req, res); if (!k) return;
+    const it = await d.recent!.get(k.key, String(req.query.chain ?? "").toLowerCase(), String(req.query.token ?? "").trim());
+    if (!it) { res.status(404).json({ error: "not_found", message: "That saved report is gone (saved reports last 30 days)." }); return; }
+    res.json({ ...(it.report as object), paidWith: "saved", savedAt: new Date(it.at).toISOString(), credits_remaining: k.credits });
   });
   app.get("/sitemap.xml", (_req, res) => {
     const now = new Date().toISOString().slice(0, 10);
