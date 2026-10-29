@@ -29,6 +29,10 @@ export type WebDeps = {
   recent?: Recent; balance?: (k: string) => Promise<number | null>;
 };
 export const FREE_PER_VISITOR = 1;
+/** Launch promo: the one free daily check returns the full report until this time (env RUGRADAR_FULL_FREE_UNTIL overrides; default Nov 12 2026 00:00 PT = 14 days). Then it reverts to the basic free check on its own. */
+const FULL_FREE_UNTIL = Date.parse(process.env.RUGRADAR_FULL_FREE_UNTIL || "2026-11-12T00:00:00-08:00");
+export const fullFreeActive = () => Date.now() < FULL_FREE_UNTIL;
+export const FREE_COPY_PROMO = "1 free full report every day per visitor for a limited time, then a basic free check plus credits for the full report.";
 export const FREE_COPY = "1 free limited check every day per visitor, then credits for the full report.";
 const LIMITED_CHECKS = new Set(["mint_authority", "freeze_authority", "mint_function", "holders", "liquidity", "age", "dead_token"]);
 export const LOCKED_SIGNALS = ["exact dev-sold %", "sniper share", "launch-bundle share", "can-you-sell quote with price impact", "creator's past launches", "organic/bot score", "full buyer summary"];
@@ -338,7 +342,7 @@ function gauge(lv,score){const g=el('div','gauge g-'+lv);g.style.setProperty('--
 const VT={high:['HIGH RISK','Strong rug warning signs.'],medium:['CAUTION','Some rug warning signs.'],low:['LOW RISK','No danger warnings found. Not a guarantee.']};
 function shownLevel(j,ws){const l=VT[j.riskLevel]?j.riskLevel:'medium';if(l!=='low'||!ws.length)return l;return ws.some(w=>w.d)?'high':'medium'}
 function verdictBox(j,ws){const lv=shownLevel(j,ws),s=Number(j.riskScore)||0,v=el('div','verdict v-'+lv),t=el('div');
- t.append(el('div','vt '+lv,VT[lv][0]),el('div','vl',VT[lv][1]));if(j.report!=='limited')t.append(el('div','vtrust','Full report.'));v.append(gauge(lv,s),t);if(j.report==='limited')v.append(el('div','vfree','Free check: basic warnings only. Full report unlocks more.'));return v}
+ t.append(el('div','vt '+lv,VT[lv][0]),el('div','vl',VT[lv][1]));if(j.report!=='limited')t.append(el('div','vtrust','Full report.'));v.append(gauge(lv,s),t);if(j.report==='limited')v.append(el('div','vfree','Your free daily check: basic warnings only. The full report (live chart, dev and sniper wallets, sell test) is $'+CFG.p+'.'));return v}
 function lockedPanel(note){const b=el('div','lock');b.id='unlock';b.append(el('span',null,'\u{1F512} '+(note||'Full report: live chart, dev and sniper wallets, biggest buys and sells, sell test.')));const a=el('button','btn pri',CFG.cta);a.type='button';a.addEventListener('click',()=>openBuy(true));b.append(a);return b}
 function openBuy(scroll){const x=$('buyx');x.hidden=false;const w=$('wpay');if(scroll&&w){$('credits').scrollIntoView({block:'start',behavior:'smooth'});w.classList.add('flash');setTimeout(()=>w.classList.remove('flash'),1600)}}
 let LIVEP=null;function liveLoad(){if(!LIVEP)LIVEP=new Promise((ok,no)=>{const s=document.createElement('script');s.src='/rugradar/live.js?v=${LIVE_V}';s.onload=ok;s.onerror=()=>{LIVEP=null;no()};document.head.append(s)});return LIVEP}
@@ -394,11 +398,11 @@ keyUI();recentLoad();document.getElementById('wpayHome').append(walletPacks());
 (function(){const k=KS.get();if(!k)return;fetch('/credits/balance',{headers:{'X-RugRadar-Key':k}}).then(r=>r.json()).then(j=>{if(j&&j.known)pill(j.credits)}).catch(()=>{})})();
 `;
 
-function page(d: WebDeps) {
-  const U = d.publicUrl, p = d.priceUsd;
+function page(d: WebDeps, promo = false) {
+  const U = d.publicUrl, p = d.priceUsd, FC = promo ? FREE_COPY_PROMO : FREE_COPY;
   const fast = d.speed ? `~${Math.round(d.speed.x)}x` : null;
   const faq = [
-    ["Is RugRadar free?", `People get ${FREE_COPY} The free check gives a 0-100 risk score with plain danger warnings. Prepaid credits cost $${p} per full report (buy 1 to 1,000). Agents pay $${p} per call via x402 or use a credit key.`],
+    ["Is RugRadar free?", `People get ${FC} ${promo ? "The free full report includes the live chart, dev and sniper wallets, biggest buys and sells and the sell test." : "The free check gives a 0-100 risk score with plain danger warnings and basic checks only; the full report adds the live chart, dev and sniper wallets, biggest buys and sells and the sell test."} Prepaid credits cost $${p} per full report (buy 1 to 1,000). Agents pay $${p} per call via x402 or use a credit key.`],
     ["Which chains does the rug check support?", "Solana (including pump.fun tokens), BNB Chain (four.meme), Base, Ethereum and Arbitrum. Chain is detected from the address."],
     ["What does the full report add?", "More danger warnings that free checkers usually miss, in plain words, plus a can-you-sell result."],
     ["Is a low score a guarantee?", `No. ${DISCLAIMER}`],
@@ -408,7 +412,7 @@ function page(d: WebDeps) {
       description: "Free Solana rug check and honeypot checker: 0-100 token risk score with plain danger warnings for Solana, BNB, Base, Ethereum and Arbitrum.", offers: { "@type": "Offer", price: p, priceCurrency: "USD" } },
     { "@context": "https://schema.org", "@type": "FAQPage", mainEntity: faq.map(([q, a]) => ({ "@type": "Question", name: q, acceptedAnswer: { "@type": "Answer", text: a } })) },
   ];
-  const cfg = { u: U, offer: unlockOffer(U, p), warn: WARN, lim: [...LIMITED_CHECKS], chains: CHAIN_NAME, p, cta: `Unlock live chart + full report - $${p}` };
+  const cfg = { u: U, offer: unlockOffer(U, p), warn: WARN, lim: [...LIMITED_CHECKS], chains: CHAIN_NAME, p, cta: `Unlock full report - $${p}`, promo };
   const swapJs = d.swap?.enabled ? "\n" + swapClientJs(d.swap) + "\nconst SWAPHOOK=swapBox;" : "";
   const json = (o: unknown) => JSON.stringify(o).replace(/</g, "\\u003c");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -618,8 +622,8 @@ async function mcpCall(d: WebDeps, name: string, args: any, headerKey: string | 
 
 
 export function registerRugradarWeb(app: Express, d: WebDeps) {
-  const html = page(d);
-  app.get("/rugradar", (_req, res) => { res.set("Cache-Control", "public, max-age=300").type("html").send(html); });
+  const htmlBase = page(d), htmlPromo = page(d, true);
+  app.get("/rugradar", (_req, res) => { res.set("Cache-Control", "public, max-age=300").type("html").send(fullFreeActive() ? htmlPromo : htmlBase); });
   app.get("/rugradar/live.js", (_req, res) => { res.set("Cache-Control", "public, max-age=86400").type("application/javascript").send(LIVE_JS); });
   app.get("/rugradar/embed", async (req: Request, res: Response) => {
     const r = await embedFor(d, req);
@@ -644,10 +648,15 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     if (!vid) { vid = randomBytes(16).toString("base64url"); res.append("Set-Cookie", `rr_vid=${vid}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax; Secure`); }
     const ip = ipOf(req), a = freeAllowance(ip, vid);
     if (!a.ok) {
-      const msg = a.reason === "slow_down" ? "One check every few seconds, please." : a.reason === "daily_free_cap" ? "Today's free checks are used up. Buy credits to keep checking." : `You've used your free limited check. Buy credits ($${d.priceUsd} each) for the full report.`;
+      const msg = a.reason === "slow_down" ? "One check every few seconds, please." : a.reason === "daily_free_cap" ? "Today's free checks are used up. Buy credits to keep checking." : `You've used your free check for today. Buy credits ($${d.priceUsd} each) for the full report.`;
       res.status(a.reason === "slow_down" ? 429 : 402).json({ error: a.reason, message: msg, buyCredits: `${d.publicUrl}/credits/buy?credits=100`, ...(a.reason === "slow_down" ? {} : { lockedSignals: LOCKED_SIGNALS, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd) }) }); return;
     }
     useFree(ip, vid);
+    if (fullFreeActive() && d.paidCheck) {
+      try { res.json({ ...(await d.paidCheck(token, chain)), paidWith: "free_promo", free_checks_left: a.left }); }
+      catch (e) { refundFree(ip, vid); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
+      return;
+    }
     try { res.json({ ...limitedReport(await d.rugCheck(token, chain)), reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
     catch (e) { refundFree(ip, vid); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
   });
