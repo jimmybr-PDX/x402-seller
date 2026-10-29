@@ -151,27 +151,48 @@ export async function issueKeyOnce(n: number, refs: string[]): Promise<{ key: st
   });
 }
 export async function revokeKey(key: string) { await serial(async () => { const h = hashKey(key); revoked.add(h); delete data.keys[h]; await persist("revoke unpaid"); }); }
+
+/** Owner keys: unlimited (no credit charge), from env RUGRADAR_OWNER_KEY_HASHES = comma-separated SHA-256 hex of the keys.
+ * Capped per key per UTC day (RUGRADAR_OWNER_DAILY_CAP, default 500) to protect the Helius budget. Never stored in credits.json. */
+const ownerUse = new Map<string, { day: string; n: number }>();
+const ownerCap = () => { const n = Number(process.env.RUGRADAR_OWNER_DAILY_CAP); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 500; };
+export function isOwnerKey(key: string): boolean {
+  const raw = process.env.RUGRADAR_OWNER_KEY_HASHES ?? "";
+  if (!raw || !key) return false;
+  const h = hashKey(key);
+  return raw.split(",").some((x) => x.trim().toLowerCase() === h);
+}
+function ownerLeft(h: string): number { const day = new Date().toISOString().slice(0, 10), u = ownerUse.get(h); return ownerCap() - (u && u.day === day ? u.n : 0); }
+function ownerTake(h: string, n: number): number | null {
+  const day = new Date().toISOString().slice(0, 10); let u = ownerUse.get(h);
+  if (!u || u.day !== day) { u = { day, n: 0 }; ownerUse.set(h, u); }
+  if (u.n + n > ownerCap()) return null;
+  u.n += n; return ownerCap() - u.n;
+}
+function ownerGive(h: string, n: number) { const u = ownerUse.get(h); if (u) u.n = Math.max(0, u.n - n); }
 /** Spend one credit. Returns remaining credits, or null when the key is unknown or empty. */
 export async function spend(key: string): Promise<number | null> {
+  if (isOwnerKey(key)) return ownerTake(hashKey(key), 1);
   await initCredits();
   const r = data.keys[hashKey(key)];
   if (!r || r.credits <= 0) return null;
   r.credits -= 1; r.lastUsedAt = new Date().toISOString(); persistSoon();
   return r.credits;
 }
-export async function refund(key: string) { const r = data.keys[hashKey(key)]; if (r) { r.credits += 1; persistSoon(); } }
-export async function balance(key: string): Promise<number | null> { await initCredits(); return data.keys[hashKey(key)]?.credits ?? null; }
+export async function refund(key: string) { if (isOwnerKey(key)) return ownerGive(hashKey(key), 1); const r = data.keys[hashKey(key)]; if (r) { r.credits += 1; persistSoon(); } }
+export async function balance(key: string): Promise<number | null> { if (isOwnerKey(key)) return ownerLeft(hashKey(key)); await initCredits(); return data.keys[hashKey(key)]?.credits ?? null; }
 export async function flushCredits() { if (pending) { clearTimeout(pending); pending = null; } await serial(() => persist("flush")); }
 
 /** Spend n credits at once (all or nothing). Returns remaining credits, or null when the key is unknown or has fewer than n. */
 export async function spendN(key: string, n: number): Promise<number | null> {
+  if (isOwnerKey(key)) return n >= 1 ? ownerTake(hashKey(key), n) : null;
   await initCredits();
   const r = data.keys[hashKey(key)];
   if (!r || !(n >= 1) || r.credits < n) return null;
   r.credits -= n; r.lastUsedAt = new Date().toISOString(); persistSoon();
   return r.credits;
 }
-export async function refundN(key: string, n: number) { const r = data.keys[hashKey(key)]; if (r) { r.credits += n; persistSoon(); } }
+export async function refundN(key: string, n: number) { if (isOwnerKey(key)) return ownerGive(hashKey(key), n); const r = data.keys[hashKey(key)]; if (r) { r.credits += n; persistSoon(); } }
 
 /** Extra JSON documents in the same durable store (e.g. watches.json). Same repo, same serial queue as credits. */
 const docPath = (name: string) => path.join(path.dirname(file), name);
