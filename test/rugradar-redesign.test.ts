@@ -115,12 +115,12 @@ test("share text: free score, label and top warning titles only; X intent URL; u
   const { rrShareText, rrReportText, rrLink } = new Function(SHARE_JS + "; return {rrShareText,rrReportText,rrLink};")() as Record<string, (...a: any[]) => string>;
   const O = "https://x402-seller-pmlm.onrender.com", titles = warningsOf(deadFull().checks).map((w) => w.title);
   const t = rrShareText!(60, "HIGH RISK", titles, DEAD, "solana", O, "0.01");
-  assert.equal(t, `Checked this token on RugRadar \u2014 60 HIGH RISK. Creator can mint more + Dead token: no way to sell. Full report $0.01. ${O}/rugradar?token=${DEAD}&s=x2`);
+  assert.equal(t, `Checked this token on RugRadar \u2014 60 HIGH RISK. Creator can mint more + Dead token: no way to sell. Full report $0.01. ${O}/rugradar?t=${DEAD}&s=x`);
   assert.ok(t.length <= 270);
-  assert.equal(rrLink!(O, "0xAbC0000000000000000000000000000000000001", "base"), `${O}/rugradar?token=0xAbC0000000000000000000000000000000000001&chain=base&s=x2`);
+  assert.equal(rrLink!(O, "0xAbC0000000000000000000000000000000000001", "base"), `${O}/rugradar?t=0xAbC0000000000000000000000000000000000001&chain=base&s=x`);
   const long = rrShareText!(15, "CAUTION", ["x".repeat(400), "y"], DEAD, "solana", O, "0.01");
-  assert.ok(long.length <= 270 && long.includes("\u2026") && long.endsWith("&s=x2"), long.length + "");
-  assert.equal(rrShareText!(0, "LOW RISK", [], DEAD, "solana", O, "0.01"), `Checked this token on RugRadar \u2014 0 LOW RISK. Full report $0.01. ${O}/rugradar?token=${DEAD}&s=x2`);
+  assert.ok(long.length <= 270 && long.includes("\u2026") && long.endsWith("&s=x"), long.length + "");
+  assert.equal(rrShareText!(0, "LOW RISK", [], DEAD, "solana", O, "0.01"), `Checked this token on RugRadar \u2014 0 LOW RISK. Full report $0.01. ${O}/rugradar?t=${DEAD}&s=x`);
   const r = rrReportText!(60, "HIGH RISK", titles, DEAD, "solana", O);
   assert.equal(r.split("\n").length, 2 + titles.length - 1 + 2 > 0 ? 2 + Math.min(titles.length, 3) + 1 : 0);
   for (const x of [t, r, long]) for (const re of [...PRIVATE, /\bclean\b|\bgood\b|sniper|dev (sold|holding)|can.you.sell|chart|wallet/i]) assert.ok(!re.test(x.replace(/rugradar\?token=\S+/g, "")), `${re} in ${x}`);

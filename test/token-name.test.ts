@@ -59,16 +59,16 @@ test("header/share line: 'Name · $SYM', symbol only, name only, or nothing", ()
 test("share text with name: 'Checked $PEPE on RugRadar — ...'; no name -> unchanged wording; hostile name never yields a link or mention; stays under 270", () => {
   const titles = ["Creator can mint more", "Thin liquidity"];
   const t = js.rrShareText!(72, "HIGH RISK", titles, ADDR, "solana", O, "0.01", "$PEPE");
-  assert.equal(t, `Checked $PEPE on RugRadar \u2014 72 HIGH RISK. Creator can mint more + Thin liquidity. Full report $0.01. ${O}/rugradar?token=${ADDR}&s=x2`);
-  assert.equal(js.rrShareText!(72, "HIGH RISK", [], ADDR, "solana", O, "0.01"), `Checked this token on RugRadar \u2014 72 HIGH RISK. Full report $0.01. ${O}/rugradar?token=${ADDR}&s=x2`);
+  assert.equal(t, `Checked $PEPE on RugRadar \u2014 72 HIGH RISK. Creator can mint more + Thin liquidity. Full report $0.01. ${O}/rugradar?t=${ADDR}&s=x`);
+  assert.equal(js.rrShareText!(72, "HIGH RISK", [], ADDR, "solana", O, "0.01"), `Checked this token on RugRadar \u2014 72 HIGH RISK. Full report $0.01. ${O}/rugradar?t=${ADDR}&s=x`);
   assert.equal(js.rrShareText!(1, "CAUTION", [], ADDR, "solana", O, "0.01", "$PE PE").slice(0, 27), "Checked PE PE on RugRadar \u2014");
   const hostile = js.rrShareText!(72, "HIGH RISK", titles, ADDR, "solana", O, "0.01", "Free airdrop https://evil.com/claim @elonmusk t.me/x scam.io");
-  const noOwn = hostile.replace(`${O}/rugradar?token=${ADDR}&s=x2`, "");
+  const noOwn = hostile.replace(`${O}/rugradar?t=${ADDR}&s=x`, "");
   assert.ok(!/evil|@|t\.me|scam\.io|https?:/.test(noOwn), noOwn);
   assert.equal((hostile.match(/https?:\/\//g) ?? []).length, 1, "only our own link");
   assert.ok(hostile.length <= 270);
   const long = js.rrShareText!(72, "HIGH RISK", ["x".repeat(300)], ADDR, "solana", O, "0.01", "N".repeat(80));
-  assert.ok(long.length <= 270 && long.endsWith("&s=x2"), String(long.length));
+  assert.ok(long.length <= 270 && long.endsWith("&s=x"), String(long.length));
   assert.match(js.rrReportText!(72, "HIGH RISK", titles, ADDR, "solana", O, "$PEPE"), /^RugRadar \u2014 \$PEPE \u2014 72 HIGH RISK\n/);
   assert.match(js.rrReportText!(72, "HIGH RISK", titles, ADDR, "solana", O), /^RugRadar \u2014 72 HIGH RISK\n/);
 });

@@ -8,6 +8,7 @@ import { RugBusyError } from "./rug.js";
 import { LIVE_JS } from "./rugradar-live.js";
 import { CLEAN_JS } from "./token-name.js";
 import type { Recent } from "./rugradar-recent.js";
+import { shareData, primeShare, sharePng, cachedShare, shortAddr, noSafe } from "./rugradar-share.js";
 import { swapClientJs, type SwapCfg } from "./swap.js";
 import type { Express, Request, Response } from "express";
 import { randomBytes, createHash } from "node:crypto";
@@ -261,7 +262,7 @@ footer{color:var(--mut);font-size:12px;padding:8px 0 40px}
 
 
 /** Pure share-text helpers (also unit-tested). Only the free score, label, warning titles and address ever go in. */
-export const SHARE_JS = CLEAN_JS + String.raw`function rrLink(o,a,c){return o+'/rugradar?token='+encodeURIComponent(a)+(c&&/^0x/i.test(a)?'&chain='+encodeURIComponent(c):'')+'&s=x2'}
+export const SHARE_JS = CLEAN_JS + String.raw`function rrLink(o,a,c){return o+'/rugradar?t='+encodeURIComponent(a)+(c&&/^0x/i.test(a)?'&chain='+encodeURIComponent(c):'')+'&s=x'}
 function rrNm(n){n=String(n||'');const d=n.charAt(0)==='$',x=rrClean(n,33);return d&&x&&!/\s/.test(x)?'$'+x:x}
 function rrShareText(sc,lb,ws,a,c,o,p,n){n=rrNm(n);const L=rrLink(o,a,c),h='Checked '+(n||'this token')+' on RugRadar \u2014 '+sc+' '+lb+'.',t=' Full report $'+p+'. '+L,room=270-h.length-t.length-2;let w=ws.slice(0,2).join(' + ');if(w.length>room)w=ws[0]||'';if(w.length>room)w=room>9?w.slice(0,room-1).trim()+'\u2026':'';return h+(w?' '+w+'.':'')+t}
 function rrReportText(sc,lb,ws,a,c,o,n){n=rrNm(n);return 'RugRadar \u2014 '+(n?n+' \u2014 ':'')+sc+' '+lb+'\n'+ws.slice(0,3).map(x=>'\u2022 '+x).join('\n')+(ws.length?'\n':'')+a+'\n'+rrLink(o,a,c)}
@@ -392,7 +393,7 @@ document.querySelectorAll('a[href="#developers"]').forEach(a=>a.addEventListener
 const od=()=>{if(location.hash==='#developers')$('developers').open=true};od();addEventListener('hashchange',od);
 document.querySelectorAll('.cpb').forEach(b=>b.addEventListener('click',()=>{const t=b.nextElementSibling.textContent,done=()=>{b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1500)};if(navigator.clipboard)navigator.clipboard.writeText(t).then(done,()=>{});}));
 if(location.hash==='#agents')$('agents').open=true;if(location.hash==='#credits')openBuy(false);
-try{const u=new URLSearchParams(location.search),t=u.get('token'),c=u.get('chain');if(t&&t.length<=64){$('tok').value=t;if(c&&$('chain').querySelector('option[value="'+c.replace(/[^a-z]/g,'')+'"]'))$('chain').value=c;if(/^[A-Za-z0-9]{20,64}$/.test(t))setTimeout(()=>{f.dataset.free='1';f.dispatchEvent(new Event('submit',{cancelable:true}))},0)}}catch(e){}
+try{const u=new URLSearchParams(location.search),t=u.get('token')||u.get('t'),c=u.get('chain');if(t&&t.length<=64){$('tok').value=t;if(c&&$('chain').querySelector('option[value="'+c.replace(/[^a-z]/g,'')+'"]'))$('chain').value=c;if(/^[A-Za-z0-9]{20,64}$/.test(t))setTimeout(()=>{f.dataset.free='1';f.dispatchEvent(new Event('submit',{cancelable:true}))},0)}}catch(e){}
 {const tk=$('tok'),cl=$('clr'),cs=()=>{cl.hidden=!tk.value};tk.addEventListener('input',cs);cl.addEventListener('click',()=>{tk.value='';cs();tk.focus()});cs()}
 keyUI();recentLoad();document.getElementById('wpayHome').append(walletPacks());
 (function(){const k=KS.get();if(!k)return;fetch('/credits/balance',{headers:{'X-RugRadar-Key':k}}).then(r=>r.json()).then(j=>{if(j&&j.known)pill(j.credits)}).catch(()=>{})})();
@@ -533,7 +534,7 @@ export async function embedData(d: WebDeps, token: string, chain: string): Promi
     const v: EmbedData = { product: "RugRadar", report: "free", token, chain, riskScore: l.riskScore, riskLevel: lv, label: VERDICT[lv]![0], verdict,
       warnings: ws.slice(0, 3).map((w) => ({ severity: w.sev, title: w.title, line: w.line })), moreWarnings: Math.max(0, ws.length - 3) + (Number(l.hiddenWarnings) || 0),
       reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, disclaimer: "Danger warnings only. Not a guarantee, not financial advice.", generatedAt: new Date().toISOString() };
-    if (!degraded) embedCache.set(k, { at: Date.now(), v }); if (embedCache.size > 300) embedCache.delete(embedCache.keys().next().value!);
+    if (!degraded) { embedCache.set(k, { at: Date.now(), v }); primeShare(shareData(l, ws, lv, token, chain)); } if (embedCache.size > 300) embedCache.delete(embedCache.keys().next().value!);
     return v;
   } finally { embedBusy--; }
 }
@@ -621,9 +622,40 @@ async function mcpCall(d: WebDeps, name: string, args: any, headerKey: string | 
 }
 
 
+function primeFromLimited(l: any, token: string, chain: string) {
+  try { if (l?.facts?.marketUnknown) return; const ws = warningsOf(l.checks); primeShare(shareData(l, ws, shownLevel(l.riskLevel, ws), token, chain)); } catch {}
+}
+const OG_RE = /<meta property="og:type"[^\n]*?preview-x402-v2\.png">/;
+function shareTarget(req: Request): { token: string; chain: string } | null {
+  const token = String(req.query.t ?? req.query.token ?? "").trim(); if (!token || token.length > 64) return null;
+  let chain = String(req.query.chain ?? "").trim().toLowerCase(); if (!chain) chain = token.startsWith("0x") ? "base" : "solana";
+  return CHAINS.includes(chain) && validToken(token, chain) ? { token, chain } : null;
+}
+/** Per-token og/twitter tags. "summary" = small square thumbnail in the feed (not the full-width large image). */
+function shareMeta(U: string, token: string, chain: string) {
+  const c = cachedShare(chain, token)?.v, nm = c?.name || shortAddr(token);
+  const title = escA(noSafe(`${nm}: RugRadar risk ${c ? `${c.score}/100 ${c.label}` : "check"}`));
+  const desc = escA(noSafe(c && c.warnings.length ? c.warnings.map((w) => w.title).join(" \u00b7 ") + ". Free check, not a guarantee." : "0-100 token risk score with plain danger warnings. Free check, not a guarantee."));
+  const url = escA(`${U}/rugradar?t=${encodeURIComponent(token)}${chain !== "solana" ? `&chain=${chain}` : ""}&s=x`), img = escA(`${U}/rugradar/share/${chain}/${encodeURIComponent(token)}.png`);
+  return `<meta property="og:type" content="website"><meta property="og:title" content="${title}"><meta property="og:description" content="${desc}"><meta property="og:url" content="${url}"><meta property="og:image" content="${img}"><meta property="og:image:width" content="600"><meta property="og:image:height" content="600"><meta name="twitter:card" content="summary"><meta name="twitter:title" content="${title}"><meta name="twitter:description" content="${desc}"><meta name="twitter:image" content="${img}"><meta name="twitter:image:alt" content="RugRadar risk score and danger warnings for ${escA(shortAddr(token))}">`;
+}
 export function registerRugradarWeb(app: Express, d: WebDeps) {
   const htmlBase = page(d), htmlPromo = page(d, true);
-  app.get("/rugradar", (_req, res) => { res.set("Cache-Control", "public, max-age=300").type("html").send(fullFreeActive() ? htmlPromo : htmlBase); });
+  app.get("/rugradar", (req, res) => {
+    const html = fullFreeActive() ? htmlPromo : htmlBase, t = shareTarget(req);
+    res.set("Cache-Control", "public, max-age=300").type("html").send(t ? html.replace(OG_RE, shareMeta(d.publicUrl, t.token, t.chain)) : html);
+  });
+  // Per-token share image (free-check data only). Cached per mint; a miss runs the same cached free check as /rugradar/embed.
+  app.get("/rugradar/share/:chain/:file", async (req: Request, res: Response) => {
+    const chain = String(req.params.chain).toLowerCase(), token = String(req.params.file).replace(/\.png$/, "");
+    const fallback = () => res.set("Cache-Control", "public, max-age=120").redirect(302, "/rugradar/rug-radar-512.png");
+    if (!CHAINS.includes(chain) || !validToken(token, chain)) { fallback(); return; }
+    if (!cachedShare(chain, token) && embedLimited(ipOf(req))) { fallback(); return; }
+    try {
+      const png = await sharePng(chain, token, new URL(d.publicUrl).host, async () => { const v = await embedData(d, token, chain); const c = cachedShare(chain, token); if (c) return c.v; throw Object.assign(new Error("degraded " + v.token), { code: "degraded" }); });
+      res.set("Cache-Control", "public, max-age=3600").type("image/png").send(png);
+    } catch { fallback(); }
+  });
   app.get("/rugradar/live.js", (_req, res) => { res.set("Cache-Control", "public, max-age=86400").type("application/javascript").send(LIVE_JS); });
   app.get("/rugradar/embed", async (req: Request, res: Response) => {
     const r = await embedFor(d, req);
@@ -653,11 +685,11 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     }
     useFree(ip, vid);
     if (fullFreeActive() && d.paidCheck) {
-      try { res.json({ ...(await d.paidCheck(token, chain)), paidWith: "free_promo", free_checks_left: a.left }); }
+      try { const full = await d.paidCheck(token, chain); primeFromLimited(limitedReport(full), token, chain); res.json({ ...full, paidWith: "free_promo", free_checks_left: a.left }); }
       catch (e) { refundFree(ip, vid); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
       return;
     }
-    try { res.json({ ...limitedReport(await d.rugCheck(token, chain)), reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
+    try { const lr = limitedReport(await d.rugCheck(token, chain)); primeFromLimited(lr, token, chain); res.json({ ...lr, reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
     catch (e) { refundFree(ip, vid); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
   });
   // Recent unlocked reports for a credit key. Free to read: never spends a credit or a free check; the key is checked on every call.
