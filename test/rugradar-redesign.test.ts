@@ -130,7 +130,7 @@ test("page ships the share buttons for free AND full results, free-only auto-run
   try {
     const h = await (await fetch(`${base}/rugradar?token=${DEAD}&s=x2`)).text();
     for (const s of ["Share on X", "https://x.com/intent/post?text=", "Copy report", "Copy link", "function shotMode", "navigator.share", "execCommand('copy')", "shareBar(j,ws)", "f.dataset.free", "preview-x402-v2.png", 'content="1200"', 'content="630"']) assert.ok(h.includes(s), s);
-    assert.ok(/c\.append\(lockedPanel\(\)\);c\.append\(shareBar\(j,ws\)\)\}/.test(h), "free branch unchanged: share bar under the free result");
+    assert.ok(/c\.append\(lockedPanel\(null,'Unlock for \$'\+CFG\.p\)\);c\.append\(shareBar\(j,ws\)\)\}/.test(h), "free branch unchanged: share bar under the free result");
     assert.ok(/else\{if\(ws\.length>3\)[\s\S]*?if\(Array\.isArray\(j\.checks\)\)\{const fr=rrFree\(j\.checks,CFG\.lim,CFG\.warn\);c\.append\(shareBar\(\{riskScore:fr\.sc,riskLevel:fr\.lv,token:j\.token,chain:j\.chain,facts:fa\},fr\.ws\)\)\}\}/.test(h), "full-report branch shows the share bar, built from the free score and warnings only");
     assert.ok(h.includes('"lim":["mint_authority","freeze_authority","mint_function","holders","liquidity","age","dead_token"]'), "page config carries the free check list");
     assert.ok(Buffer.byteLength(h) < 58_400, `page ${Buffer.byteLength(h)} bytes`);

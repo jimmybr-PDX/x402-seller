@@ -64,6 +64,7 @@ export function limitedReport(full: any) {
     verdict: level === "high" ? "Multiple high-risk patterns found." : level === "medium" ? "Some high-risk patterns found." : "No major high-risk patterns found in the basic checks.",
     reasons: checks.filter((c: any) => c.points > 0).map((c: any) => c.detail), checks,
     moreWarnings: Math.max(0, warningsOf(checks).length - 3) + all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length,
+    lockedTeaser: lockedTeaser(Math.max(0, warningsOf(checks).length - 3) + all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length),
     hiddenWarnings: all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length,
     socialLinks: Array.isArray(links) ? links : null, freeFacts: freeFacts(full),
     facts: { tokenName: pick("tokenName"), tokenSymbol: pick("tokenSymbol"), tokenImage: pick("tokenImage"), mintAuthority: pick("mintAuthority"), freezeAuthority: pick("freezeAuthority"), top1Pct: pick("top1Pct"), top10Pct: pick("top10Pct"), holderCount: pick("holderCount"), ageHours: pick("ageHours"), liquidityUsd: pick("liquidityUsd") },
@@ -71,6 +72,8 @@ export function limitedReport(full: any) {
     disclaimer: full?.disclaimer ?? DISCLAIMER, generatedAt: full?.generatedAt ?? new Date().toISOString(),
   };
 }
+/** Basic free result teaser: only the count of warnings left out, never their text. */
+export const lockedTeaser = (n: number) => `${n > 0 ? `${n} more warning${n > 1 ? "s" : ""} in the full report` : "Full report"}, includes live chart and can-you-sell`;
 /** One plain line RugCheck users expect on a Solana free check: mint authority and main-pool LP burn (from data the check already has). */
 export function freeFacts(full: any): string[] {
   if (full?.chain !== "solana") return [];
@@ -345,7 +348,7 @@ const VT={high:['HIGH RISK','Strong rug warning signs.'],medium:['CAUTION','Some
 function shownLevel(j,ws){const l=VT[j.riskLevel]?j.riskLevel:'medium';if(l!=='low'||!ws.length)return l;return ws.some(w=>w.d)?'high':'medium'}
 function verdictBox(j,ws){const lv=shownLevel(j,ws),s=Number(j.riskScore)||0,v=el('div','verdict v-'+lv),t=el('div');
  t.append(el('div','vt '+lv,VT[lv][0]),el('div','vl',VT[lv][1]));if(j.report!=='limited')t.append(el('div','vtrust','Full report.'));v.append(gauge(lv,s),t);if(j.report==='limited')v.append(el('div','vfree','Your free daily check: basic warnings only. The full report (live chart, dev and sniper wallets, sell test) is $'+CFG.p+'.'));return v}
-function lockedPanel(note){const b=el('div','lock');b.id='unlock';b.append(el('span',null,'\u{1F512} '+(note||'Full report: live chart, dev and sniper wallets, biggest buys and sells, sell test.')));const a=el('button','btn pri',CFG.cta);a.type='button';a.addEventListener('click',()=>openBuy(true));b.append(a);return b}
+function lockedPanel(note,cta){const b=el('div','lock');b.id='unlock';b.append(el('span',null,'\u{1F512} '+(note||'Full report: live chart, dev and sniper wallets, biggest buys and sells, sell test.')));const a=el('button','btn pri',cta||CFG.cta);a.type='button';a.addEventListener('click',()=>openBuy(true));b.append(a);return b}
 function openBuy(scroll){const x=$('buyx');x.hidden=false;const w=$('wpay');if(scroll&&w){$('credits').scrollIntoView({block:'start',behavior:'smooth'});w.classList.add('flash');setTimeout(()=>w.classList.remove('flash'),1600)}}
 let LIVEP=null;function liveLoad(){if(!LIVEP)LIVEP=new Promise((ok,no)=>{const s=document.createElement('script');s.src='/rugradar/live.js?v=${LIVE_V}';s.onload=ok;s.onerror=()=>{LIVEP=null;no()};document.head.append(s)});return LIVEP}
 function rrCopy(t,b){const o=b.dataset.l||(b.dataset.l=b.textContent),d=()=>{b.textContent='Copied';setTimeout(()=>b.textContent=o,1500)},fb=()=>{const x=document.createElement('textarea');x.value=t;x.setAttribute('readonly','');x.style.cssText='position:fixed;top:0;left:0;opacity:0';document.body.append(x);x.select();x.setSelectionRange(0,t.length);try{document.execCommand('copy')&&d()}catch(e){}x.remove()};if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(d,fb);else fb()}
@@ -367,7 +370,7 @@ function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings
  c.append(verdictBox(j,ws));if(Array.isArray(j.freeFacts)&&j.freeFacts.length)c.append(el('div','ffl',j.freeFacts.join(' \u00b7 ')));
  if(typeof SWAPHOOK==='function'&&j.token===t&&shownLevel(j,ws)==='low'){const sb=SWAPHOOK(j);if(sb)c.append(sb)}
  const wc=el('div','wcards');ws.slice(0,3).forEach((w,i)=>wc.append(card(w,j,DESK&&i===0)));if(ws.length)c.append(wc);
- if(j.report==='limited'&&j.checks){const n=Number(j.moreWarnings!=null?j.moreWarnings:j.hiddenWarnings)||0;if(n>0)c.append(el('span','tease','+'+n+' more warning'+(n>1?'s':'')+' in the full report'));c.append(lockedPanel());c.append(shareBar(j,ws))}
+ if(j.report==='limited'&&j.checks){c.append(el('div','tease',j.lockedTeaser||'Full report'));c.append(lockedPanel(null,'Unlock for $'+CFG.p));c.append(shareBar(j,ws))}
  else{if(ws.length>3){const b=el('button','tease','+'+(ws.length-3)+' more warnings');b.type='button';b.addEventListener('click',()=>{ws.slice(3).forEach(w=>wc.append(card(w,j,false)));b.remove()});c.append(b)}
   if(Array.isArray(j.checks)){const fr=rrFree(j.checks,CFG.lim,CFG.warn);c.append(shareBar({riskScore:fr.sc,riskLevel:fr.lv,token:j.token,chain:j.chain,facts:fa},fr.ws))}}
  if(j.liveReport){const h=el('div');c.append(h);liveLoad().then(()=>{const b=window.RRLive(j);if(b)h.append(b)}).catch(()=>{})}
