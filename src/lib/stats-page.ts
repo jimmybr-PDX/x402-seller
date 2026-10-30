@@ -24,6 +24,15 @@ export function pt(iso: string): string {
 type Row = { unpaid402: { client: number }; paid200: number; selfPaid?: number; automatedRequests?: number; settleFailed?: number };
 type Block = { totals: { unpaid402Client: number; paid200: number; selfPaid?: number; automatedRequests?: number; settleFailed: number }; routes: Record<string, unknown> };
 
+type RRc = { rugradarFreeChecks: number; rugradarPaidReports: number; rugradarTotal: number; rugradarOwnerChecks: number };
+type RR = { today: RRc; allTime: RRc };
+function rugradarTable(r?: RR): string {
+  if (!r) return "";
+  const row = (l: string, c: RRc) => `<tr><td>${l}</td><td>${n(c.rugradarFreeChecks)}</td><td>${n(c.rugradarPaidReports)}</td><td>${n(c.rugradarTotal)}</td></tr>`;
+  const own = r.allTime.rugradarOwnerChecks ? ` Your own owner-key checks (${n(r.allTime.rugradarOwnerChecks)} all-time) are not counted.` : "";
+  return `<h2 style="font-size:1.05rem;margin:1.2em 0 .4em">RugRadar checks</h2><table><thead><tr><th></th><th>Free</th><th>Paid</th><th>Total</th></tr></thead><tbody>${row("Today (PT)", r.today)}${row("All-time", r.allTime)}</tbody></table><p>Free = daily free checks on the RugRadar page. Paid = full reports bought with x402 or credits.${own} These totals survive restarts.</p>`;
+}
+
 type Rejected = { byReason: Array<{ reason: string; count: number }> };
 /** Plain words for the payment-library error strings a buyer is most likely to hit. */
 function friendlyReason(r: string): string {
@@ -36,7 +45,7 @@ function friendlyReason(r: string): string {
   return r;
 }
 
-export function statsHtml(s: { trackingSince: string; generatedAt: string; allTime: Block; last24h: Block; persistence: { mode: string }; rejectedPayments?: Rejected }, paidRoutes: string[]): string {
+export function statsHtml(s: { trackingSince: string; generatedAt: string; allTime: Block; last24h: Block; persistence: { mode: string }; rejectedPayments?: Rejected; rugradar?: RR }, paidRoutes: string[]): string {
   const t = s.allTime.totals;
   const self = t.selfPaid ?? 0;
   const head =
@@ -60,6 +69,7 @@ th{font-size:.85rem;color:#555;font-weight:600}tr.total td{font-weight:700;borde
 <table><thead><tr><th>Tool</th><th>Looked at price</th><th>Paid</th><th>Bots/crawlers</th></tr></thead><tbody>${rows}
 <tr class="total"><td>Total</td><td>${n(t.unpaid402Client)}</td><td>${n(t.paid200)}</td><td>${n(t.automatedRequests ?? 0)}</td></tr></tbody></table>
 <p>Last 24 hours: ${plural(d.unpaid402Client, "look", "looks")} at a price, ${n(d.paid200)} paid${d.settleFailed ? `, ${n(d.settleFailed)} payment(s) failed to settle` : ""}.</p>
+${rugradarTable(s.rugradar)}
 ${rejectedLine(s.rejectedPayments)}
 <p>"Looked at price" = a likely real program or person asked for a tool and got the price, but didn't pay. "Bots/crawlers" = directory crawlers, uptime pings and other bots. Your own test calls and checks are left out.</p>
 <p>Updated ${esc(pt(s.generatedAt))}. Counts reset when the server restarts or redeploys.</p>

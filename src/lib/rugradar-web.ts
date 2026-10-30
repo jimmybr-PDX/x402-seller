@@ -1,3 +1,4 @@
+import { countRugradar } from "./rugradar-counts.js";
 /**
  * RugRadar web surface: branded landing page with a free web checker (1 free limited check per visitor, limited by IP
  * and cookie), an embeddable result card (/rugradar/embed), sitemap.xml, and an MCP server (streamable HTTP, JSON responses) at /mcp.
@@ -685,11 +686,11 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     }
     useFree(ip, vid);
     if (fullFreeActive() && d.paidCheck) {
-      try { const full = await d.paidCheck(token, chain); primeFromLimited(limitedReport(full), token, chain); res.json({ ...full, paidWith: "free_promo", free_checks_left: a.left }); }
+      try { const full = await d.paidCheck(token, chain); primeFromLimited(limitedReport(full), token, chain); countRugradar("free"); res.json({ ...full, paidWith: "free_promo", free_checks_left: a.left }); }
       catch (e) { refundFree(ip, vid); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
       return;
     }
-    try { const lr = limitedReport(await d.rugCheck(token, chain)); primeFromLimited(lr, token, chain); res.json({ ...lr, reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
+    try { const lr = limitedReport(await d.rugCheck(token, chain)); primeFromLimited(lr, token, chain); countRugradar("free"); res.json({ ...lr, reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
     catch (e) { refundFree(ip, vid); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
   });
   // Recent unlocked reports for a credit key. Free to read: never spends a credit or a free check; the key is checked on every call.

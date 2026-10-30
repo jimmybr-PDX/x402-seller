@@ -58,6 +58,8 @@ import { registerWatchRoutes, watchKeyMiddleware, watchPaidHandler, createWithCr
 import { initCredits, issueKey, issueKeyOnce, isRedeemed, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell , spendN, refundN, loadDoc, saveDoc, saveDocs, listDocs, syncStore } from "./lib/credits.js";
 import { registerWalletPay, orderSecret, solUsdPublic, type PayDeps } from "./lib/solpay.js";
 import { startSales, salesStats } from "./lib/sales.js";
+import { countRugradar, rugradarStats, attachCounts } from "./lib/rugradar-counts.js";
+import { isOwnerKey } from "./lib/credits.js";
 import { classify, recordRejection, recordRequest, startTraffic, trafficStats, attachDurable, type Outcome } from "./lib/traffic.js";
 import { statsHtml } from "./lib/stats-page.js";
 import { answerHtml, deleteAnswer, getAnswer, newAnswerId, pinAnswer, saveAnswer } from "./lib/answers.js";
@@ -297,6 +299,7 @@ async function main() {
           else if (hasPayment && sc >= 400) outcome = "uncharged";
         }
         const selfPayer = paid && hasPayment && isSelfPayer(req, res);
+        if (outcome === "paid200" && RUG_PATHS.has(req.path)) countRugradar(selfPayer ? "owner" : "paid");
         if (outcome === "paymentInvalid") {
           const sent = decodeB64Json(req.header("payment-signature") ?? req.header("x-payment")) as Record<string, any> | null;
           const pr = decodeB64Json(res.getHeader("payment-required")) as Record<string, any> | null;
@@ -343,6 +346,7 @@ async function main() {
       const token = String(req.query.token ?? req.query.mint ?? "").trim();
       if (!token) throw new SolanaInputError("token is required");
       const out = await paidRugCheck(token, String(req.query.chain ?? "").trim() || (token.startsWith("0x") ? "base" : "solana"), { noCache: req.query.nocache === "1" });
+      countRugradar(isOwnerKey(key) ? "owner" : "paid");
       void recent.save(key, out); // full report unlocked with a credit key (this path spent the credit); never throws
       res.set("X-RugRadar-Credits", String(left)).json({ ...out, paidWith: "credits", credits_remaining: left });
     } catch (err) {
@@ -1456,7 +1460,7 @@ async function main() {
   });
 
   app.get("/stats", (req, res) => {
-    const data = { service: SERVICE_NAME, generatedAt: new Date().toISOString(), ...trafficStats(Object.keys(PAID), true), sales: salesStats() };
+    const data = { service: SERVICE_NAME, generatedAt: new Date().toISOString(), ...trafficStats(Object.keys(PAID), true), rugradar: rugradarStats(), sales: salesStats() };
     res.set("Cache-Control", "no-store").vary("Accept");
     const wantsHtml = req.query.view === "simple" || (req.query.format !== "json" && req.accepts(["json", "html"]) === "html");
     if (wantsHtml) res.type("html").send(statsHtml(data as Parameters<typeof statsHtml>[0], Object.keys(PAID)));
@@ -2052,6 +2056,7 @@ async function main() {
   const httpServer = app.listen(PORT, "0.0.0.0", () => {
     startTraffic();
     // Oct 18: /stats counters survive restarts: restored from / saved to the private RugRadar GitHub store (traffic.json)
+    initCredits().then(() => { if (creditsStatus().store === "github") void attachCounts("private GitHub store (rugradar-credits repo)", { load: () => loadDoc<unknown>("rugradar-counts.json", null), sync: () => syncStore(), write: (doc) => saveDoc("rugradar-counts.json", doc, "rugradar counts") }); }).catch(() => {});
     initCredits().then(() => { if (creditsStatus().store === "github") return attachDurable({
       name: "private GitHub store (rugradar-credits repo)",
       load: async () => { const out: Record<string, unknown> = {}; for (const n of await listDocs("traffic")) out[n] = await loadDoc<unknown>(n, null); return out; },
