@@ -20,3 +20,19 @@ test("rugradar counts: free/paid/owner, total excludes owner, save adds deltas o
   assert.match(html, /RugRadar checks/);
   _resetCounts();
 });
+
+test("rugradar counts: rejected free-check attempts by reason, persisted", async () => {
+  _resetCounts();
+  const { countRugradarRejected } = await import("../src/lib/rugradar-counts.js");
+  let remote: any = { v: 1, savedAt: "", days: { "2026-01-01": { free: 0, paid: 0, owner: 0, rej: { error: 2 } } } };
+  await attachCounts("mem", { load: async () => remote, sync: async () => {}, write: async (d) => { remote = JSON.parse(JSON.stringify(d)); } }, 1e9);
+  countRugradarRejected("invalidInput"); countRugradarRejected("freeUsedUp"); countRugradarRejected("freeUsedUp");
+  let s: any = rugradarStats();
+  assert.equal(s.today.rugradarRejected, 3);
+  assert.deepEqual(s.today.rugradarRejectedByReason, { freeUsedUp: 2, rateLimited: 0, invalidInput: 1, error: 0 });
+  assert.equal(s.allTime.rugradarRejected, 5);
+  assert.equal(s.today.rugradarTotal, 0);
+  await saveCounts();
+  assert.deepEqual(remote.days[ptDay()].rej, { freeUsedUp: 2, invalidInput: 1 });
+  _resetCounts();
+});

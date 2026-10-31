@@ -1,4 +1,4 @@
-import { countRugradar } from "./rugradar-counts.js";
+import { countRugradar, countRugradarRejected } from "./rugradar-counts.js";
 /**
  * RugRadar web surface: branded landing page with a free web checker (1 free limited check per visitor, limited by IP
  * and cookie), an embeddable result card (/rugradar/embed), sitemap.xml, and an MCP server (streamable HTTP, JSON responses) at /mcp.
@@ -679,22 +679,23 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
   app.post("/rugradar/api/check", async (req: Request, res: Response) => {
     res.set("Cache-Control", "no-store");
     const token = String(req.query.token ?? "").trim(), chain = String(req.query.chain ?? "solana").toLowerCase();
-    if (!CHAINS.includes(chain) || !validToken(token, chain)) { res.status(400).json({ error: "invalid_input", message: chain === "solana" ? "Paste a Solana mint address (base58, 32-44 chars) or pick an EVM chain for 0x addresses." : "Paste a 0x token contract address (40 hex characters)." }); return; }
+    if (!CHAINS.includes(chain) || !validToken(token, chain)) { countRugradarRejected("invalidInput"); res.status(400).json({ error: "invalid_input", message: chain === "solana" ? "Paste a Solana mint address (base58, 32-44 chars) or pick an EVM chain for 0x addresses." : "Paste a 0x token contract address (40 hex characters)." }); return; }
     let vid = cookieVid(req);
     if (!vid) { vid = randomBytes(16).toString("base64url"); res.append("Set-Cookie", `rr_vid=${vid}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax; Secure`); }
     const ip = ipOf(req), a = freeAllowance(ip, vid);
     if (!a.ok) {
+      countRugradarRejected(a.reason === "slow_down" ? "rateLimited" : "freeUsedUp");
       const msg = a.reason === "slow_down" ? "One check every few seconds, please." : a.reason === "daily_free_cap" ? "Today's free checks are used up. Buy credits to keep checking." : `You've used your free check for today. Buy credits ($${d.priceUsd} each) for the full report.`;
       res.status(a.reason === "slow_down" ? 429 : 402).json({ error: a.reason, message: msg, buyCredits: `${d.publicUrl}/credits/buy?credits=100`, ...(a.reason === "slow_down" ? {} : { lockedSignals: LOCKED_SIGNALS, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd) }) }); return;
     }
     useFree(ip, vid);
     if (fullFreeActive() && d.paidCheck) {
       try { const full = await d.paidCheck(token, chain); primeFromLimited(limitedReport(full), token, chain); countRugradar("free"); res.json({ ...full, paidWith: "free_promo", free_checks_left: a.left }); }
-      catch (e) { refundFree(ip, vid); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
+      catch (e) { refundFree(ip, vid); countRugradarRejected("error"); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
       return;
     }
     try { const lr = limitedReport(await d.rugCheck(token, chain)); primeFromLimited(lr, token, chain); countRugradar("free"); res.json({ ...lr, reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
-    catch (e) { refundFree(ip, vid); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
+    catch (e) { refundFree(ip, vid); countRugradarRejected("error"); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
   });
   // Recent unlocked reports for a credit key. Free to read: never spends a credit or a free check; the key is checked on every call.
   const recentKey = async (req: Request, res: Response): Promise<{ key: string; credits: number } | null> => {
