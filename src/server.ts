@@ -62,6 +62,7 @@ import { countRugradar, rugradarStats, attachCounts } from "./lib/rugradar-count
 import { isOwnerKey } from "./lib/credits.js";
 import { classify, recordRejection, recordRequest, startTraffic, trafficStats, attachDurable, type Outcome } from "./lib/traffic.js";
 import { statsHtml } from "./lib/stats-page.js";
+import { mountTvWebhook } from "./lib/tv-webhook.js";
 import { answerHtml, deleteAnswer, getAnswer, newAnswerId, pinAnswer, saveAnswer } from "./lib/answers.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -277,6 +278,7 @@ async function main() {
   // Oct 15: answer the keep-awake probe before any other middleware, so it never waits on body parsing, tracking or payments.
   startLagWatch(); // Oct 18: warn in the log when the event loop is blocked over 1 s (Render health checks time out at 5 s)
   app.get("/health", (_req, res) => { res.set("Cache-Control", "no-store").type("application/json").end('{"ok":true}'); }); // Oct 15: answered before all other middleware (keep-awake probe); Oct 18: no JSON work at all
+  mountTvWebhook(app); // Nov 2: TradingView webhook (before json parser; own text parser)
   app.use(express.json());
 
   // Interest tracker (counts only; visitor = salted hash of IP+UA, raw IPs never stored).
