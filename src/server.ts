@@ -64,6 +64,7 @@ import { classify, recordRejection, recordRequest, startTraffic, trafficStats, a
 import { statsHtml } from "./lib/stats-page.js";
 import { mountTvWebhook } from "./lib/tv-webhook.js";
 import { answerHtml, deleteAnswer, getAnswer, newAnswerId, pinAnswer, saveAnswer } from "./lib/answers.js";
+import { POINTER_PATHS, SEE_ALSO_PATHS, pointerPaywallHtml, queryFromUnpaidContext, seeAlsoLine, tokenFromQuery, withSeeAlso } from "./lib/rugradar-pointer.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -92,10 +93,6 @@ const CREDIT_GAP_S: number | null = 1.7; // measured 2026-10-13 (scripts/rugrada
 const CREDIT_SPEED = { creditS: 2.3, paidS: 4.0, x: 1.8 };
 const creditTip = () => (CREDIT_GAP_S ? `Tip: buy RugRadar credits (${PUBLIC_URL}/credits/buy?credits=N, $0.01 each) to skip the ~${CREDIT_GAP_S}s payment wait.` : `Tip: buy RugRadar credits (${PUBLIC_URL}/credits/buy?credits=N, $0.01 each) and send X-RugRadar-Key to skip payment on each check.`);
 const RUG_PATHS = new Set(["/rug-check", "/token-safety", "/honeypot-check"]);
-/** One free line pointing research-tool users at RugRadar. Added as an optional `see_also` field (never replaces or renames an existing one). */
-const RUGRADAR_SEE_ALSO = "Also: check any token for rugs, $0.01 (Solana, Base, BNB, Ethereum): https://x402-seller-pmlm.onrender.com/rugradar";
-const withSeeAlso = <T,>(out: T): T => (out && typeof out === "object" && !Array.isArray(out) && !("see_also" in (out as object)) ? { ...(out as object), see_also: RUGRADAR_SEE_ALSO } as T : out);
-const SEE_ALSO_PATHS = new Set(["/report", "/read", "/check", "/news", "/price", "/solana-price", "/balance", "/tx", "/gas", "/search"]);
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
 // PNG: the Bazaar re-hosts PNG/JPEG icons; our SVG icon never showed up in listings
 const ICON_URL = `${PUBLIC_URL}/icon.png`;
@@ -1328,7 +1325,7 @@ async function main() {
   const unpaidBodyFor = (k: string, r: any) => {
     const path = k.split(" ")[1] as PaidPath;
     const info = r.extensions?.bazaar?.info ?? {};
-    const body = {
+    const base = {
       error: "payment_required",
       tool: r.serviceName,
       priceUsd: Number(usd(PAID[path])),
@@ -1337,11 +1334,13 @@ async function main() {
       howToPay: `x402 v2: decode the base64 JSON in this response's PAYMENT-REQUIRED header (one accepts entry per network: ${NETWORK_NAMES.join(", ")}; USDC), sign with any x402 client (e.g. @x402/fetch wrapFetchWithPayment), then retry the same request with the PAYMENT-SIGNATURE header.`,
       exampleInput: info.input?.queryParams ?? info.input?.body ?? null,
       exampleOutput: info.output?.example ?? null,
-      ...(SEE_ALSO_PATHS.has(path) ? { see_also: RUGRADAR_SEE_ALSO } : {}),
       ...(RUG_PATHS.has(path) ? { credits: creditTip(), creditKey: `Repeat use: buy credits once (${PUBLIC_URL}/credits/buy?credits=10, paid via x402) to get a key, then send header X-RugRadar-Key: <key> on each call instead of paying per request.` } : {}),
       more: { examples: `${PUBLIC_URL}/examples`, llms: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json` },
     };
-    return () => ({ contentType: "application/json", body });
+    return (ctx?: any) => {
+      const token = SEE_ALSO_PATHS.has(path) ? tokenFromQuery(path, (name) => queryFromUnpaidContext(ctx, name)) : "";
+      return { contentType: "application/json", body: { ...base, ...(SEE_ALSO_PATHS.has(path) ? { see_also: seeAlsoLine(token) } : {}) } };
+    };
   };
   const settleFailedBody = (_ctx: unknown, f: { errorReason?: string; errorMessage?: string }) => ({
     contentType: "application/json",
@@ -1354,16 +1353,20 @@ async function main() {
     },
   });
   const resolvedRoutes = Object.fromEntries(
-    Object.entries(routes).map(([k, r]) => [
-      k,
-      {
+    Object.entries(routes).map(([k, r]) => {
+      const path = k.split(" ")[1] ?? "";
+      const paywall = POINTER_PATHS.has(path)
+        ? { customPaywallHtml: pointerPaywallHtml((r as any).serviceName ?? (r as any).description ?? k, path === "/watch" ? "$0.05 (24h) / $0.10 (48h)" : PAID[path as PaidPath]) }
+        : {};
+      return [k, {
         ...r,
         description: capDescription(k, (r as { description?: string }).description),
         unpaidResponseBody: unpaidBodyFor(k, r),
         settlementFailedResponseBody: settleFailedBody,
+        ...paywall,
         extensions: { ...builderCode, ...r.extensions }, // CDP gas-sponsoring extensions (eip2612/erc20Approval) dropped: their 402 entries started failing validation ("missing required info") on every paid route; USDC EIP-3009 payments do not need them
-      },
-    ]),
+      }];
+    }),
   );
   const server = new x402HTTPResourceServer(resourceServer, resolvedRoutes as any);
   await server.initialize(); // fetches /supported from each facilitator and fails fast on an unsupported network
