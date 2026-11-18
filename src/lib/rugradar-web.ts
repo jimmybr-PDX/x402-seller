@@ -236,6 +236,8 @@ header{display:flex;align-items:center;justify-content:space-between;padding:12p
 button.tease{cursor:pointer;font:inherit;font-size:13px;font-weight:700}
 .lock{margin-top:8px;padding:10px 12px;border-radius:12px;background:#0E1528;border:1px dashed #4a5a8a;font-size:14px;line-height:1.35}
 .lock .btn{width:100%;margin-top:8px;padding:8px 12px;font-size:14px}.sec{background:transparent;border:1px solid rgba(56,189,248,.55);color:#9fdcf9}
+.unlockwhat{font-size:14px;margin:8px 0 2px;line-height:1.35}
+.lock .credsec{display:block;width:100%;margin-top:8px;text-align:center;font-size:13px;color:var(--mut)}
 .disc{font-size:12px;color:var(--mut);margin-top:10px;text-align:center}
 .buyline{font-size:12px;color:var(--mut);text-align:center;margin-top:6px}#swapbox{margin:10px 0 4px}#swapbox small{display:block;text-align:center}
 .card h2,.card h3{margin:0 0 6px;font-size:17px}.mut{color:var(--mut);font-size:14px;margin:0 0 10px}.note{font-size:13px;color:var(--mut);margin:8px 0 10px}
@@ -347,8 +349,8 @@ function gauge(lv,score){const g=el('div','gauge g-'+lv);g.style.setProperty('--
 const VT={high:['HIGH RISK','Strong rug warning signs.'],medium:['CAUTION','Some rug warning signs.'],low:['LOW RISK','No danger warnings found. Not a guarantee.']};
 function shownLevel(j,ws){const l=VT[j.riskLevel]?j.riskLevel:'medium';if(l!=='low'||!ws.length)return l;return ws.some(w=>w.d)?'high':'medium'}
 function verdictBox(j,ws){const lv=shownLevel(j,ws),s=Number(j.riskScore)||0,v=el('div','verdict v-'+lv),t=el('div');
- t.append(el('div','vt '+lv,VT[lv][0]),el('div','vl',VT[lv][1]));if(j.report!=='limited')t.append(el('div','vtrust','Full report.'));v.append(gauge(lv,s),t);if(j.report==='limited')v.append(el('div','vfree','Your free daily check: basic warnings only. The full report (live chart, dev and sniper wallets, sell test) is $'+CFG.p+'.'));return v}
-function lockedPanel(note,cta){const b=el('div','lock');b.id='unlock';b.append(el('span',null,'\u{1F512} '+(note||'Full report: live chart, dev and sniper wallets, biggest buys and sells, sell test.')));const a=el('button','btn pri',cta||CFG.cta);a.type='button';a.addEventListener('click',()=>openBuy(true));b.append(a);return b}
+ t.append(el('div','vt '+lv,VT[lv][0]),el('div','vl',VT[lv][1]));if(j.report!=='limited')t.append(el('div','vtrust','Full report.'));else t.append(el('div','vtrust','Danger warnings only · based on public on-chain data'));v.append(gauge(lv,s),t);return v}
+function lockedPanel(note,cta,sec){const b=el('div','lock');b.id='unlock';if(note!=='')b.append(el('span',null,'\u{1F512} '+(note||'Full report: live chart, dev and sniper wallets, biggest buys and sells, sell test.')));const a=el('button','btn pri',cta||CFG.cta);a.type='button';a.addEventListener('click',()=>openBuy(true));b.append(a);if(sec){const s=el('button','linkbtn credsec',sec);s.type='button';s.addEventListener('click',()=>openBuy(true));b.append(s)}return b}
 function openBuy(scroll){const x=$('buyx');x.hidden=false;const w=$('wpay');if(scroll&&w){$('credits').scrollIntoView({block:'start',behavior:'smooth'});w.classList.add('flash');setTimeout(()=>w.classList.remove('flash'),1600)}}
 let LIVEP=null;function liveLoad(){if(!LIVEP)LIVEP=new Promise((ok,no)=>{const s=document.createElement('script');s.src='/rugradar/live.js?v=${LIVE_V}';s.onload=ok;s.onerror=()=>{LIVEP=null;no()};document.head.append(s)});return LIVEP}
 function rrCopy(t,b){const o=b.dataset.l||(b.dataset.l=b.textContent),d=()=>{b.textContent='Copied';setTimeout(()=>b.textContent=o,1500)},fb=()=>{const x=document.createElement('textarea');x.value=t;x.setAttribute('readonly','');x.style.cssText='position:fixed;top:0;left:0;opacity:0';document.body.append(x);x.select();x.setSelectionRange(0,t.length);try{document.execCommand('copy')&&d()}catch(e){}x.remove()};if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(d,fb);else fb()}
@@ -367,10 +369,12 @@ function shareBar(j,ws){const lv=shownLevel(j,ws),sc=Number(j.riskScore)||0,lb=V
 function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings(j.checks),fa=j.facts||{},tk=rrTok(fa);
  const tok=el('div','tok'),info=el('div'),lt=(tk.s||tk.n||String(j.token||'?')).slice(0,2).toUpperCase(),av=el('div','av',lt);if(tk.img){const im=el('img');im.alt='';im.referrerPolicy='no-referrer';im.loading='lazy';im.onerror=()=>{im.remove();av.textContent=lt};im.src=tk.img;av.textContent='';av.append(im)}tok.append(av);
  info.append(el('b',null,tk.line||short(j.token)),el('div','addr',[tk.line?short(j.token):null,CFG.chains[j.chain]||j.chain,ageTxt(fa.ageHours)].filter(Boolean).join(' \u00b7 ')));tok.append(info);const sw=socials(j);if(sw)tok.append(sw);c.append(tok);
- c.append(verdictBox(j,ws));if(Array.isArray(j.freeFacts)&&j.freeFacts.length)c.append(el('div','ffl',j.freeFacts.join(' \u00b7 ')));
+ c.append(verdictBox(j,ws));
+ if(j.report==='limited'&&j.checks){c.append(el('div','unlockwhat','Full report also shows: can-you-sell result, dev activity, biggest buys/sells.'));c.append(lockedPanel('','Unlock for $'+CFG.p,'or buy credits to skip the wait'));c.append(el('div','buyline','Checks finish faster with credits · buy once, skip the payment wait'));c.append(el('div','tease',j.lockedTeaser||'Full report'))}
+ if(Array.isArray(j.freeFacts)&&j.freeFacts.length)c.append(el('div','ffl',j.freeFacts.join(' \u00b7 ')));
  if(typeof SWAPHOOK==='function'&&j.token===t&&shownLevel(j,ws)==='low'){const sb=SWAPHOOK(j);if(sb)c.append(sb)}
  const wc=el('div','wcards');ws.slice(0,3).forEach((w,i)=>wc.append(card(w,j,DESK&&i===0)));if(ws.length)c.append(wc);
- if(j.report==='limited'&&j.checks){c.append(el('div','tease',j.lockedTeaser||'Full report'));c.append(lockedPanel(null,'Unlock for $'+CFG.p));c.append(shareBar(j,ws))}
+ if(j.report==='limited'&&j.checks){c.append(shareBar(j,ws))}
  else{if(ws.length>3){const b=el('button','tease','+'+(ws.length-3)+' more warnings');b.type='button';b.addEventListener('click',()=>{ws.slice(3).forEach(w=>wc.append(card(w,j,false)));b.remove()});c.append(b)}
   if(Array.isArray(j.checks)){const fr=rrFree(j.checks,CFG.lim,CFG.warn);c.append(shareBar({riskScore:fr.sc,riskLevel:fr.lv,token:j.token,chain:j.chain,facts:fa},fr.ws))}}
  if(j.liveReport){const h=el('div');c.append(h);liveLoad().then(()=>{const b=window.RRLive(j);if(b)h.append(b)}).catch(()=>{})}
@@ -392,11 +396,11 @@ RS.addEventListener('change',async()=>{const v=RS.value;if(!v)return;const p=v.s
 $('key').addEventListener('change',recentLoad);
 function pill(n){$('credpill').textContent=(n==null?'Credits':'Credits: '+n)+' \u00b7 Buy'}
 $('credpill').addEventListener('click',e=>{e.preventDefault();openBuy(true)});$('buyc').addEventListener('click',()=>openBuy(false));
-document.querySelectorAll('a[href="#agents"]').forEach(a=>a.addEventListener('click',()=>{$('agents').open=true}));
-document.querySelectorAll('a[href="#developers"]').forEach(a=>a.addEventListener('click',()=>{$('developers').open=true}));
-const od=()=>{if(location.hash==='#developers')$('developers').open=true};od();addEventListener('hashchange',od);
+function openDev(){const d=$('developers');if(d)d.open=true}
+document.querySelectorAll('a[href="#agents"],a[href="#developers"]').forEach(a=>a.addEventListener('click',openDev));
+const od=()=>{if(location.hash==='#developers'||location.hash==='#agents')openDev()};od();addEventListener('hashchange',od);
 document.querySelectorAll('.cpb').forEach(b=>b.addEventListener('click',()=>{const t=b.nextElementSibling.textContent,done=()=>{b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1500)};if(navigator.clipboard)navigator.clipboard.writeText(t).then(done,()=>{});}));
-if(location.hash==='#agents')$('agents').open=true;if(location.hash==='#credits')openBuy(false);
+if(location.hash==='#credits')openBuy(false);
 try{const u=new URLSearchParams(location.search),t=u.get('token')||u.get('t'),c=u.get('chain');if(t&&t.length<=64){$('tok').value=t;if(c&&$('chain').querySelector('option[value="'+c.replace(/[^a-z]/g,'')+'"]'))$('chain').value=c;if(/^[A-Za-z0-9]{20,64}$/.test(t))setTimeout(()=>{f.dataset.free='1';f.dispatchEvent(new Event('submit',{cancelable:true}))},0)}}catch(e){}
 {const tk=$('tok'),cl=$('clr'),cs=()=>{cl.hidden=!tk.value};tk.addEventListener('input',cs);cl.addEventListener('click',()=>{tk.value='';cs();tk.focus()});cs()}
 keyUI();recentLoad();document.getElementById('wpayHome').append(walletPacks());
@@ -446,13 +450,11 @@ ${CSS_PAGE}</style></head><body><div class="wrap">
 <button class="linkbtn" id="buyc" type="button">${fast ? `Buy credits: results ${fast} faster` : "Buy credits"}</button>
 <p class="note">${d.speed ? `With credits you don't wait on a payment for each check (measured ~${d.speed.x}x faster).` : "With credits you don't wait on a payment for each check."}</p>
 <div id="buyx" hidden><div id="wpayHome"></div><small class="mut">Agents and scripts: pay once with any x402 client: <code>GET ${U}/credits/buy?credits=${UNLOCK_CREDITS}</code> ($${(UNLOCK_CREDITS * Number(p)).toFixed(2)}). You get a secret key once; paste it under "Have a credit key?" or send it as <code>X-RugRadar-Key</code>.</small></div>
-<div style="margin-top:6px;font-size:13px"><a href="#agents">For bots &amp; agents \u203a</a></div>
+<div style="margin-top:6px;font-size:13px"><a href="#agents">For developers \u203a</a></div>
 </section></aside>
 </div>
 ${devSection(U, p)}
-${agentsSection(U, p)}
 <details class="fold"><summary>How RugRadar works</summary><p class="mut">We turn public on-chain and market data into a 0-100 risk score with plain danger warnings. Danger warnings only: a low score is not a guarantee.</p>${faq.map(([q, a]) => `<h3 style="font-size:15px;margin:12px 0 2px">${q}</h3><p class="mut" style="margin:0">${a}</p>`).join("")}</details>
-<div class="devlink"><a href="#developers">Add RugRadar to your bot or site \u203a</a></div>
 <footer>RugRadar \u00b7 ${DISCLAIMER} Danger warnings only, never a guarantee; it never labels people.</footer>
 </div>
 <script>const CFG=${json(cfg)};
@@ -486,13 +488,6 @@ function devSection(U: string, p: string) {
 curl -s "${U}/rug-check?token=${DEV_MINT}"   # 402 + PAYMENT-REQUIRED header
 # repeat use: buy credits once (x402, 10 credits = $0.10) -> {"key":"rr_..."}, then:
 curl -s -H "X-RugRadar-Key: rr_YOURKEY" "${U}/rug-check?token=${DEV_MINT}"`;
-  return `<details class="fold dev" id="developers"><summary>For developers: add RugRadar to your bot or site</summary><div>
-<p><b>Card (iframe).</b> Free, danger warnings only. Swap in any Solana mint or 0x address.</p>${cp(iframe)}
-<p><b>JSON (free check).</b> Score, verdict, top 3 warnings and a report link.</p>${cp(curl)}
-<p><b>Paid full report: pay once, or repeat with a key.</b> One-time x402 payment, or buy credits once and send the key on every call:</p>${cp(payEx)}
-<p><small>The full report with every warning costs $${p} per check with prepaid credits (header <code>X-RugRadar-Key</code>) or x402. Details: <a href="#agents">bots &amp; agents</a>. Heuristic, may be wrong, not financial advice.</small></p></div></details>`;
-}
-function agentsSection(U: string, p: string) {
   const c = agentSnippets(U), pre = (t: string) => `<pre>${escH(t)}</pre>`;
   const tools: [string, string, string][] = [
     ["rug_check", "0-100 rug risk score, plain danger warnings and a buyer summary (Solana incl. pump.fun, BNB, Base, Ethereum, Arbitrum)", `$${p}`],
@@ -505,7 +500,10 @@ function agentsSection(U: string, p: string) {
     [`GET /watch?token=&lt;mint&gt;&amp;hours=24|48&amp;webhook=&lt;https url&gt;`, "$0.05 (24h) / $0.10 (48h)"], [`GET /credits/buy?credits=N`, `$${p} per credit (1-1000)`],
   ];
   const row = (cells: string[]) => `<tr>${cells.map((x) => `<td>${x}</td>`).join("")}</tr>`;
-  return `<details class="fold agents" id="agents"><summary>For bots &amp; agents (MCP + x402 + embed)</summary><div>
+  return `<details class="fold dev agents" id="developers"><summary>For developers</summary><div id="agents">
+<p><b>Card (iframe).</b> Free, danger warnings only. Swap in any Solana mint or 0x address.</p>${cp(iframe)}
+<p><b>JSON (free check).</b> Score, verdict, top 3 warnings and a report link.</p>${cp(curl)}
+<p><b>Paid full report: pay once, or repeat with a key.</b> One-time x402 payment, or buy credits once and send the key on every call:</p>${cp(payEx)}
 <p><b>MCP server</b> (streamable HTTP, JSON): <code>${U}/mcp</code>. Add it to any MCP client:</p>${pre(c.mcpConfig)}
 <table>${tools.map(([n, d, pr]) => row([`<code>${n}</code>`, escH(d), pr])).join("")}</table>
 <p>Pass a credit key (<code>api_key</code> or header <code>X-RugRadar-Key</code>); without one, a tool returns the x402 payment requirement. List tools:</p>${pre(c.mcpList)}
@@ -514,7 +512,7 @@ function agentsSection(U: string, p: string) {
 <p><b>Credit keys</b> skip the x402 round trip:</p>${pre(c.credits)}
 <p><b>Embed the RugRadar card</b> (about 360 px, free check data, danger warnings only). Paste on any page:</p>${pre(c.embed)}<p>Or fetch the same data as JSON (score, verdict, top 3 warning titles, report link):</p>${pre(c.embedJson)}
 <p><b>Webhook signature</b>: header <code>X-RugRadar-Signature: t=&lt;unix&gt;,v1=&lt;hex&gt;</code>, HMAC-SHA256 of <code>t + "." + rawBody</code> with your watch secret. Node:</p>${pre(c.node)}<p>Python:</p>${pre(c.python)}
-<p><small>Discovery: <a href="/.well-known/x402">/.well-known/x402</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a>. Danger warnings only; heuristic, may be wrong, not financial advice.</small></p></div></details>`;
+<p><small>Discovery: <a href="/.well-known/x402">/.well-known/x402</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a>. The full report costs $${p} per check with prepaid credits (header <code>X-RugRadar-Key</code>) or x402. Danger warnings only; heuristic, may be wrong, not financial advice.</small></p></div></details>`;
 }
 
 

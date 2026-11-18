@@ -43,7 +43,7 @@ test("v5 page: paste box, Auto chip, free line, credits copy, folded agents with
     const { srv, base } = await start(() => deadFull(), sw);
     try {
       const h = await (await fetch(`${base}/rugradar`)).text();
-      for (const s of ['id="tok"', '<option value="auto">Auto', "Free \u00b7 no sign-up", "Prepaid credits finish checks ~2x faster", "Buy credits: results ~2x faster", "don't wait on a payment for each check (measured ~1.8x faster)", "Strong rug warning signs.", "No danger warnings found. Not a guarantee.", "No socials found", "more warning", '<details class="fold agents" id="agents">', 'id="developers"', "For developers", "#developers", "/rugradar/embed?token=", "/rugradar/embed.json?token="]) assert.ok(h.includes(s), s);
+      for (const s of ['id="tok"', '<option value="auto">Auto', "Free \u00b7 no sign-up", "Prepaid credits finish checks ~2x faster", "Buy credits: results ~2x faster", "don't wait on a payment for each check (measured ~1.8x faster)", "Strong rug warning signs.", "No danger warnings found. Not a guarantee.", "No socials found", "more warning", 'id="agents"', 'id="developers"', "For developers", "#developers", "/rugradar/embed?token=", "/rugradar/embed.json?token=", "Danger warnings only \u00b7 based on public on-chain data", "Full report also shows: can-you-sell result, dev activity, biggest buys/sells.", "or buy credits to skip the wait", "Checks finish faster with credits \u00b7 buy once, skip the payment wait"]) assert.ok(h.includes(s), s);
       assert.equal((h.match(/<select id="chain"/g) ?? []).length, 1, "a single chain chip");
       assert.ok(!/id="watch"|More tools|Watch this token/.test(h), "no Watch feature or paid tool list in this release");
       assert.ok(h.includes("Watch token: coming soon") && h.includes("mo.id='more'"), "static coming-soon note in the More section");
@@ -102,7 +102,7 @@ test("free check page: free line under the ring, no quota line above, quiet cred
   const { srv, base } = await start(lowWithCaution);
   try {
     const h = await (await fetch(`${base}/rugradar`)).text();
-    assert.match(h, /<small id="quota"><\/small>/); assert.ok(h.includes("Your free daily check: basic warnings only."));
+    assert.match(h, /<small id="quota"><\/small>/); assert.ok(h.includes("Danger warnings only \u00b7 based on public on-chain data"));
     assert.match(h, /class="linkbtn" id="buyc"/); assert.match(h, /Prepaid credits finish checks ~2x faster/); assert.match(h, /<details class="keyd" id="keyd"><summary>Have a credit key\?<\/summary>/);
     assert.ok(!h.includes("dev history"));
     const e = await (await fetch(`${base}/rugradar/embed?token=${CLEAN}`)).text();
@@ -130,7 +130,9 @@ test("page ships the share buttons for free AND full results, free-only auto-run
   try {
     const h = await (await fetch(`${base}/rugradar?token=${DEAD}&s=x2`)).text();
     for (const s of ["Share on X", "https://x.com/intent/post?text=", "Copy report", "Copy link", "function shotMode", "navigator.share", "execCommand('copy')", "shareBar(j,ws)", "f.dataset.free", "preview-x402-v2.png", 'content="1200"', 'content="630"']) assert.ok(h.includes(s), s);
-    assert.ok(/c\.append\(lockedPanel\(null,'Unlock for \$'\+CFG\.p\)\);c\.append\(shareBar\(j,ws\)\)\}/.test(h), "free branch unchanged: share bar under the free result");
+    assert.ok(h.includes("lockedPanel('','Unlock for $'+CFG.p,'or buy credits to skip the wait')"), "unlock button still opens the existing buy flow");
+    assert.ok(h.includes("el('div','tease',j.lockedTeaser||'Full report')"), "N more warnings teaser kept");
+    assert.ok(/if\(j\.report==='limited'&&j\.checks\)\{c\.append\(shareBar\(j,ws\)\)\}/.test(h), "share bar still under the free result");
     assert.ok(/else\{if\(ws\.length>3\)[\s\S]*?if\(Array\.isArray\(j\.checks\)\)\{const fr=rrFree\(j\.checks,CFG\.lim,CFG\.warn\);c\.append\(shareBar\(\{riskScore:fr\.sc,riskLevel:fr\.lv,token:j\.token,chain:j\.chain,facts:fa\},fr\.ws\)\)\}\}/.test(h), "full-report branch shows the share bar, built from the free score and warnings only");
     assert.ok(h.includes('"lim":["mint_authority","freeze_authority","mint_function","holders","liquidity","age","dead_token"]'), "page config carries the free check list");
     assert.ok(Buffer.byteLength(h) < 58_400, `page ${Buffer.byteLength(h)} bytes`);
