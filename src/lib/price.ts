@@ -376,3 +376,9 @@ export const PRICE_SYMBOLS = Object.keys(SYMBOLS);
 export const PRICE_CHAINS = [...Object.keys(CHAINS), "solana"];
 
 export const EVM_CHAINS = Object.keys(CHAINS) as ChainKey[];
+
+/** Resolve a curated ticker (ETH, USDC, …) to the default EVM chain + contract used by /price. */
+export function evmSymbol(token: string): { chain: ChainKey; address: Address } | undefined {
+  const s = SYMBOLS[token.trim().toUpperCase().replace(/^\$/, "")];
+  return s ? { chain: s.chain, address: s.address } : undefined;
+}

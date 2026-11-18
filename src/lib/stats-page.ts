@@ -9,6 +9,7 @@ const FRIENDLY: Record<string, string> = {
   "/balance": "Wallet balance",
   "/tx": "Transaction lookup",
   "/gas": "Gas fees",
+  "/token": "Token metadata",
 };
 const TZ = "America/Los_Angeles";
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);

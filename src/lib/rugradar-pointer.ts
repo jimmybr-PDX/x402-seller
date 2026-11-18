@@ -13,7 +13,7 @@ export const POINTER_PATHS = new Set(["/report", "/search", "/balance", "/watch"
 /** Paid JSON/402 responses that may include an optional see_also hint. */
 export const SEE_ALSO_PATHS = new Set([
   "/report", "/read", "/check", "/news", "/price", "/solana-price",
-  "/balance", "/tx", "/gas", "/search", "/watch",
+  "/balance", "/tx", "/gas", "/token", "/search", "/watch",
 ]);
 
 /** Same check RugRadar's landing page uses before auto-filling ?token=. */

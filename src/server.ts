@@ -14,6 +14,7 @@ import { RUG_EDGE_SHORT } from "./lib/rug-extra.js";
  *   GET /tx?hash=             transaction status + decoded token transfers (EVM chains or Solana)
  *   GET|POST /search?q=&n=    web search: top results + cleaned page text (Serper if SERPER_API_KEY, then Brave, DuckDuckGo, Bing, Wikipedia)
  *   GET /gas                  live gas / priority fees + USD cost per tx type (EVM chains + Solana)
+ *   GET /token?token=         ERC-20 / SPL metadata: name, symbol, decimals, supply, chain (public RPC)
  *
  * Buyers are only charged on HTTP 2xx: @x402/express skips settlement when the handler
  * answers >= 400, so bad input, no sources, or an unreachable target cost nothing.
@@ -45,6 +46,7 @@ import { checkX402Endpoint } from "./lib/check.js";
 import { webSearch } from "./lib/search.js";
 import { newsSearch, newsStatus, warmNews } from "./lib/news.js";
 import { PRICE_CHAINS, PRICE_SYMBOLS, PriceInputError, tokenPrice } from "./lib/price.js";
+import { TokenInputError, tokenInfo } from "./lib/token.js";
 import { SOLANA_PRICE_SYMBOLS, SolanaInputError, solanaTokenPrice, rpc as solRpc } from "./lib/solana.js";
 import { WalletInputError, walletBalances } from "./lib/wallet.js";
 import { TxInputError, txLookup } from "./lib/tx.js";
@@ -86,6 +88,7 @@ const SOL_PRICE = process.env.SOL_PRICE ?? "$0.002";
 const BALANCE_PRICE = process.env.BALANCE_PRICE ?? "$0.003";
 const TX_PRICE = process.env.TX_PRICE ?? "$0.003";
 const GAS_PRICE = process.env.GAS_PRICE ?? "$0.001";
+const TOKEN_META_PRICE = process.env.TOKEN_META_PRICE ?? "$0.001";
 const SEARCH_PRICE = process.env.SEARCH_PRICE ?? "$0.01";
 const RUG_PRICE = process.env.RUG_PRICE ?? "$0.01";
 // Measured end-to-end gap between a paid x402 RugRadar call and a credit-key call (seconds); null until measured.
@@ -174,6 +177,7 @@ const PAID = {
   "/balance": BALANCE_PRICE,
   "/tx": TX_PRICE,
   "/gas": GAS_PRICE,
+  "/token": TOKEN_META_PRICE,
   "/search": SEARCH_PRICE,
   "/rug-check": RUG_PRICE,
   "/token-safety": RUG_PRICE,
@@ -568,6 +572,20 @@ async function main() {
     "generatedAt": "2026-10-06T07:03:03.088Z",
     "cached": false,
     "latencyMs": 940,
+  };
+
+  const tokenExample = {
+    token: { name: "USD Coin", symbol: "USDC", address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", mint: null, decimals: 6, chain: "ethereum", kind: "erc20" },
+    totalSupply: 42500000000,
+    totalSupplyRaw: "42500000000000000",
+    explorer: "https://etherscan.io/address/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    method: "ERC-20 name/symbol/decimals/totalSupply from public RPC",
+    supplyNote: "totalSupply is the amount on this chain only, not the asset's global supply",
+    alsoDeployedOn: ["base", "arbitrum", "polygon"],
+    note: "Also found on base, arbitrum, polygon. Pass chain= to pick one.",
+    generatedAt: "2026-11-17T20:00:00.000Z",
+    cached: false,
+    latencyMs: 180,
   };
 
   const searchExample = {"query": "best open source vector database", "n": 3, "count": 3, "results": [{"rank": 1, "title": "We Tried and Tested 10 Best Vector Databases for RAG Pipelines - ZenML Blog", "url": "https://www.zenml.io/blog/vector-databases-for-rag", "domain": "zenml.io", "snippet": "Milvus is a highly scalable, open-source vector database. Built with a cloud-native, distributed architecture that separates compute and storage, Milvus can sca", "published": "2025-10-01T00:00:00.000Z", "text": "On this pageThe choice of Vector database for RAG pipelines can make or break your agent’s core paradigm.\nA well-chosen vector store recalls relevant documents with low query latency, and a poor choice can slow down responses and cause…"}, {"rank": 2, "title": "r/MachineLearning on Reddit: What's the best Vector DB? What's new in vector db and how is one better than other? [D]", "url": "https://www.reddit.com/r/MachineLearning/comments/1ijxrqj/whats_the_best_vector_db_whats_new_in_vector_db/", "domain": "reddit.com", "snippet": "Wow, all the answers here are good answers (yep, those are vector databases), but there's no context or reasoning besides u/electric_hotdog2k 's suggestion of M", "published": null, "text": null}, {"rank": 3, "title": "Milvus | High-Performance Vector Database Built for Scale", "url": "https://milvus.io/", "domain": "milvus.io", "snippet": "Based on our research, Milvus was selected as the vector database of choice (over Chroma and Pinecone). Milvus is an open-source vector database designed specif", "published": null, "text": null}], "source": "brave", "pages_loaded": 1, "fetched_at": "2026-10-07T17:01:23.760Z", "latencyMs": 1031};
@@ -1275,6 +1293,44 @@ async function main() {
         }),
       },
     },
+    "GET /token": {
+      accepts: accept(TOKEN_META_PRICE),
+      description:
+        `Token metadata: name, symbol, decimals, total supply and chain for any ERC-20 or Solana mint, read from public RPC (Ethereum, Base, Arbitrum, Polygon, Solana). Pass token (ETH, USDC, JUP, or a contract/mint). Works even when /price has no deep pool. Optional chain=. ${perCall(TOKEN_META_PRICE)}`,
+      mimeType: "application/json",
+      serviceName: "Token Metadata",
+      tags: ["token metadata", "token decimals", "token supply", "erc-20 metadata", "spl token info"],
+      iconUrl: ICON_URL,
+      extensions: {
+        ...declareDiscoveryExtension({
+          input: { token: "USDC" },
+          inputSchema: {
+            properties: {
+              token: { type: "string", minLength: 1, maxLength: 44, description: "Symbol (ETH, USDC, JUP, BONK, …), 0x ERC-20 address, or Solana mint" },
+              chain: { type: "string", enum: ["ethereum", "base", "arbitrum", "polygon", "solana"], description: "Optional; auto-detected for addresses. Symbols use their default chain." },
+            },
+            required: ["token"],
+          },
+          output: {
+            example: tokenExample,
+            schema: {
+              properties: {
+                token: { type: "object", properties: { name: { type: ["string", "null"] }, symbol: { type: ["string", "null"] }, address: { type: ["string", "null"] }, mint: { type: ["string", "null"] }, decimals: { type: "integer" }, chain: { type: "string" }, kind: { type: "string", enum: ["erc20", "spl", "native"] } }, required: ["decimals", "chain", "kind"] },
+                totalSupply: { type: ["number", "null"], description: "On-chain total supply for this chain; null for native coins" },
+                totalSupplyRaw: { type: ["string", "null"] },
+                explorer: { type: "string" },
+                method: { type: "string" },
+                supplyNote: { type: "string" },
+                alsoDeployedOn: { type: "array", items: { type: "string" } },
+                note: { type: "string" },
+                generatedAt: { type: "string" },
+              },
+              required: ["token", "totalSupply", "explorer", "generatedAt"],
+            },
+          },
+        }),
+      },
+    },
   };
   for (const [k, r] of Object.entries(routes)) if (r.description.length > 500) console.warn(`description too long (${r.description.length}) for ${k}`);
 
@@ -1477,7 +1533,7 @@ async function main() {
       res.type("text/plain").send(llmsTxt());
       return;
     }
-    res.json({ name: SERVICE_NAME, description: `Pay-per-call research and onchain data tools for AI agents over x402 (${ON_NETWORKS}): cited research briefs, URL to markdown, news search, token prices (EVM + Solana), wallet balances, transaction lookup, gas prices, x402 endpoint checks, RugRadar rug/honeypot/token-safety checks.`, docs: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json`, resources: catalog() });
+    res.json({ name: SERVICE_NAME, description: `Pay-per-call research and onchain data tools for AI agents over x402 (${ON_NETWORKS}): cited research briefs, URL to markdown, news search, token prices (EVM + Solana), token metadata, wallet balances, transaction lookup, gas prices, x402 endpoint checks, RugRadar rug/honeypot/token-safety checks.`, docs: `${PUBLIC_URL}/llms.txt`, openapi: `${PUBLIC_URL}/openapi.json`, resources: catalog() });
   });
 
   const llmsTxt = () =>
@@ -1499,6 +1555,7 @@ async function main() {
       `- GET ${PUBLIC_URL}/balance?address=<0x|name.eth|solana address>  (${BALANCE_PRICE}) — wallet balance: native + major tokens with USD values on ethereum, base, arbitrum, polygon (all in one call) or Solana. Optional chain=, tokens=<comma-separated contracts or mints>.`,
       `- GET ${PUBLIC_URL}/tx?hash=<0x hash|solana signature>  (${TX_PRICE}) — transaction lookup: status, block time, from/to, method, fee in USD, decoded token transfers (EVM chains auto-detected) or SOL/token balance changes (Solana). Optional chain=.`,
       `- GET ${PUBLIC_URL}/gas  (${GAS_PRICE}) — gas price tracker: base fee, slow/standard/fast priority fees, USD cost of a transfer, ERC-20 transfer and swap on ethereum, base, arbitrum, polygon + Solana priority fees. Optional chain=.`,
+      `- GET ${PUBLIC_URL}/token?token=<symbol|address|mint>  (${TOKEN_META_PRICE}) — token metadata: name, symbol, decimals, total supply and chain from public RPC (ethereum, base, arbitrum, polygon, solana). No DEX pool required. Optional chain=. Failed calls free.`,
       `- GET ${PUBLIC_URL}/rug-check?token=<mint|0x>  (${RUG_PRICE}) — RugRadar Solana rug check / rug pull checker (also BNB, Base, Ethereum, Arbitrum via chain=): 0-100 risk score, plain reasons, buyer summary, and 45+ data points (dev sold %, snipers, bundles, live can-you-sell, creator history). Alias: mint=. Heuristic; not financial advice. Failed calls free.`,
       `- GET ${PUBLIC_URL}/token-safety?token=<mint|0x>  (${RUG_PRICE}) — same RugRadar engine as /rug-check, listed for token safety / memecoin safety / honeypot search terms. Optional chain=.`,
       `- GET ${PUBLIC_URL}/honeypot-check?token=<mint|0x>  (${RUG_PRICE}) — honeypot check: can I sell this token? Simulated buy/sell + tax on EVM; live sell quote + freeze authority on Solana. Optional chain=.`,
@@ -1527,7 +1584,7 @@ async function main() {
   app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt()));
 
   app.get("/robots.txt", (_req, res) => {
-    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", "Disallow: /solana-price", "Disallow: /balance", "Disallow: /tx", "Disallow: /gas", "Disallow: /search", "Disallow: /rug-check", "Disallow: /token-safety", "Disallow: /honeypot-check", "Disallow: /credits/", "Disallow: /mcp", "Disallow: /rugradar/api/", `Sitemap: ${PUBLIC_URL}/sitemap.xml`, ""].join("\n"));
+    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", "Disallow: /solana-price", "Disallow: /balance", "Disallow: /tx", "Disallow: /gas", "Disallow: /token", "Disallow: /search", "Disallow: /rug-check", "Disallow: /token-safety", "Disallow: /honeypot-check", "Disallow: /credits/", "Disallow: /mcp", "Disallow: /rugradar/api/", `Sitemap: ${PUBLIC_URL}/sitemap.xml`, ""].join("\n"));
   });
 
   const ICON_PNG = (() => { try { return fs.readFileSync(path.join(__dirname, "assets", "icon.png")); } catch { return null; } })();
@@ -1565,7 +1622,7 @@ async function main() {
   const wellKnown = () => ({
     version: 1,
     name: SERVICE_NAME,
-    description: `Pay-per-call research and onchain data tools for AI agents: cited research briefs, URL to markdown, news search, token prices (EVM + Solana), wallet balances, transaction lookup, gas prices, x402 endpoint checks, RugRadar rug/honeypot/token-safety checks. ${ON_NETWORKS} via x402.`,
+    description: `Pay-per-call research and onchain data tools for AI agents: cited research briefs, URL to markdown, news search, token prices (EVM + Solana), token metadata, wallet balances, transaction lookup, gas prices, x402 endpoint checks, RugRadar rug/honeypot/token-safety checks. ${ON_NETWORKS} via x402.`,
     resources: catalog().map((c) => c.url),
     items: catalog(),
     network: NETWORKS[0],
@@ -1616,7 +1673,7 @@ async function main() {
         version: "2.0.0",
         description: `Pay-per-call research, onchain data, and RugRadar token-safety tools for AI agents over x402 (${ON_NETWORKS}). ` + ERRORS_DOC,
         "x-guidance":
-          "Use /report for a cited answer to a question, /read to turn a known URL into markdown, /search for web search results with page text, /news for recent headlines on a topic, /price or /solana-price for a verifiable onchain token price (+24h change on EVM), /balance for wallet holdings, /tx to check or decode a transaction, /gas for current fees, /check to validate an x402 endpoint, /rug-check /token-safety /honeypot-check for a 0-100 token risk score (RugRadar). Call without payment to get the 402 challenge, then retry with PAYMENT-SIGNATURE.",
+          "Use /report for a cited answer to a question, /read to turn a known URL into markdown, /search for web search results with page text, /news for recent headlines on a topic, /price or /solana-price for a verifiable onchain token price (+24h change on EVM), /balance for wallet holdings, /tx to check or decode a transaction, /gas for current fees, /token for name/symbol/decimals/supply, /check to validate an x402 endpoint, /rug-check /token-safety /honeypot-check for a 0-100 token risk score (RugRadar). Call without payment to get the 402 challenge, then retry with PAYMENT-SIGNATURE.",
       },
       servers: [{ url: PUBLIC_URL }],
       paths: {
@@ -1751,6 +1808,20 @@ async function main() {
             parameters: [qp("chain", { type: "string", enum: ["all", "ethereum", "base", "arbitrum", "polygon", "solana"] }, false, "Default all")],
             ...pay(GAS_PRICE),
             responses: { "200": { description: "Fees", content: { "application/json": { schema: r["GET /gas"].extensions.bazaar.schema.properties.output.properties.example, example: gasExample } } }, ...errs },
+          },
+        },
+        "/token": {
+          get: {
+            operationId: "tokenMetadata",
+            summary: "Token metadata: name, symbol, decimals, total supply, chain",
+            description: r["GET /token"].description,
+            tags: ["Crypto"],
+            parameters: [
+              qp("token", { type: "string", minLength: 1, maxLength: 44 }, true, "Symbol, 0x ERC-20 address, or Solana mint"),
+              qp("chain", { type: "string", enum: ["ethereum", "base", "arbitrum", "polygon", "solana"] }, false, "Optional; auto-detected for addresses"),
+            ],
+            ...pay(TOKEN_META_PRICE),
+            responses: { "200": { description: "Metadata", content: { "application/json": { schema: r["GET /token"].extensions.bazaar.schema.properties.output.properties.example, example: tokenExample } } }, ...errs },
           },
         },
         "/rug-check": {
@@ -2047,6 +2118,19 @@ async function main() {
     "/gas",
     onchainHandler(async (req) => gasNow(qs(req.query.chain) || undefined), [GasInputError], "Public RPC nodes did not answer", true),
   );
+  app.get(
+    "/token",
+    onchainHandler(
+      async (req) => {
+        const token = qs(req.query.token);
+        if (!token || token.length > 44) throw new TokenInputError("token is required (symbol, 0x ERC-20 address, or Solana mint)");
+        return tokenInfo(token, qs(req.query.chain) || undefined);
+      },
+      [TokenInputError],
+      "Public RPC nodes did not answer",
+      true,
+    ),
+  );
 
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     if ((err as { type?: string })?.type === "entity.parse.failed") {
@@ -2072,7 +2156,7 @@ async function main() {
     startSales({ evm: [PAY_TO_EVM, RUG_PAY_TO_EVM], svm: [PAY_TO_SVM, RUG_PAY_TO_SVM] }, PUBLIC_URL);
     warmNews();
     console.log(`x402 seller listening on http://localhost:${PORT}  env=${X402_ENV} networks=${NETWORKS.join(",")} (${NETWORK_LABEL})`);
-    console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}, /news ${NEWS_PRICE}, /price ${TOKEN_PRICE}, /solana-price ${SOL_PRICE}, /balance ${BALANCE_PRICE}, /tx ${TX_PRICE}, /gas ${GAS_PRICE}, /search ${SEARCH_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}${Object.keys(builderCode).length ? ` builderCode=${BUILDER_CODE_RAW}` : ""}`);
+    console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}, /news ${NEWS_PRICE}, /price ${TOKEN_PRICE}, /solana-price ${SOL_PRICE}, /balance ${BALANCE_PRICE}, /tx ${TX_PRICE}, /gas ${GAS_PRICE}, /token ${TOKEN_META_PRICE}, /search ${SEARCH_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}${Object.keys(builderCode).length ? ` builderCode=${BUILDER_CODE_RAW}` : ""}`);
   });
   // Render's proxy reuses idle connections; Node's 5 s default closes them first and some requests hang. Keep them open longer than the proxy.
   httpServer.keepAliveTimeout = 65_000; httpServer.headersTimeout = 66_000;
