@@ -67,7 +67,7 @@ ${LOGO ? `<image href="${LOGO}" x="32" y="30" width="40" height="40"/>` : ""}<te
 <text x="222" y="226" font-size="40" font-weight="700" fill="${c}">${v.label}</text><text x="222" y="258" font-size="19" fill="#C9D1E0">${sub}</text>
 ${v.facts.length ? `<text x="222" y="290" font-size="17" fill="#9AA4B8">${esc(v.facts.slice(0, 2).join(" \u00b7 "))}</text>${v.facts[2] ? `<text x="222" y="314" font-size="17" fill="#9AA4B8">${esc(v.facts[2])}</text>` : ""}` : ""}
 ${rows}${tail ? `<text x="32" y="${Math.min(y + 16, 560)}" font-size="17" font-weight="700" fill="#38BDF8">${esc(tail)}</text>` : ""}
-<text x="32" y="580" font-size="14" fill="#6f7990">Not a guarantee</text><text x="568" y="580" font-size="15" font-weight="700" fill="#9AA4B8" text-anchor="end">${esc(host)}/rugradar</text>
+<text x="32" y="580" font-size="14" fill="#6f7990">Danger warnings only</text><text x="568" y="580" font-size="15" font-weight="700" fill="#9AA4B8" text-anchor="end">${esc(host)}/rugradar</text>
 </svg>`;
 }
 

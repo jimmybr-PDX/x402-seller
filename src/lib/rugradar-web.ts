@@ -346,7 +346,7 @@ function socials(j){const raw=Array.isArray(j.socialLinks)?j.socialLinks:(j.buye
  row.title='Links set by the token creator';const fb=el('div','socfb',have.join(' \u00b7 '));if(miss.length){if(have.length)fb.append(' \u00b7 ');fb.append(el('span','miss',miss.join(', ')+' missing'))}
  w.append(row,fb);return w}
 function gauge(lv,score){const g=el('div','gauge g-'+lv);g.style.setProperty('--p',lv==='low'?100:Math.max(4,Math.min(100,score)));const i=el('i',null,String(score));i.append(el('small',null,'/100'));g.append(i);return g}
-const VT={high:['HIGH RISK','Strong rug warning signs.'],medium:['CAUTION','Some rug warning signs.'],low:['LOW RISK','No danger warnings found. Not a guarantee.']};
+const VT={high:['HIGH RISK','Strong rug warning signs.'],medium:['CAUTION','Some rug warning signs.'],low:['LOW RISK','No danger warnings found.']};
 function shownLevel(j,ws){const l=VT[j.riskLevel]?j.riskLevel:'medium';if(l!=='low'||!ws.length)return l;return ws.some(w=>w.d)?'high':'medium'}
 function verdictBox(j,ws){const lv=shownLevel(j,ws),s=Number(j.riskScore)||0,v=el('div','verdict v-'+lv),t=el('div');
  t.append(el('div','vt '+lv,VT[lv][0]),el('div','vl',VT[lv][1]));if(j.report!=='limited')t.append(el('div','vtrust','Full report.'));else t.append(el('div','vtrust','Danger warnings only · based on public on-chain data'));v.append(gauge(lv,s),t);return v}
@@ -379,7 +379,7 @@ function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings
   if(Array.isArray(j.checks)){const fr=rrFree(j.checks,CFG.lim,CFG.warn);c.append(shareBar({riskScore:fr.sc,riskLevel:fr.lv,token:j.token,chain:j.chain,facts:fa},fr.ws))}}
  if(j.liveReport){const h=el('div');c.append(h);liveLoad().then(()=>{const b=window.RRLive(j);if(b)h.append(b)}).catch(()=>{})}
  const mo=el('details','quiet');mo.id='more';mo.append(el('summary',null,'More'));const ws2=el('div','sub soon');ws2.append(el('span',null,'\u{1F514} Watch token: coming soon'));mo.append(ws2);c.append(mo);
- c.append(el('div','disc','Danger warnings only. Not a guarantee, not financial advice.'));out.append(c)}
+ c.append(el('div','disc','Danger warnings only \u00b7 based on public on-chain data. Not financial advice.'));out.append(c)}
 function waitCard(){out.textContent='';const c=el('div','card res'),v=el('div','verdict'),t=el('div');t.append(el('div','vt','Checking\u2026'),el('div','vl','Usually a few seconds.'));v.append(gauge('wait',0),t);v.querySelector('i').firstChild.textContent='\u2026';c.append(v);out.append(c)}
 function msgCard(text,lock,note){out.textContent='';const c=el('div','card res');c.append(el('p',null,text));if(lock)c.append(lockedPanel(note));out.append(c)}
 async function chainFor(t){const c=$('chain').value;if(c!=='auto')return c;if(!t.startsWith('0x'))return 'solana';try{const r=await fetch('/rugradar/api/chain?token='+encodeURIComponent(t));const j=await r.json();return j.chain||'base'}catch(e){return 'base'}}
@@ -414,7 +414,7 @@ function page(d: WebDeps, promo = false) {
     ["Is RugRadar free?", `People get ${FC} ${promo ? "The free full report includes the live chart, dev and sniper wallets, biggest buys and sells and the sell test." : "The free check gives a 0-100 risk score with plain danger warnings and basic checks only; the full report adds the live chart, dev and sniper wallets, biggest buys and sells and the sell test."} Prepaid credits cost $${p} per full report (buy 1 to 1,000). Agents pay $${p} per call via x402 or use a credit key.`],
     ["Which chains does the rug check support?", "Solana (including pump.fun tokens), BNB Chain (four.meme), Base, Ethereum and Arbitrum. Chain is detected from the address."],
     ["What does the full report add?", "More danger warnings that free checkers usually miss, in plain words, plus a can-you-sell result."],
-    ["Is a low score a guarantee?", `No. ${DISCLAIMER}`],
+    ["What does a low score mean?", `No danger warnings were found in public on-chain data. Danger warnings only \u00b7 based on public on-chain data. ${DISCLAIMER}`],
   ];
   const ld = [
     { "@context": "https://schema.org", "@type": "SoftwareApplication", name: "RugRadar", applicationCategory: "FinanceApplication", operatingSystem: "Web", url: `${U}/rugradar`, image: `${U}/rugradar/rug-radar-512.png`,
@@ -454,8 +454,8 @@ ${CSS_PAGE}</style></head><body><div class="wrap">
 </section></aside>
 </div>
 ${devSection(U, p)}
-<details class="fold"><summary>How RugRadar works</summary><p class="mut">We turn public on-chain and market data into a 0-100 risk score with plain danger warnings. Danger warnings only: a low score is not a guarantee.</p>${faq.map(([q, a]) => `<h3 style="font-size:15px;margin:12px 0 2px">${q}</h3><p class="mut" style="margin:0">${a}</p>`).join("")}</details>
-<footer>RugRadar \u00b7 ${DISCLAIMER} Danger warnings only, never a guarantee; it never labels people.</footer>
+<details class="fold"><summary>How RugRadar works</summary><p class="mut">We turn public on-chain and market data into a 0-100 risk score with plain danger warnings. Danger warnings only \u00b7 based on public on-chain data.</p>${faq.map(([q, a]) => `<h3 style="font-size:15px;margin:12px 0 2px">${q}</h3><p class="mut" style="margin:0">${a}</p>`).join("")}</details>
+<footer>RugRadar \u00b7 ${DISCLAIMER} Danger warnings only \u00b7 based on public on-chain data; it never labels people.</footer>
 </div>
 <script>const CFG=${json(cfg)};
 ${PAGE_JS}${swapJs}
@@ -475,7 +475,7 @@ export function agentSnippets(U: string) {
     credits: `# buy 10 credits once (x402, $0.10) -> {"key":"rr_..."}; or buy with Phantom/Solflare on this page\ncurl -s -H "X-RugRadar-Key: rr_YOURKEY" "${U}/rug-check?token=${EXAMPLE_MINT}"\ncurl -s -H "X-RugRadar-Key: rr_YOURKEY" ${U}/credits/balance\n# 24h watch with credits (5 credits):\ncurl -s -X POST ${U}/rugradar/watch -H "X-RugRadar-Key: rr_YOURKEY" \\\n  -H 'content-type: application/json' -d '{"token":"<mint>","hours":"24","webhook":"https://you.example/hook"}'`,
     node: `const crypto = require("crypto");\n// raw = exact request body string, header = X-RugRadar-Signature, secret = whsec_... from the watch\nfunction verify(raw, header, secret) {\n  const m = /^t=(\\d+),v1=([0-9a-f]{64})$/.exec(header || ""); if (!m) return false;\n  if (Math.abs(Date.now() / 1000 - Number(m[1])) > 300) return false;\n  const want = crypto.createHmac("sha256", secret).update(m[1] + "." + raw).digest();\n  return crypto.timingSafeEqual(want, Buffer.from(m[2], "hex"));\n}`,
     embed: `<iframe src="${U}/rugradar/embed?token=<mint or 0x address>" width="380" height="420" style="border:0;max-width:100%" loading="lazy" title="RugRadar token risk"></iframe>`,
-    embedJson: `curl -s "${U}/rugradar/embed.json?token=${EXAMPLE_MINT}"\n# -> {"riskScore":0,"riskLevel":"low","verdict":"No danger warnings found. Not a guarantee.","warnings":[...],"report":"${U}/rugradar?token=..."}`,
+    embedJson: `curl -s "${U}/rugradar/embed.json?token=${EXAMPLE_MINT}"\n# -> {"riskScore":0,"riskLevel":"low","verdict":"No danger warnings found.","warnings":[...],"report":"${U}/rugradar?token=..."}`,
     python: `import hmac, hashlib, re, time\ndef verify(raw: bytes, header: str, secret: str) -> bool:\n    m = re.fullmatch(r"t=(\\d+),v1=([0-9a-f]{64})", header or "")\n    if not m or abs(time.time() - int(m[1])) > 300: return False\n    want = hmac.new(secret.encode(), m[1].encode() + b"." + raw, hashlib.sha256).hexdigest()\n    return hmac.compare_digest(want, m[2])`,
   };
 }
@@ -518,7 +518,7 @@ curl -s -H "X-RugRadar-Key: rr_YOURKEY" "${U}/rug-check?token=${DEV_MINT}"`;
 
 // ---------- embed card + JSON (free check data, danger warnings only) ----------
 const escA = (t: unknown) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-const VERDICT: Record<string, [string, string]> = { high: ["HIGH RISK", "Strong rug warning signs."], medium: ["CAUTION", "Some rug warning signs."], low: ["LOW RISK", "No danger warnings found. Not a guarantee."] };
+const VERDICT: Record<string, [string, string]> = { high: ["HIGH RISK", "Strong rug warning signs."], medium: ["CAUTION", "Some rug warning signs."], low: ["LOW RISK", "No danger warnings found."] };
 export type EmbedData = { product: "RugRadar"; report: "free"; token: string; chain: string; riskScore: number; riskLevel: string; label: string; verdict: string; warnings: { severity: string; title: string; line: string }[]; moreWarnings: number; reportUrl: string; disclaimer: string; generatedAt: string };
 const embedCache = new Map<string, { at: number; v: EmbedData }>();
 let embedBusy = 0;
@@ -535,7 +535,7 @@ export async function embedData(d: WebDeps, token: string, chain: string): Promi
     const ws = warningsOf(l.checks), lv = shownLevel(l.riskLevel, ws), verdict = VERDICT[lv]![1];
     const v: EmbedData = { product: "RugRadar", report: "free", token, chain, riskScore: l.riskScore, riskLevel: lv, label: VERDICT[lv]![0], verdict,
       warnings: ws.slice(0, 3).map((w) => ({ severity: w.sev, title: w.title, line: w.line })), moreWarnings: Math.max(0, ws.length - 3) + (Number(l.hiddenWarnings) || 0),
-      reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, disclaimer: "Danger warnings only. Not a guarantee, not financial advice.", generatedAt: new Date().toISOString() };
+      reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, disclaimer: "Danger warnings only \u00b7 based on public on-chain data. Not financial advice.", generatedAt: new Date().toISOString() };
     if (!degraded) { embedCache.set(k, { at: Date.now(), v }); primeShare(shareData(l, ws, lv, token, chain)); } if (embedCache.size > 300) embedCache.delete(embedCache.keys().next().value!);
     return v;
   } finally { embedBusy--; }
@@ -558,8 +558,8 @@ function embedHtml(U: string, v: EmbedData | null, msg?: string) {
 <div class="verdict v-${v.riskLevel}"><div class="gauge g-${v.riskLevel}" style="--p:${v.riskLevel === "low" ? 100 : Math.max(4, Math.min(100, v.riskScore))}"><i>${v.riskScore}<small>/100</small></i></div><div><div class="vt ${v.riskLevel}">${v.label}</div><div class="vl">${escA(v.verdict)}</div></div><div class="vfree">Free check: basic warnings only. Full report unlocks more.</div></div>
 ${v.warnings.length ? `<div class="wcards">${v.warnings.map((w) => `<details class="wc ${w.severity === "DANGER" ? "d" : "c"}"><summary><span class="sev ${w.severity === "DANGER" ? "s3" : "s2"}">${w.severity}</span><span class="tt">${escA(w.title)}</span><span class="ch"></span></summary><p>${escA(w.line)}</p></details>`).join("")}</div>` : ""}
 ${v.moreWarnings > 0 ? `<div class="emsg"><b>+${v.moreWarnings} more warning${v.moreWarnings > 1 ? "s" : ""} in the full report</b></div>` : ""}
-<div class="efoot"><a href="${escA(v.reportUrl)}" target="_blank" rel="noopener">Unlock live chart + full report - $0.01 \u203a</a><span class="credit">Not a guarantee \u00b7 <b>RugRadar</b></span></div>`
-    : `<p class="emsg">${escA(msg ?? "Add ?token=<address> to show a RugRadar card.")}</p><div class="efoot"><a href="${U}/rugradar" target="_blank" rel="noopener">Check a token \u203a</a><span class="credit">Not a guarantee \u00b7 <b>RugRadar</b></span></div>`;
+<div class="efoot"><a href="${escA(v.reportUrl)}" target="_blank" rel="noopener">Unlock live chart + full report - $0.01 \u203a</a><span class="credit">Danger warnings only \u00b7 based on public on-chain data \u00b7 <b>RugRadar</b></span></div>`
+    : `<p class="emsg">${escA(msg ?? "Add ?token=<address> to show a RugRadar card.")}</p><div class="efoot"><a href="${U}/rugradar" target="_blank" rel="noopener">Check a token \u203a</a><span class="credit">Danger warnings only \u00b7 based on public on-chain data \u00b7 <b>RugRadar</b></span></div>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>RugRadar token risk card</title>
 <style>${CSS_BASE}
 ${EMBED_CSS}</style></head><body><div class="emb">${body}</div></body></html>`;
@@ -637,7 +637,7 @@ function shareTarget(req: Request): { token: string; chain: string } | null {
 function shareMeta(U: string, token: string, chain: string) {
   const c = cachedShare(chain, token)?.v, nm = c?.name || shortAddr(token);
   const title = escA(noSafe(`${nm}: RugRadar risk ${c ? `${c.score}/100 ${c.label}` : "check"}`));
-  const desc = escA(noSafe(c && c.warnings.length ? c.warnings.map((w) => w.title).join(" \u00b7 ") + ". Free check, not a guarantee." : "0-100 token risk score with plain danger warnings. Free check, not a guarantee."));
+  const desc = escA(noSafe(c && c.warnings.length ? c.warnings.map((w) => w.title).join(" \u00b7 ") + ". Danger warnings only \u00b7 based on public on-chain data." : "0-100 token risk score with plain danger warnings. Danger warnings only \u00b7 based on public on-chain data."));
   const url = escA(`${U}/rugradar?t=${encodeURIComponent(token)}${chain !== "solana" ? `&chain=${chain}` : ""}&s=x`), img = escA(`${U}/rugradar/share/${chain}/${encodeURIComponent(token)}.png`);
   return `<meta property="og:type" content="website"><meta property="og:title" content="${title}"><meta property="og:description" content="${desc}"><meta property="og:url" content="${url}"><meta property="og:image" content="${img}"><meta property="og:image:width" content="600"><meta property="og:image:height" content="600"><meta name="twitter:card" content="summary"><meta name="twitter:title" content="${title}"><meta name="twitter:description" content="${desc}"><meta name="twitter:image" content="${img}"><meta name="twitter:image:alt" content="RugRadar risk score and danger warnings for ${escA(shortAddr(token))}">`;
 }

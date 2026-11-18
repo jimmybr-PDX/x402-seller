@@ -43,7 +43,8 @@ test("v5 page: paste box, Auto chip, free line, credits copy, folded agents with
     const { srv, base } = await start(() => deadFull(), sw);
     try {
       const h = await (await fetch(`${base}/rugradar`)).text();
-      for (const s of ['id="tok"', '<option value="auto">Auto', "Free \u00b7 no sign-up", "Prepaid credits finish checks ~2x faster", "Buy credits: results ~2x faster", "don't wait on a payment for each check (measured ~1.8x faster)", "Strong rug warning signs.", "No danger warnings found. Not a guarantee.", "No socials found", "more warning", 'id="agents"', 'id="developers"', "For developers", "#developers", "/rugradar/embed?token=", "/rugradar/embed.json?token=", "Danger warnings only \u00b7 based on public on-chain data", "Full report also shows: can-you-sell result, dev activity, biggest buys/sells.", "or buy credits to skip the wait", "Checks finish faster with credits \u00b7 buy once, skip the payment wait"]) assert.ok(h.includes(s), s);
+      for (const s of ['id="tok"', '<option value="auto">Auto', "Free \u00b7 no sign-up", "Prepaid credits finish checks ~2x faster", "Buy credits: results ~2x faster", "don't wait on a payment for each check (measured ~1.8x faster)", "Strong rug warning signs.", "No danger warnings found.", "No socials found", "more warning", 'id="agents"', 'id="developers"', "For developers", "#developers", "/rugradar/embed?token=", "/rugradar/embed.json?token=", "Danger warnings only \u00b7 based on public on-chain data", "Full report also shows: can-you-sell result, dev activity, biggest buys/sells.", "or buy credits to skip the wait", "Checks finish faster with credits \u00b7 buy once, skip the payment wait"]) assert.ok(h.includes(s), s);
+      assert.ok(!/guarantee/i.test(h), "page has no guarantee wording");
       assert.equal((h.match(/<select id="chain"/g) ?? []).length, 1, "a single chain chip");
       assert.ok(!/id="watch"|More tools|Watch this token/.test(h), "no Watch feature or paid tool list in this release");
       assert.ok(h.includes("Watch token: coming soon") && h.includes("mo.id='more'"), "static coming-soon note in the More section");
@@ -52,7 +53,7 @@ test("v5 page: paste box, Auto chip, free line, credits copy, folded agents with
       for (const re of PRIVATE) assert.ok(!re.test(visible), `page must not match ${re}`);
       for (const k of ["deployer_history", "known_pattern", "shared_funder"]) assert.ok(!new RegExp(`"${k}":\\[`).test(h), `${k} has no copy on the page`);
       assert.equal(h.includes("Opens swap in your wallet"), sw.enabled, "swap line only ships when the swap is on");
-      assert.ok(Buffer.byteLength(h) < 58_400, `page ${Buffer.byteLength(h)} bytes`);
+      assert.ok(Buffer.byteLength(h) < 59_000, `page ${Buffer.byteLength(h)} bytes`);
       for (const m of h.matchAll(/<script>([\s\S]*?)<\/script>/g)) new Function(m[1]!);
     } finally { srv.closeAllConnections(); srv.close(); }
   }
@@ -65,12 +66,12 @@ test("embed card + JSON: ring, verdict, max 3 collapsed warnings, unlock link, c
     assert.equal(r.status, 200); assert.match(r.headers.get("content-security-policy") ?? "", /frame-ancestors \*/);
     assert.match(h, /class="gauge g-high"/); assert.match(h, /HIGH RISK/); assert.match(h, /Strong rug warning signs\./);
     assert.equal((h.match(/<details class="wc/g) ?? []).length, 3); assert.ok(!/<details[^>]* open/.test(h), "collapsed");
-    assert.match(h, /Unlock live chart \+ full report - \$0\.01 \u203a/); assert.match(h, /Not a guarantee \u00b7 <b>RugRadar<\/b>/); assert.match(h, /width:360px/);
+    assert.match(h, /Unlock live chart \+ full report - \$0\.01 \u203a/); assert.match(h, /Danger warnings only \u00b7 based on public on-chain data \u00b7 <b>RugRadar<\/b>/); assert.match(h, /width:360px/);
     assert.ok(!/<script/i.test(h), "no scripts in the embed"); assert.ok(!/Buy this token|swap/i.test(h));
     for (const re of PRIVATE) assert.ok(!re.test(h), `embed must not match ${re}`);
     const j = await (await fetch(`${base}/rugradar/embed.json?token=${DEAD}`)).json();
     assert.equal(j.riskLevel, "high"); assert.equal(j.riskScore, 60); assert.equal(j.warnings.length, 3); assert.equal(j.warnings[0].title, "Creator can mint more"); assert.match(j.reportUrl, /\/rugradar\?token=DDDv.*&chain=solana$/); assert.equal(j.moreWarnings, 1);
-    const low = await (await fetch(`${base}/rugradar/embed.json?token=${CLEAN}`)).json(); assert.equal(low.verdict, "No danger warnings found. Not a guarantee."); assert.equal(low.warnings.length, 0);
+    const low = await (await fetch(`${base}/rugradar/embed.json?token=${CLEAN}`)).json(); assert.equal(low.verdict, "No danger warnings found."); assert.equal(low.warnings.length, 0); assert.ok(!/guarantee/i.test(JSON.stringify(low))); assert.match(String(low.disclaimer), /Danger warnings only/);
     const evm = await (await fetch(`${base}/rugradar/embed.json?token=0x${"a".repeat(40)}`)).json(); assert.equal(evm.chain, "bnb", "auto-detects the EVM chain");
     assert.equal((await fetch(`${base}/rugradar/embed?token=nope`)).status, 400); assert.equal((await fetch(`${base}/rugradar/embed.json`)).status, 400);
     assert.deepEqual(await (await fetch(`${base}/rugradar/api/chain?token=0x${"b".repeat(40)}`)).json(), { chain: "bnb" });
@@ -135,7 +136,7 @@ test("page ships the share buttons for free AND full results, free-only auto-run
     assert.ok(/if\(j\.report==='limited'&&j\.checks\)\{c\.append\(shareBar\(j,ws\)\)\}/.test(h), "share bar still under the free result");
     assert.ok(/else\{if\(ws\.length>3\)[\s\S]*?if\(Array\.isArray\(j\.checks\)\)\{const fr=rrFree\(j\.checks,CFG\.lim,CFG\.warn\);c\.append\(shareBar\(\{riskScore:fr\.sc,riskLevel:fr\.lv,token:j\.token,chain:j\.chain,facts:fa\},fr\.ws\)\)\}\}/.test(h), "full-report branch shows the share bar, built from the free score and warnings only");
     assert.ok(h.includes('"lim":["mint_authority","freeze_authority","mint_function","holders","liquidity","age","dead_token"]'), "page config carries the free check list");
-    assert.ok(Buffer.byteLength(h) < 58_400, `page ${Buffer.byteLength(h)} bytes`);
+    assert.ok(Buffer.byteLength(h) < 59_000, `page ${Buffer.byteLength(h)} bytes`);
     for (const re of PRIVATE) assert.ok(!re.test(h.replace(SWAP_RULE_JS, "")), `${re}`);
   } finally { srv.closeAllConnections(); srv.close(); }
 });

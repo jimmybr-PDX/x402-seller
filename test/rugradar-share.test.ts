@@ -35,6 +35,6 @@ test("share: per-token page has summary card + per-token image; PNG is cached pe
 test("share card: free data only, never 'safe', no paid signals", () => {
   const l = { riskScore: 30, riskLevel: "medium", hiddenWarnings: 2, facts: { tokenName: "SafeMoon", tokenSymbol: "SAFE", top10Pct: 40, liquidityUsd: 1200, ageHours: 3 } };
   const svg = shareSvg(shareData(l, [{ sev: "DANGER", title: "Thin liquidity" }], "medium", MINT, "solana"), "example.com");
-  assert.ok(!/safe/i.test(svg)); assert.ok(svg.includes("Thin liquidity")); assert.ok(svg.includes("Top 10 hold 40%")); assert.ok(svg.includes("+2 more warnings"));
+  assert.ok(!/safe/i.test(svg)); assert.ok(!/guarantee/i.test(svg)); assert.ok(svg.includes("Danger warnings only")); assert.ok(svg.includes("Thin liquidity")); assert.ok(svg.includes("Top 10 hold 40%")); assert.ok(svg.includes("+2 more warnings"));
   for (const bad of ["Dev sold", "Creator launched", "sniper"]) assert.ok(!svg.includes(bad));
 });
