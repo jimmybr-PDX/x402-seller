@@ -11,3 +11,16 @@ test("sales summary windows and self/top-up filter", () => {
   assert.ok(!isSale("0x4862dac2c03fAA8B36A23D176932945193B04940", 0.01));
   assert.ok(!isSale("0xabc", 5));
 });
+test("sales summary includes mixed-chain payments and still filters self/top-ups", () => {
+  const now = Date.parse("2026-11-17T00:00:00Z");
+  const s = [
+    { at: "2026-11-16T22:00:00Z", from: "3sng11LX", usd: 0.001, tx: "sol1", chain: "solana" as const },
+    { at: "2026-11-16T20:00:00Z", from: "0xa1d1c0cf71", usd: 0.01, tx: "base1", chain: "base" as const },
+    { at: "2026-10-20T00:00:00Z", from: "3sng11LX", usd: 0.001, tx: "old", chain: "solana" as const },
+  ];
+  const r = summarize(s, now);
+  assert.deepEqual(r.last24h, { payments: 2, usd: 0.011, payers: 2 });
+  assert.equal(r.last30d.payments, 3);
+  assert.ok(!isSale("0x4862dac2c03fAA8B36A23D176932945193B04940", 0.01));
+  assert.ok(isSale("3sng11LXu3jeAiHvqcEgpqLnErFDfKyqSz3k2VunT8oS", 0.001));
+});

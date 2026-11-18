@@ -69,8 +69,10 @@ export async function attachCounts(name: string, s: CountsStore, everyMs = 6 * 3
   setInterval(() => void saveCounts(), everyMs).unref();
   schedule();
   // runs before traffic's SIGTERM handler; the store serializes writes, so this commit lands before traffic's final save exits.
-  process.prependListener("SIGTERM", () => void saveCounts());
+  process.prependListener("SIGTERM", onTerm);
 }
 
+function onTerm() { if (timer) { clearTimeout(timer); timer = null; } void saveCounts(); }
+
 /** Tests only. */
-export function _resetCounts() { base = {}; pending = {}; store = null; saving = false; if (timer) clearTimeout(timer); timer = null; status = { store: null, restored: false, lastSavedAt: null }; }
+export function _resetCounts() { base = {}; pending = {}; inflight = {}; store = null; saving = false; if (timer) clearTimeout(timer); timer = null; status = { store: null, restored: false, lastSavedAt: null }; process.removeListener("SIGTERM", onTerm); }

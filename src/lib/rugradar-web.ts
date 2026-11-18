@@ -676,7 +676,7 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     if (!/^0x[0-9a-fA-F]{40}$/.test(t)) { res.json({ chain: "solana" }); return; }
     res.json({ chain: await (d.detectChain ?? detectEvmChain)(t) });
   });
-  app.post("/rugradar/api/check", async (req: Request, res: Response) => {
+  const checkFree = async (req: Request, res: Response) => {
     res.set("Cache-Control", "no-store");
     const token = String(req.query.token ?? "").trim(), chain = String(req.query.chain ?? "solana").toLowerCase();
     if (!CHAINS.includes(chain) || !validToken(token, chain)) { countRugradarRejected("invalidInput"); res.status(400).json({ error: "invalid_input", message: chain === "solana" ? "Paste a Solana mint address (base58, 32-44 chars) or pick an EVM chain for 0x addresses." : "Paste a 0x token contract address (40 hex characters)." }); return; }
@@ -696,7 +696,9 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     }
     try { const lr = limitedReport(await d.rugCheck(token, chain)); primeFromLimited(lr, token, chain); countRugradar("free"); res.json({ ...lr, reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
     catch (e) { refundFree(ip, vid); countRugradarRejected("error"); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
-  });
+  };
+  app.post("/rugradar/api/check", checkFree);
+  app.get("/rugradar/api/check", checkFree); // same handler: some clients and crawlers use GET; count every successful free check once
   // Recent unlocked reports for a credit key. Free to read: never spends a credit or a free check; the key is checked on every call.
   const recentKey = async (req: Request, res: Response): Promise<{ key: string; credits: number } | null> => {
     res.set("Cache-Control", "no-store");

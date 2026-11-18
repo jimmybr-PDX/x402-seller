@@ -2069,7 +2069,7 @@ async function main() {
       write: (docs, msg) => saveDocs(docs, msg),
     }); }).catch(() => {});
     setTimeout(() => jupBackground.run(true, () => startPaper({ rugCheck: (m) => rugCheck(m, "solana"), flagged: flaggedWallets })).catch(() => {}), 20_000); // paper bot yields Jupiter quota to people
-    startSales(PAY_TO_EVM, PUBLIC_URL);
+    startSales({ evm: [PAY_TO_EVM, RUG_PAY_TO_EVM], svm: [PAY_TO_SVM, RUG_PAY_TO_SVM] }, PUBLIC_URL);
     warmNews();
     console.log(`x402 seller listening on http://localhost:${PORT}  env=${X402_ENV} networks=${NETWORKS.join(",")} (${NETWORK_LABEL})`);
     console.log(`  paid: /report ${REPORT_PRICE}, /read ${READ_PRICE}, /check ${CHECK_PRICE}, /news ${NEWS_PRICE}, /price ${TOKEN_PRICE}, /solana-price ${SOL_PRICE}, /balance ${BALANCE_PRICE}, /tx ${TX_PRICE}, /gas ${GAS_PRICE}, /search ${SEARCH_PRICE}; payTo=${payToAddr}${payToSolana ? ` solana=${payToSolana}` : ""}${Object.keys(builderCode).length ? ` builderCode=${BUILDER_CODE_RAW}` : ""}`);
