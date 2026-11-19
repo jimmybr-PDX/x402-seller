@@ -62,7 +62,7 @@ import { registerWalletPay, orderSecret, solUsdPublic, type PayDeps } from "./li
 import { startSales, salesStats } from "./lib/sales.js";
 import { countRugradar, rugradarStats, attachCounts } from "./lib/rugradar-counts.js";
 import { isOwnerKey } from "./lib/credits.js";
-import { classify, recordRejection, recordRequest, startTraffic, trafficStats, attachDurable, type Outcome } from "./lib/traffic.js";
+import { classify, recordRejection, recordRequest, recordPaidPayer, startTraffic, trafficStats, attachDurable, type Outcome } from "./lib/traffic.js";
 import { statsHtml } from "./lib/stats-page.js";
 import { mountTvWebhook } from "./lib/tv-webhook.js";
 import { answerHtml, deleteAnswer, getAnswer, newAnswerId, pinAnswer, saveAnswer } from "./lib/answers.js";
@@ -241,11 +241,15 @@ function circuitOpen(): boolean {
 const SELF_PAYERS = new Set(
   (process.env.SELF_PAYERS ?? "0x4862dac2c03fAA8B36A23D176932945193B04940").toLowerCase().split(",").map((x) => x.trim()).filter(Boolean),
 );
-function isSelfPayer(req: Request, res: Response): boolean {
+function paymentPayer(req: Request, res: Response): string | null {
   const settled = decodeB64Json(res.getHeader("payment-response"))?.payer;
   const sig = decodeB64Json(req.header("payment-signature") ?? req.header("x-payment"));
   const from = settled ?? sig?.payload?.authorization?.from ?? sig?.payload?.permit2Authorization?.from;
-  return typeof from === "string" && SELF_PAYERS.has(from.toLowerCase());
+  return typeof from === "string" && from ? from : null;
+}
+function isSelfPayer(req: Request, res: Response): boolean {
+  const from = paymentPayer(req, res);
+  return !!from && SELF_PAYERS.has(from.toLowerCase());
 }
 
 function decodeB64Json(v: unknown): any {
@@ -302,6 +306,7 @@ async function main() {
           else if (hasPayment && sc >= 400) outcome = "uncharged";
         }
         const selfPayer = paid && hasPayment && isSelfPayer(req, res);
+        if (outcome === "paid200" && !selfPayer) recordPaidPayer(paymentPayer(req, res));
         if (outcome === "paid200" && RUG_PATHS.has(req.path)) countRugradar(selfPayer ? "owner" : "paid");
         if (outcome === "paymentInvalid") {
           const sent = decodeB64Json(req.header("payment-signature") ?? req.header("x-payment")) as Record<string, any> | null;

@@ -7,8 +7,9 @@
  * and never written to disk, so raw IPs are never stored and hashes cannot be linked across days.
  *
  * Memory: ~48 hourly + ~35 daily buckets of small counters, plus today's visitor-hash sets
- * (capped at 20k entries in total), i.e. well under 5 MB. Optional persistence to TRAFFIC_FILE
- * (counts only) every 10 min and on SIGTERM; without a writable disk it stays in memory.
+ * (capped at 20k entries in total) and up to 60 PT-day payer-hash sets (capped at 5k hashes
+ * each), i.e. well under 5 MB in normal use. Optional persistence to TRAFFIC_FILE
+ * (counts and hashed payers only) every 10 min and on SIGTERM; without a writable disk it stays in memory.
  */
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
@@ -34,6 +35,8 @@ const HOURS_KEPT = 48;
 const DAYS_KEPT = 35;
 const MAX_VISITORS_PER_DAY = 20_000;
 const MAX_AGENT_KEYS = 60;
+const PAYER_DAYS_KEPT = 60;
+const MAX_PAYERS_PER_DAY = 5_000;
 
 const zero = (): ByClass => ({ client: 0, crawler: 0, pinger: 0, bot: 0, head: 0, self: 0 });
 const newCounts = (): RouteCounts => ({ requests: zero(), unpaid402: zero(), paid200: 0, settleFailed: 0, paymentInvalid: 0, uncharged: 0, visitors: zero() });
@@ -99,6 +102,7 @@ function uaFamily(u: string): string {
 // ---------- buckets ----------
 const hourKey = (d: Date) => d.toISOString().slice(0, 13) + ":00Z";
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+const ptDay = (d = new Date()) => d.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
 
 function bucket(list: Bucket[], key: string, keep: number): Bucket {
   const last = list[list.length - 1];
@@ -120,6 +124,74 @@ function visitorHash(day: string, ip: string, ua: string): string {
 }
 
 export type Outcome = "unpaid402" | "paid200" | "settleFailed" | "paymentInvalid" | "uncharged" | "ok" | "error";
+
+// ---------- distinct payers (PT day) ----------
+// Successful paid200s excluding self-paid test-wallet payments, bucketed by America/Los_Angeles date.
+// Only sha256(lowercase address)[:16] is kept, so raw wallets are never stored. Sets are unioned
+// when instance files are merged, so a payer seen on two instances still counts once.
+type PayerRow = { paidCalls: number; payers: Set<string> };
+type PayerDaysSaved = Record<string, { paidCalls: number; payers: string[] }>;
+let payerDays: Record<string, PayerRow> = {};
+const hashPayer = (addr: string) => createHash("sha256").update(addr.trim().toLowerCase()).digest("hex").slice(0, 16);
+function trimPayerDays(m: Record<string, PayerRow>, keep = PAYER_DAYS_KEPT) {
+  const ks = Object.keys(m).sort();
+  for (const k of ks.slice(0, Math.max(0, ks.length - keep))) delete m[k];
+}
+export function recordPaidPayer(payer?: string | null): void {
+  trimPayerDays(payerDays);
+  const row = (payerDays[ptDay()] ??= { paidCalls: 0, payers: new Set() });
+  row.paidCalls++;
+  if (typeof payer === "string" && payer.trim()) {
+    const h = hashPayer(payer);
+    if (row.payers.has(h) || row.payers.size < MAX_PAYERS_PER_DAY) row.payers.add(h);
+  }
+}
+function serializePayerDays(m = payerDays): PayerDaysSaved {
+  const out: PayerDaysSaved = {};
+  for (const [k, v] of Object.entries(m)) {
+    if (v.paidCalls || v.payers.size) out[k] = { paidCalls: v.paidCalls, payers: [...v.payers].sort() };
+  }
+  return out;
+}
+function parsePayerDays(raw: unknown): Record<string, PayerRow> {
+  const out: Record<string, PayerRow> = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [k, v] of Object.entries(raw as Record<string, { paidCalls?: unknown; payers?: unknown }>)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(k)) continue;
+    const paidCalls = Math.max(0, Math.floor(Number(v?.paidCalls) || 0));
+    const payers = new Set<string>();
+    if (Array.isArray(v?.payers)) for (const p of v.payers) if (typeof p === "string" && /^[0-9a-f]{16}$/.test(p) && (payers.has(p) || payers.size < MAX_PAYERS_PER_DAY)) payers.add(p);
+    if (paidCalls || payers.size) out[k] = { paidCalls, payers };
+  }
+  return out;
+}
+function addPayerDays(into: Record<string, PayerRow>, from: Record<string, PayerRow>, sign = 1): void {
+  for (const [k, v] of Object.entries(from)) {
+    const t = (into[k] ??= { paidCalls: 0, payers: new Set() });
+    t.paidCalls = Math.max(0, t.paidCalls + sign * v.paidCalls);
+    if (sign >= 0) for (const p of v.payers) { if (t.payers.has(p) || t.payers.size < MAX_PAYERS_PER_DAY) t.payers.add(p); }
+    else for (const p of v.payers) t.payers.delete(p);
+    if (t.paidCalls === 0 && t.payers.size === 0) delete into[k];
+  }
+  trimPayerDays(into);
+}
+function payersBlock() {
+  const datePT = ptDay();
+  const row = (d: string) => {
+    const x = payerDays[d];
+    return { datePT: d, paidCalls: x?.paidCalls ?? 0, distinctPayers: x?.payers.size ?? 0 };
+  };
+  const days = Object.keys(payerDays).sort().map(row);
+  if (!days.some((d) => d.datePT === datePT)) days.push(row(datePT));
+  days.sort((a, b) => (a.datePT < b.datePT ? -1 : 1));
+  return {
+    today: row(datePT),
+    daily: days,
+    note: "Successful paid calls (paid200, excluding self-paid test-wallet payments) per America/Los_Angeles day. Distinct payers are unique hashed wallet addresses; raw addresses are never stored. Counts start when this field was added; earlier days are omitted, except today.",
+  };
+}
+/** Tests only. */
+export function _resetPayerDays() { payerDays = {}; }
 
 /** Record one finished request. `route` is the paid route path, or a free path label. */
 export function recordRequest(route: string, method: string, ua: string, ip: string, outcome: Outcome, paidAttempt: boolean, selfPayer = false): void {
@@ -292,6 +364,7 @@ export function trafficStats(paidRoutes: string[], full = true) {
     persistence: { ...persistence, durable: durableStatus, ...(durableStatus.store ? { note: `durable: each instance saves its own counts every 5 min (when changed) and on shutdown to ${durableStatus.instanceFile} in the ${durableStatus.store}; boot restores traffic.json + other instance files, a refresh 10 min after boot adds what the previous instance saved at shutdown; local file is a fallback` } : {}) },
     last24h: compact(merge(last24), paidRoutes),
     today: { date: dayKey(now), ...compact(merge(today), paidRoutes) },
+    payers: payersBlock(),
   };
   if (!full) return base;
   return {
@@ -354,7 +427,7 @@ export type DurableStore = {
   /** Write/delete (null) documents in one go. */
   write: (docs: Record<string, unknown>, msg: string) => Promise<void>;
 };
-type Doc = { v: 1; savedAt: string; trackingSince: string; hourly: Bucket[]; daily: Bucket[]; rejections: Rejection[]; rejectionReasons: Record<string, number>; instance?: string; final?: boolean };
+type Doc = { v: 1; savedAt: string; trackingSince: string; hourly: Bucket[]; daily: Bucket[]; rejections: Rejection[]; rejectionReasons: Record<string, number>; payerDays?: PayerDaysSaved; instance?: string; final?: boolean };
 const INSTANCE = `${(process.env.RENDER_INSTANCE_ID || os.hostname() || "local").replace(/[^\w.-]/g, "").slice(-24)}-${Date.now().toString(36)}`;
 export const OWN_FILE = `traffic-${INSTANCE}.json`;
 const BASE_FILE = "traffic.json";
@@ -364,7 +437,7 @@ let lastDurableBody = "";
 let restored: Doc = emptyDoc();
 let durableStatus: { store: string | null; instanceFile: string; restoredFrom: string | null; restoredBuckets: number; restoredFiles: number; lastSavedAt: string | null; saves: number; lastRefreshAt: string | null; refreshAdded: number; compacted: number; error?: string } =
   { store: null, instanceFile: OWN_FILE, restoredFrom: null, restoredBuckets: 0, restoredFiles: 0, lastSavedAt: null, saves: 0, lastRefreshAt: null, refreshAdded: 0, compacted: 0 };
-function emptyDoc(): Doc { return { v: 1, savedAt: "", trackingSince: "9999-12-31T00:00:00.000Z", hourly: [], daily: [], rejections: [], rejectionReasons: {} }; }
+function emptyDoc(): Doc { return { v: 1, savedAt: "", trackingSince: "9999-12-31T00:00:00.000Z", hourly: [], daily: [], rejections: [], rejectionReasons: {}, payerDays: {} }; }
 function addCounts(o: RouteCounts, c: Partial<RouteCounts>, sign = 1) {
   const n = (x: unknown) => sign * (Number(x ?? 0) || 0), cl = (x: number) => Math.max(0, x);
   const bc = (a: ByClass, b?: Partial<ByClass>) => { if (b) for (const k of KLASSES) a[k] = cl(a[k] + n(b[k])); };
@@ -391,17 +464,20 @@ const sortB = (l: Bucket[]) => l.sort((x, y) => (x.start < y.start ? -1 : x.star
 /** Sum saved documents into one (pure; exported for tests). */
 export function sumDocs(docs: any[]): Doc {
   const out = emptyDoc();
+  const payers: Record<string, PayerRow> = {};
   for (const j of docs) {
     if (!j || j.v !== 1) continue;
     addBuckets(out.hourly, j.hourly, HOURS_KEPT); addBuckets(out.daily, j.daily, DAYS_KEPT);
     if (Array.isArray(j.rejections)) out.rejections.push(...j.rejections);
     for (const [k, v] of Object.entries((j.rejectionReasons ?? {}) as Record<string, number>)) out.rejectionReasons[k] = (out.rejectionReasons[k] ?? 0) + (Number(v) || 0);
     if (typeof j.trackingSince === "string" && j.trackingSince < out.trackingSince) out.trackingSince = j.trackingSince;
+    if (j.payerDays) addPayerDays(payers, parsePayerDays(j.payerDays));
   }
   sortB(out.hourly); sortB(out.daily);
   while (out.hourly.length > HOURS_KEPT) out.hourly.shift();
   while (out.daily.length > DAYS_KEPT) out.daily.shift();
   out.rejections = out.rejections.sort((x, y) => (x.at < y.at ? -1 : 1)).slice(-REJECTIONS_KEPT);
+  out.payerDays = serializePayerDays(payers);
   return out;
 }
 /** a minus b, floored at 0 (pure). */
@@ -411,6 +487,9 @@ function diffDoc(a: Doc, b: Doc): Doc {
   const seen = new Set(b.rejections.map((r) => JSON.stringify(r)));
   out.rejections = out.rejections.filter((r) => !seen.has(JSON.stringify(r)));
   for (const [k, v] of Object.entries(b.rejectionReasons)) if (out.rejectionReasons[k] !== undefined) out.rejectionReasons[k] = Math.max(0, out.rejectionReasons[k]! - v);
+  const payers = parsePayerDays(out.payerDays);
+  addPayerDays(payers, parsePayerDays(b.payerDays), -1);
+  out.payerDays = serializePayerDays(payers);
   return out;
 }
 /** Add a saved document onto the live counts (exported for tests). Returns how many saved buckets were applied. */
@@ -421,9 +500,10 @@ export function mergeSaved(j: any): number {
   if (Array.isArray(j.rejections)) rejections = [...j.rejections, ...rejections].sort((x, y) => (x.at < y.at ? -1 : 1)).slice(-REJECTIONS_KEPT);
   if (j.rejectionReasons && typeof j.rejectionReasons === "object") for (const [k, v] of Object.entries(j.rejectionReasons as Record<string, number>)) rejectionReasons[k] = (rejectionReasons[k] ?? 0) + (Number(v) || 0);
   if (typeof j.trackingSince === "string" && j.trackingSince < trackingSince) trackingSince = j.trackingSince;
+  if (j.payerDays) addPayerDays(payerDays, parsePayerDays(j.payerDays));
   return n;
 }
-const snapshot = (): Doc => ({ v: 1, savedAt: new Date().toISOString(), trackingSince, hourly, daily, rejections, rejectionReasons });
+const snapshot = (): Doc => ({ v: 1, savedAt: new Date().toISOString(), trackingSince, hourly, daily, rejections, rejectionReasons, payerDays: serializePayerDays() });
 /** Counts made by this instance only (everything minus what was restored). */
 const ownDoc = (final = false): Doc => ({ ...diffDoc(snapshot(), restored), savedAt: new Date().toISOString(), trackingSince: startedAt, instance: INSTANCE, ...(final ? { final: true } : {}) });
 /** Write this instance's own counts if they changed since the last write. Never throws. */
@@ -479,7 +559,7 @@ function save(): void {
   if (persistence.mode !== "file" || !persistence.file) return;
   try {
     const tmp = persistence.file + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify({ v: 1, savedAt: new Date().toISOString(), trackingSince, hourly, daily, rejections, rejectionReasons }));
+    fs.writeFileSync(tmp, JSON.stringify({ v: 1, savedAt: new Date().toISOString(), trackingSince, hourly, daily, rejections, rejectionReasons, payerDays: serializePayerDays() }));
     fs.renameSync(tmp, persistence.file);
     persistence.lastSavedAt = new Date().toISOString();
   } catch (e) {
@@ -512,6 +592,7 @@ export function startTraffic(): void {
           persistence.restoredFrom = j.savedAt ?? null;
           if (Array.isArray(j.rejections)) rejections = j.rejections.slice(-REJECTIONS_KEPT);
           if (j.rejectionReasons && typeof j.rejectionReasons === "object") rejectionReasons = j.rejectionReasons;
+          if (j.payerDays) addPayerDays(payerDays, parsePayerDays(j.payerDays));
           if (daily.length) trackingSince = j.trackingSince ?? `${daily[0]!.start}T00:00:00.000Z`;
         }
       }
