@@ -108,10 +108,10 @@ async function persist(msg: string) {
 /** Fetch the remote and hard-reset the local clone to it (keeping anything this instance still has to push). */
 export async function syncStore(): Promise<void> { await initCredits(); if (mode === "github") await serial(resetToRemote); }
 /** Names of stored JSON documents starting with `prefix` (local clone; call syncStore first for a fresh view). */
-export async function listDocs(prefix: string): Promise<string[]> {
+export async function listDocs(prefix: string, suffix = ".json"): Promise<string[]> {
   await initCredits();
   if (!file) return [];
-  try { return fs.readdirSync(path.dirname(file)).filter((n) => n.startsWith(prefix) && n.endsWith(".json")).sort(); } catch { return []; }
+  try { return fs.readdirSync(path.dirname(file)).filter((n) => n.startsWith(prefix) && n.endsWith(suffix)).sort(); } catch { return []; }
 }
 let pending: NodeJS.Timeout | null = null;
 function persistSoon() {
@@ -212,6 +212,26 @@ export async function saveDocs(docs: Record<string, unknown>, msg: string): Prom
     const names = Object.keys(docs);
     for (const n of names) {
       const body = docs[n] === null ? null : JSON.stringify(docs[n]) + "\n";
+      dirty.set(n, () => { const p = docPath(n); if (body === null) fs.rmSync(p, { force: true }); else fs.writeFileSync(p, body); });
+    }
+    await commitPush(names, msg);
+  });
+}
+
+/** Read a raw document (e.g. JSONL) from the same durable store. */
+export async function loadRaw(name: string, fallback = ""): Promise<string> {
+  await initCredits();
+  if (!file) return fallback;
+  try { const p = docPath(name); return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : fallback; } catch { return fallback; }
+}
+/** Write raw text documents in one commit (JSONL or other); a null value deletes that document. */
+export async function saveStoreFiles(docs: Record<string, string | null>, msg: string): Promise<void> {
+  await initCredits();
+  if (!file) throw new Error("store unavailable");
+  await serial(async () => {
+    const names = Object.keys(docs);
+    for (const n of names) {
+      const body = docs[n];
       dirty.set(n, () => { const p = docPath(n); if (body === null) fs.rmSync(p, { force: true }); else fs.writeFileSync(p, body); });
     }
     await commitPush(names, msg);

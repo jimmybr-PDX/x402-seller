@@ -57,14 +57,14 @@ import { registerRugradarWeb } from "./lib/rugradar-web.js";
 import { createRecent } from "./lib/rugradar-recent.js";
 import { createWatcher, WATCH_PLANS, planOf, type Watch } from "./lib/watch.js";
 import { registerWatchRoutes, watchKeyMiddleware, watchPaidHandler, createWithCredits, watchConfig, type WatchRouteDeps } from "./lib/watch-routes.js";
-import { initCredits, issueKey, issueKeyOnce, isRedeemed, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell , spendN, refundN, loadDoc, saveDoc, saveDocs, listDocs, syncStore } from "./lib/credits.js";
+import { initCredits, issueKey, issueKeyOnce, isRedeemed, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell , spendN, refundN, loadDoc, saveDoc, saveDocs, listDocs, syncStore, loadRaw, saveStoreFiles } from "./lib/credits.js";
 import { registerWalletPay, orderSecret, solUsdPublic, type PayDeps } from "./lib/solpay.js";
 import { startSales, salesStats } from "./lib/sales.js";
 import { countRugradar, rugradarStats, attachCounts } from "./lib/rugradar-counts.js";
 import { isOwnerKey } from "./lib/credits.js";
 import { classify, recordRejection, recordRequest, recordPaidPayer, startTraffic, trafficStats, attachDurable, type Outcome } from "./lib/traffic.js";
 import { statsHtml } from "./lib/stats-page.js";
-import { mountTvWebhook } from "./lib/tv-webhook.js";
+import { mountTvWebhook, attachTvAlerts, holdTvAlerts } from "./lib/tv-webhook.js";
 import { answerHtml, deleteAnswer, getAnswer, newAnswerId, pinAnswer, saveAnswer } from "./lib/answers.js";
 import { POINTER_PATHS, SEE_ALSO_PATHS, pointerPaywallHtml, queryFromUnpaidContext, seeAlsoLine, tokenFromQuery, withSeeAlso } from "./lib/rugradar-pointer.js";
 
@@ -2146,6 +2146,23 @@ async function main() {
     appendPaymentLog({ type: "error", kind: "express_error", message });
     if (!res.headersSent) res.status(502).json({ error: "payment_or_server_error", message });
   });
+
+  // Nov 21: restore TradingView alerts from the RugRadar GitHub store before requests arrive (ids must not reset).
+  const releaseTv = holdTvAlerts();
+  void initCredits().then(() => {
+    if (creditsStatus().store !== "github") return;
+    return attachTvAlerts({
+      name: "private GitHub store (rugradar-credits repo)",
+      load: async () => {
+        await syncStore();
+        const meta = await loadDoc<{ v: 1; nextId: number; savedAt: string; savedThroughId: number } | null>("tv-alerts-meta.json", null);
+        const files: Record<string, string> = {};
+        for (const n of await listDocs("tv-alerts-", ".jsonl")) files[n] = await loadRaw(n);
+        return { meta, files };
+      },
+      write: (docs, msg) => saveStoreFiles(docs, msg),
+    });
+  }).catch(() => {}).finally(releaseTv);
 
   const httpServer = app.listen(PORT, "0.0.0.0", () => {
     startTraffic();
