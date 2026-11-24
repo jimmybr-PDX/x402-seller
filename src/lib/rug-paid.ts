@@ -1,6 +1,6 @@
 /**
  * RugRadar paid-report extras ($0.01 full report, Solana only): live chart pool, dev wallet and sniper/bundle wallet
- * status, biggest buys/sells and a risk summary. Built from data the check already fetched (pump.fun public trades kept
+ * status, biggest buys/sells and a risk summary. Built from data the check already fetched (pump.fun frontend-api-v3 trades kept
  * in a small per-mint stash) plus at most: 1 market lookup (DexScreener, fallback GeckoTerminal), 1 GeckoTerminal trades
  * call for non-pump coins, and 1 getMultipleAccounts RPC call for balances. Cached 10 min per mint, concurrency capped.
  * A failed or slow lookup omits its block (never an error, never a warning, never a charge). Unlabeled wallets only.
@@ -29,6 +29,7 @@ export function stashTrades(mint: string, raw: any[], complete: boolean) {
   if (stash.size > 60) stash.delete(stash.keys().next().value!);
 }
 export function __clearPaid() { stash.clear(); cache.clear(); heliusFailed.clear(); }
+export function __peekStash(mint: string) { return stash.get(mint) ?? null; }
 
 // ---------- lookups ----------
 const poolCache = new Map<string, string>();
@@ -124,7 +125,7 @@ async function build(mint: string, full: any) {
   const st = stash.get(mint) && Date.now() - stash.get(mint)!.at < CACHE_MS ? stash.get(mint)! : null;
   const poolP = findPool(mint).catch(() => null);
   const fillsP: Promise<Fill[] | null> = st?.trades.length ? Promise.resolve(st.trades.map((t) => ({ side: t.k, sol: r2(t.sol, 3), usd: t.usd != null ? r2(t.usd, 2) : null, at: new Date(t.ts).toISOString() }))) : poolP.then((p) => (p ? geckoFills(p) : null)).catch(() => null);
-  // pump.fun's trade API is blocked from Render (HTTP 403): when the stash has no full launch history, read the launch on-chain via Helius (<= 18 credits, cached with the rest).
+  // When frontend-api-v3 did not stash a complete launch history, read the launch on-chain via Helius (<= 18 credits, cached with the rest).
   const fb = !st?.complete && mint.endsWith("pump") ? await heliusLaunchTrades(mint).catch(() => null) : null;
   if (!st?.complete && mint.endsWith("pump") && !fb) heliusFailed.add(mint); else heliusFailed.delete(mint);
   if (heliusFailed.size > 300) heliusFailed.delete(heliusFailed.keys().next().value!);

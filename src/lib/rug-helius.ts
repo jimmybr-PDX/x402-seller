@@ -1,6 +1,6 @@
 /**
  * RugRadar paid report: on-chain launch-trade fallback through Helius (free plan, 1 credit per call).
- * Used only when pump.fun's public trade API gave nothing (it returns HTTP 403 to Render's IP). Reads the OLDEST
+ * Used only when pump.fun's public trade API gave nothing (stash empty or incomplete). Reads the OLDEST
  * signatures of the pump.fun bonding-curve account (<= 3 pages), then the first 15 transactions in ONE batched
  * getTransaction call, and derives buyer wallet / side / SOL / token amount / slot / time. At most 18 credits per
  * uncached check (the caller's per-mint cache makes repeats free). Daily guard: fallback spend over 5,000 credits

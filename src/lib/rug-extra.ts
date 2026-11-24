@@ -1,11 +1,10 @@
 import { jupFetch } from "./jup-gate.js";
 import { stashTrades } from "./rug-paid.js";
-// Buyer-facing extra signals (free sources only): Jupiter token stats + sell quote, pump.fun public trades,
+// Buyer-facing extra signals (free sources only): Jupiter token stats + sell quote, pump.fun frontend-api-v3 trades,
 // mint-account token-2022 extensions, DexScreener socials. Every lookup is time-boxed; failures become unknowns.
 const SOL = "So11111111111111111111111111111111111111112";
 const UA = { "user-agent": "Mozilla/5.0 (RugRadar)", accept: "application/json" };
 let lastWarn = 0;
-const j = (u: string, ms = 3500) => fetch(u, { headers: UA, signal: AbortSignal.timeout(ms) }).then((r) => { if (!r.ok && Date.now() - lastWarn > 5000) { lastWarn = Date.now(); console.warn(`[rug-extra] ${new URL(u).host} HTTP ${r.status}`); } return r.ok ? r.json() : null; }).catch((e) => { if (Date.now() - lastWarn > 5000) { lastWarn = Date.now(); console.warn(`[rug-extra] ${new URL(u).host} ${e?.name ?? "error"}`); } return null; }) as Promise<any>;
 const r2 = (n: number | null | undefined, d = 2) => (n == null || !isFinite(Number(n)) ? null : +Number(n).toFixed(d));
 import { goplusSol, goplusChecks } from "./goplus-sol.js";
 export type Extra = { signals: Record<string, unknown>; checks: { check: string; points: number; detail: string }[]; unknown: string[]; ms: number };
@@ -26,17 +25,60 @@ export async function pumpCurve(mint: string): Promise<{ active: boolean; comple
     return { active: b[48] === 0 && b.readBigUInt64LE(24) > 0n, complete: b[48] === 1 };
   } catch { return null; }
 }
-/** pump.fun public trade history (newest first, 100/page). Reaches launch only for young tokens (<= 400 trades). */
+/** Solana CAIP-2 chain id used by frontend-api-v3.pump.fun. */
+export const PUMP_CHAIN = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+export const pumpTradesUrl = (mint: string, cursor?: string) =>
+  `https://frontend-api-v3.pump.fun/trades/${PUMP_CHAIN}/${mint}?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+
+/** Map a frontend-api-v3 trade onto the shape stashTrades / launch analysis already use.
+ *  amountSol comes from valueNative so WBTC-quoted (and other non-SOL) pools stay in SOL terms. Launch slot is blockId. */
+export function mapPumpV3Trade(t: any): { userAddress: string; type: "buy" | "sell"; baseAmount: number; amountSol: number; amountUsd: number | null; timestamp: string; slotIndexId: string } | null {
+  const addr = typeof t?.trader?.address === "string" ? t.trader.address : "";
+  const side = t?.side === "sell" ? "sell" as const : t?.side === "buy" ? "buy" as const : null;
+  if (!addr || !side) return null;
+  const dec = Number(t?.baseAmount?.decimals);
+  const raw = Number(t?.baseAmount?.raw);
+  const baseAmount = isFinite(raw) ? raw / 10 ** (isFinite(dec) && dec >= 0 ? dec : 0) : 0;
+  const ts = Number(t?.blockTimeMs);
+  if (!isFinite(ts)) return null;
+  return {
+    userAddress: addr, type: side, baseAmount,
+    amountSol: Number(t?.valueNative ?? 0) || 0,
+    amountUsd: t?.valueUsd != null && isFinite(Number(t.valueUsd)) ? Number(t.valueUsd) : null,
+    timestamp: new Date(ts).toISOString(),
+    slotIndexId: String(t?.blockId ?? ""),
+  };
+}
+
+/** One page of pump.fun trades. 4xx returns immediately (no retry). Network / 5xx may retry once. */
+async function pumpTradesPage(url: string, retry: boolean): Promise<{ status: number; body: any } | { status: number; body: null; network: true }> {
+  try {
+    const r = await fetch(url, { headers: UA, signal: AbortSignal.timeout(2500) });
+    if (!r.ok) {
+      if (Date.now() - lastWarn > 5000) { lastWarn = Date.now(); console.warn(`[rug-extra] ${new URL(url).host} HTTP ${r.status}`); }
+      if (r.status >= 500 && retry) { await new Promise((res) => setTimeout(res, 400)); return pumpTradesPage(url, false); }
+      return { status: r.status, body: null };
+    }
+    return { status: r.status, body: await r.json() };
+  } catch (e: any) {
+    if (Date.now() - lastWarn > 5000) { lastWarn = Date.now(); console.warn(`[rug-extra] ${new URL(url).host} ${e?.name ?? "error"}`); }
+    if (retry) { await new Promise((r) => setTimeout(r, 400)); return pumpTradesPage(url, false); }
+    return { status: 0, body: null, network: true };
+  }
+}
+
+/** pump.fun public trade history via frontend-api-v3 (newest first, 100/page, cursor paging). Reaches launch only for young tokens (<= 400 trades). */
 export async function pumpLaunch(mint: string, dev: string | null, supply: number) {
-  const trades: any[] = []; let cursor = ""; let complete = false;
+  const trades: NonNullable<ReturnType<typeof mapPumpV3Trade>>[] = []; let cursor = ""; let complete = false;
   for (let p = 0; p < 4; p++) {
-    const u = `https://swap-api.pump.fun/v2/coins/${mint}/trades?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
-    let d = await j(u, 2500);
-    if (!d?.trades) { await new Promise((r) => setTimeout(r, 400)); d = await j(u, 2500); } // free API sometimes rate-limits Render: one quick retry
-    if (!d?.trades) return null;
-    trades.push(...d.trades);
-    if (!d.pagination?.hasMore) { complete = true; break; }
-    cursor = d.pagination.nextCursor;
+    const u = pumpTradesUrl(mint, cursor || undefined);
+    const d = await pumpTradesPage(u, true);
+    if (d.status >= 400 && d.status < 500) return null; // 410/404/400: endpoint gone or bad request — do not retry
+    const raw = Array.isArray(d.body?.trades) ? d.body.trades : null;
+    if (!raw) return null;
+    for (const t of raw) { const m = mapPumpV3Trade(t); if (m) trades.push(m); }
+    if (!d.body?.cursor) { complete = true; break; }
+    cursor = String(d.body.cursor);
   }
   try { stashTrades(mint, trades, complete); } catch {} // kept 10 min for the paid report (no extra fetch)
   const amt = (t: any) => Number(t.baseAmount || 0);
@@ -69,19 +111,28 @@ export async function pumpLaunch(mint: string, dev: string | null, supply: numbe
   return out;
 }
 
-export async function solanaExtra(mint: string, o: { jup: any; jupFailed?: boolean; dsAnswered?: boolean; mintInfo: any; dsPairs: any[]; supply: number; decimals: number | null; liquidityUsd: number | null }): Promise<Extra> {
+export type MarketSnap = { failed: boolean; pairs: any[]; liquidityUsd: number | null; source?: string };
+export async function solanaExtra(mint: string, o: { jup: any; jupFailed?: boolean; dsAnswered?: boolean; mintInfo: any; dsPairs?: any[]; supply: number; decimals: number | null; liquidityUsd?: number | null; marketP?: Promise<MarketSnap>; liqOf?: (m: MarketSnap) => number | null }): Promise<Extra> {
   const t0 = Date.now(); const { jup } = o; const unknown: string[] = []; const checks: Extra["checks"] = [];
   const add = (check: string, points: number, detail: string) => checks.push({ check, points, detail });
   const isPump = /pump/i.test(jup?.launchpad ?? "") || mint.endsWith("pump");
+  // Market (DexScreener/Gecko) can be slow from Render: start the sell quote, pump.fun trades and curve read
+  // immediately, and only wait for market when a check actually needs liquidity or pair socials.
+  const marketReady: Promise<{ dsPairs: any[]; dsAnswered: boolean | undefined; liquidityUsd: number | null }> = o.marketP
+    ? o.marketP.then((m) => ({ dsPairs: m.pairs ?? [], dsAnswered: !m.failed && !m.source, liquidityUsd: (o.liqOf ? o.liqOf(m) : m.liquidityUsd) ?? null })).catch(() => ({ dsPairs: o.dsPairs ?? [], dsAnswered: o.dsAnswered, liquidityUsd: o.liquidityUsd ?? null }))
+    : Promise.resolve({ dsPairs: o.dsPairs ?? [], dsAnswered: o.dsAnswered, liquidityUsd: o.liquidityUsd ?? null });
   // Sell check: ask Jupiter for a sell quote of ~$100 worth (or 0.1% of supply).
   const price = Number(jup?.usdPrice ?? 0);
   const units = price > 0 ? Math.floor((100 / price) * 10 ** (o.decimals ?? 0)) : Math.floor(o.supply * 0.001 * 10 ** (o.decimals ?? 0));
   const gpP = goplusSol(mint); // non-blocking: raced below against a short budget
-  const [quote, pump, curve] = await Promise.all([
+  const [quote, pump, curve, mkt] = await Promise.all([
     units > 0 && mint !== SOL ? jupFetch(`https://lite-api.jup.ag/swap/v1/quote?inputMint=${mint}&outputMint=${SOL}&amount=${units}&slippageBps=1000`, { headers: UA, signal: AbortSignal.timeout(3500) }).then((r) => (r ? r.json() : null)).catch(() => null) : Promise.resolve(null),
     isPump ? pumpLaunch(mint, jup?.dev ?? null, o.supply).catch(() => null) : Promise.resolve(null),
     isPump ? pumpCurve(mint) : Promise.resolve(null),
+    marketReady,
   ]);
+  const dsPairs = mkt.dsPairs;
+  const liquidityUsd = mkt.liquidityUsd;
   const s: Record<string, unknown> = {};
   // Sell route (honeypot pattern on Solana = no route out, or a huge impact)
   // Can it still be sold? Jupiter route or, for pump.fun coins, an active bonding curve.
@@ -90,7 +141,7 @@ export async function solanaExtra(mint: string, o: { jup: any; jupFailed?: boole
   if (!quote?.outAmount && curve?.active) { s.sellRoute = "pump.fun curve only"; }
   else if (!quote?.outAmount && isPump && curve && !curve.active && /ROUTE|NOT_TRADABLE/i.test(String(quote?.errorCode ?? quote?.error ?? ""))) { s.sellRoute = false; add("sell_route", 30, "Cannot be sold: no Jupiter route and the pump.fun curve is closed (honeypot / dead-coin high-risk pattern)."); }
   else if (quote?.outAmount) { s.sellRoute = true; s.sellPriceImpactPct = r2(Number(quote.priceImpactPct) * 100, 2); s.sellTestUsd = price > 0 ? 100 : null; s.sellVia = [...new Set((quote.routePlan ?? []).map((x: any) => x.swapInfo?.label).filter(Boolean))].slice(0, 3); }
-  else if (/ROUTE|NOT_TRADABLE/i.test(String(quote?.errorCode ?? quote?.error ?? "")) && (o.liquidityUsd ?? 0) > 1000) { s.sellRoute = false; add("sell_route", 30, "No sell route found despite listed liquidity (honeypot high-risk pattern)."); }
+  else if (/ROUTE|NOT_TRADABLE/i.test(String(quote?.errorCode ?? quote?.error ?? "")) && (liquidityUsd ?? 0) > 1000) { s.sellRoute = false; add("sell_route", 30, "No sell route found despite listed liquidity (honeypot high-risk pattern)."); }
   else unknown.push("sell route");
   if (Number(s.sellPriceImpactPct) > 20) add("sell_impact", 10, `Selling ~$100 moves the price ${s.sellPriceImpactPct}%: very thin exit.`);
   // Token-2022 extensions that let the issuer take or block funds
@@ -111,7 +162,7 @@ export async function solanaExtra(mint: string, o: { jup: any; jupFailed?: boole
   if (s.devHoldingPct != null && Number(s.devHoldingPct) >= 20) add("dev_holding", 15, `Dev wallet still holds ${s.devHoldingPct}% of supply.`);
   s.organicScore = r2(jup?.organicScore, 1); s.organicLabel = jup?.organicScoreLabel ?? null; s.jupiterVerified = jup?.isVerified ?? null;
   const st = jup?.stats24h ?? {}, h1 = jup?.stats1h ?? {};
-  Object.assign(s, { marketCapUsd: r2(jup?.mcap, 0), fdvUsd: r2(jup?.fdv, 0), liquidityToMcapPct: jup?.mcap > 0 && o.liquidityUsd != null ? r2((o.liquidityUsd / jup.mcap) * 100, 2) : null,
+  Object.assign(s, { marketCapUsd: r2(jup?.mcap, 0), fdvUsd: r2(jup?.fdv, 0), liquidityToMcapPct: jup?.mcap > 0 && liquidityUsd != null ? r2((liquidityUsd / jup.mcap) * 100, 2) : null,
     volume24hUsd: r2((st.buyVolume ?? 0) + (st.sellVolume ?? 0), 0), buys24h: st.numBuys ?? null, sells24h: st.numSells ?? null, traders24h: st.numTraders ?? null, netBuyers24h: st.numNetBuyers ?? null,
     priceChange1hPct: r2(h1.priceChange), priceChange24hPct: r2(st.priceChange), holderChange24hPct: r2(st.holderChange), liquidityChange24hPct: r2(st.liquidityChange) });
   if (jup?.stats24h == null) unknown.push("24h trading stats");
@@ -120,21 +171,21 @@ export async function solanaExtra(mint: string, o: { jup: any; jupFailed?: boole
   if (s.organicLabel === "low" && Number(s.volume24hUsd) > 10_000) add("inorganic_volume", 5, "Jupiter rates trading as low-organic (bot-like volume).");
   // Socials (Jupiter + DexScreener info)
   // If Jupiter has no links and DexScreener had no info, ask GeckoTerminal. Never call a coin link-less just because sources were down.
-  let dsInfo = o.dsPairs.find((p) => p.info)?.info ?? null;
+  let dsInfo = dsPairs.find((p) => p.info)?.info ?? null;
   const jupLinks = !!(jup && (jup.twitter || jup.website || jup.telegram || jup.discord));
   let gtAnswered = false;
-  if (!jupLinks && !dsInfo && (o.jupFailed === true || o.dsAnswered !== true)) { const g = await geckoInfo(mint); if (g !== undefined) { gtAnswered = true; dsInfo = g; } }
+  if (!jupLinks && !dsInfo && (o.jupFailed === true || mkt.dsAnswered !== true)) { const g = await geckoInfo(mint); if (g !== undefined) { gtAnswered = true; dsInfo = g; } }
   dsInfo = dsInfo ?? {};
   const socials = new Set<string>([...(jup?.twitter ? ["twitter"] : []), ...(jup?.website ? ["website"] : []), ...(jup?.telegram ? ["telegram"] : []), ...(jup?.discord ? ["discord"] : []),
     ...(dsInfo.socials ?? []).map((x: any) => String(x.type)), ...((dsInfo.websites ?? []).length ? ["website"] : [])]);
   s.socials = [...socials]; s.twitter = jup?.twitter ?? (dsInfo.socials ?? []).find((x: any) => x.type === "twitter")?.url ?? null; s.website = jup?.website ?? dsInfo.websites?.[0]?.url ?? null;
   const links = socialLinks(jup, dsInfo);
-  const socialsKnown = links.length > 0 || socials.size > 0 || (o.jupFailed !== true && jup != null) || o.dsAnswered === true || gtAnswered;
+  const socialsKnown = links.length > 0 || socials.size > 0 || (o.jupFailed !== true && jup != null) || mkt.dsAnswered === true || gtAnswered;
   s.socialLinks = socialsKnown ? links : null;
   if (!socialsKnown) unknown.push("socials (link sources not available)");
   else if (!socials.size) add("no_socials", 5, "No website or social links listed.");
   // LP status: pump.fun bonding curve has no LP to pull; PumpSwap graduation burns LP by protocol design.
-  const dexes = [...new Set(o.dsPairs.map((p) => p.dexId))];
+  const dexes = [...new Set(dsPairs.map((p) => p.dexId))];
   s.lpStatus = dexes.includes("pumpfun") && !dexes.includes("pumpswap") ? "pump.fun bonding curve (no LP tokens to pull)" : dexes.includes("pumpswap") ? "PumpSwap pool (pump.fun burns graduation LP by design)" : dexes.length ? "not verified" : null;
   // GoPlus (keyless): LP burn %, closable mint, balance-changing authority, mutable metadata
   const gp = await Promise.race([gpP, new Promise<"t">((r) => setTimeout(() => r("t"), Number(process.env.GOPLUS_SOL_WAIT_MS ?? 1200)).unref?.())]);

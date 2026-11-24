@@ -12,6 +12,7 @@ import { rpc, SolanaInputError } from "./solana.js";
 export const DISCLAIMER = "Automated heuristic, may be wrong. Not financial advice. Do your own research.";
 const B58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const DS = "https://api.dexscreener.com/tokens/v1/solana/";
+const UA = { "user-agent": "Mozilla/5.0 (RugRadar)", accept: "application/json" };
 const KNOWN_PROGRAM_OWNERS = new Set(["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"]);
 
 // ---------- local list of deployers behind high-risk patterns (repo file + in-memory additions) ----------
@@ -87,17 +88,17 @@ export function __clearRugCaches() { stable.clear(); cache.clear(); }
 
 /** DexScreener pairs, or null when the source failed (so "no pool" and "source down" are not confused). */
 async function dsOnce(mints: string[]): Promise<any[] | null> {
-  try { const r = await fetch(DS + mints.join(","), { signal: AbortSignal.timeout(4000) }); return r.ok ? ((await r.json()) as any[]) : null; } catch { return null; }
+  try { const r = await fetch(DS + mints.join(","), { headers: UA, signal: AbortSignal.timeout(4000) }); return r.ok ? ((await r.json()) as any[]) : null; } catch { return null; }
 }
 const dsRaw = (mints: string[]) => retry(() => dsOnce(mints), (v) => v == null);
 async function ds(mints: string[]): Promise<any[]> { return (await dsRaw(mints)) ?? []; }
 /** Fallback market sources when the main DexScreener endpoint fails twice: DexScreener token-pairs, then GeckoTerminal pools. */
 async function dsPairsOnce(mint: string): Promise<any[] | null> {
-  try { const r = await fetch(`https://api.dexscreener.com/token-pairs/v1/solana/${mint}`, { signal: AbortSignal.timeout(3000) }); const j = r.ok ? await r.json() : null; return Array.isArray(j) ? j : null; } catch { return null; }
+  try { const r = await fetch(`https://api.dexscreener.com/token-pairs/v1/solana/${mint}`, { headers: UA, signal: AbortSignal.timeout(3000) }); const j = r.ok ? await r.json() : null; return Array.isArray(j) ? j : null; } catch { return null; }
 }
 export async function geckoMarket(mint: string, f: typeof fetch = fetch): Promise<{ liquidityUsd: number | null; priceUsd: number | null; createdAt: number | null } | null> {
   try {
-    const r = await f(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools?page=1`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(3000) });
+    const r = await f(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools?page=1`, { headers: UA, signal: AbortSignal.timeout(3000) });
     if (r.status === 404) return { liquidityUsd: null, priceUsd: null, createdAt: null }; // GeckoTerminal answers 404 when no pool exists
     if (!r.ok) return null;
     const pools = ((await r.json()) as any)?.data; if (!Array.isArray(pools)) return null;
@@ -203,7 +204,7 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   const jup = await jupP;
   // DexScreener often has no pair for pump.fun bonding-curve tokens; Jupiter's liquidity covers them.
   const liqOf = (m: { liquidityUsd: number | null; failed: boolean }) => (!m.liquidityUsd && Number(jup?.liquidity) > 0 ? Number(jup.liquidity) : m.liquidityUsd);
-  const extraP = timed("buyerSignals", marketP.then((m) => solanaExtra(mint, { jup, jupFailed: jup === undefined, dsAnswered: !m.failed && !(m as any).source, mintInfo: info, dsPairs: m.pairs, supply, decimals, liquidityUsd: liqOf(m) })).catch(() => null));
+  const extraP = timed("buyerSignals", solanaExtra(mint, { jup, jupFailed: jup === undefined, mintInfo: info, supply, decimals, marketP, liqOf }).catch(() => null));
   const fast = !!(jup?.dev && jup.createdAt && jup.audit?.topHoldersPercentage != null);
   const oldestP = fast ? null : cached(`oldest:${mint}`, () => oldestTx(mint, 2), (v: any) => !!v).catch(() => null);
   const [largest, market, oldest] = await Promise.all([
@@ -279,7 +280,7 @@ export async function gatherFacts(mint: string): Promise<Facts> {
   return { extra, jupiterMissing: jup === undefined, mint, decimals, supply, mintAuthority: info.mintAuthority ?? null, freezeAuthority: info.freezeAuthority ?? null, token2022: acct.value.owner !== "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
     top1Pct, top10Pct, liquidityUsd: liqOf(market),  priceUsd: market.priceUsd, pairs: market.pairs.length,
     ...pickTokenMeta([{ name: jup?.name, symbol: jup?.symbol, image: jup?.icon }, ...dsMeta(mint, market.pairs), ...(info.extensions ?? []).filter((x: any) => x?.extension === "tokenMetadata").map((x: any) => ({ name: x.state?.name, symbol: x.state?.symbol }))]),
-    timingsMs: { ...timingsMs, total: Date.now() - t0 }, marketUnknown: market.failed, holderSource, holderCount: jup?.holderCount ?? null, launchpad: jup?.launchpad ?? null,
+    timingsMs: { ...timingsMs, total: Date.now() - t0 }, marketUnknown: isMarketUnknown(market.failed, liqOf(market)), holderSource, holderCount: jup?.holderCount ?? null, launchpad: jup?.launchpad ?? null,
     lpNote: market.pairs.length ? `${market.pairs.length} pool(s) on ${[...new Set(market.pairs.map((p: any) => p.dexId))].join(", ")}; LP lock/burn status not verified` : null,
     ageHours, ageMinHours, creator, funder, priorLaunches, priorDead, creatorFlagged: !!(creator && list[creator] && !(priorDead! >= 3)), funderFlagged: !!(funder && list[funder]), unknown };
 }
@@ -289,7 +290,7 @@ const VAL_FILE = process.env.RUG_VALIDATION_FILE ?? path.join(process.cwd(), "da
 export function logValidation(mint: string, score: number, priceUsd: number | null, liquidityUsd: number | null, delayMs = 10 * 60_000, chain = "solana") {
   const at = new Date().toISOString();
   const t = setTimeout(async () => {
-    const m = EVM[chain] ? await fetch(`https://api.dexscreener.com/tokens/v1/${EVM[chain]!.ds}/${mint.split(":")[1]}`).then((r) => r.json()).then((p: any[]) => ({ priceUsd: p[0]?.priceUsd ? Number(p[0].priceUsd) : null, liquidityUsd: p.length ? p.reduce((a, x) => a + (x.liquidity?.usd ?? 0), 0) : null })).catch(() => null) : await marketOf(mint).catch(() => null);
+    const m = EVM[chain] ? await fetch(`https://api.dexscreener.com/tokens/v1/${EVM[chain]!.ds}/${mint.split(":")[1]}`, { headers: UA }).then((r) => r.json()).then((p: any[]) => ({ priceUsd: p[0]?.priceUsd ? Number(p[0].priceUsd) : null, liquidityUsd: p.length ? p.reduce((a, x) => a + (x.liquidity?.usd ?? 0), 0) : null })).catch(() => null) : await marketOf(mint).catch(() => null);
     const row = { chain, mint, score, checkedAt: at, priceAtCheck: priceUsd, liquidityAtCheck: liquidityUsd, laterAt: new Date().toISOString(), priceLater: m?.priceUsd ?? null, liquidityLater: m?.liquidityUsd ?? null,
       liquidityDropPct: liquidityUsd && m?.liquidityUsd != null ? Math.round((1 - m.liquidityUsd / liquidityUsd) * 1000) / 10 : null };
     try { fs.mkdirSync(path.dirname(VAL_FILE), { recursive: true }); fs.appendFileSync(VAL_FILE, JSON.stringify(row) + "\n"); } catch {}
@@ -324,12 +325,13 @@ export function scoreEvm(g: any, liquidityUsd: number | null, ageHours: number |
   if (marketUnknown) add("liquidity", 0, "Liquidity and age unknown (market data source did not answer); scored neutral.");
   else if (liquidityUsd == null || liquidityUsd < 5000) add("liquidity", 15, liquidityUsd == null ? "No DEX pool found." : `Very thin liquidity ($${Math.round(liquidityUsd)}).`);
   if (ageHours != null && ageHours < 24) add("age", 10, `Very new: ${ageHours.toFixed(1)} hours old.`);
-  // Established tokens (CEX-listed, or $1M+ liquidity and 90+ days old): owner powers stay in the reasons at low weight;
-  // admin mint/pause/proxy is common for legit tokens, and rugs rarely last that long with deep liquidity.
+  // Established tokens (CEX-listed, 100k+ holders, or $1M+ liquidity and 90+ days old): owner powers and past creator
+  // honeypot counts stay in the reasons at low weight. Admin mint/pause/proxy is common for legit tokens; a creator's
+  // earlier honeypots should not push a widely held token to medium on their own. New tokens keep the full 25 points.
   const cex = g?.is_in_cex === "1" || g?.is_in_cex?.listed === "1";
   const established = !on("is_honeypot") && (cex || Number(g?.holder_count || 0) >= 100000 || ((liquidityUsd ?? 0) >= 1e6 && (ageHours ?? 0) >= 90 * 24));
   if (established) {
-    for (const x of r) if (["mint_function", "owner_control", "proxy", "lp_unlocked", "unverified"].includes(x.check)) { x.points = Math.round(x.points / 4); x.detail += " (down-weighted: established token)"; }
+    for (const x of r) if (["mint_function", "owner_control", "proxy", "lp_unlocked", "unverified", "deployer_history"].includes(x.check)) { x.points = Math.round(x.points / 4); x.detail += " (down-weighted: established token)"; }
     r.push({ check: "established", points: 0, detail: cex ? `Listed on a centralized exchange${g?.is_in_cex?.cex_list?.length ? ` (${g.is_in_cex.cex_list.slice(0, 3).join(", ")})` : ""}.` : Number(g?.holder_count || 0) >= 100000 ? `${Number(g.holder_count).toLocaleString("en-US")} holders.` : `Established: $${Math.round(liquidityUsd!).toLocaleString("en-US")} liquidity and ${Math.round(ageHours! / 24)} days old.` });
   }
   const score = Math.min(100, r.reduce((a, x) => a + x.points, 0));
@@ -370,7 +372,7 @@ async function evmCheck(addr: string, chain: string) {
   const c = EVM[chain]!;
   const [gp, dsr] = await Promise.all([
     cached(`goplus:${c.id}:${addr.toLowerCase()}`, () => goplusFetch(addr, c.id), (v) => v.state === "ok"),
-    retry(() => fetch(`https://api.dexscreener.com/tokens/v1/${c.ds}/${addr}`, { signal: AbortSignal.timeout(4000) }).then((r) => (r.ok ? r.json() : null)) as Promise<any[] | null>, (v) => v == null),
+    retry(() => fetch(`https://api.dexscreener.com/tokens/v1/${c.ds}/${addr}`, { headers: UA, signal: AbortSignal.timeout(4000) }).then((r) => (r.ok ? r.json() : null)) as Promise<any[] | null>, (v) => v == null),
   ]);
   const marketUnknown = dsr == null;
   if (gp.state === "busy") throw new RugBusyError("The data source is busy. Try again in a few seconds");
@@ -455,6 +457,11 @@ async function rugCheckUncached(mintRaw: string, chainRaw = "solana") {
 export function isEstablished(sg: any, ageHours: number | null): boolean {
   return !!sg?.jupiterVerified && Number(sg.organicScore) >= 60 && Number(sg.marketCapUsd) >= 1e8 && ageHours != null && ageHours >= 90 * 24;
 }
+/** Liquidity is only "unknown" when DexScreener/Gecko failed AND Jupiter did not fill in a USD figure. */
+export function isMarketUnknown(marketFailed: boolean, liquidityUsd: number | null | undefined): boolean {
+  return !!marketFailed && !(Number(liquidityUsd) > 0);
+}
+
 export function isDeadToken(f: { marketUnknown?: boolean; liquidityUsd: number | null; ageHours: number | null; ageMinHours?: number | null }, sg: any): boolean {
   const age = f.ageHours ?? f.ageMinHours ?? null;
   return !f.marketUnknown && (f.liquidityUsd == null || f.liquidityUsd < 100) && sg?.sellableOnPumpCurve !== true && !String(sg?.canSell ?? "").startsWith("yes") && age != null && age >= 24 * 7;

@@ -67,7 +67,7 @@ export function limitedReport(full: any) {
     lockedTeaser: lockedTeaser(Math.max(0, warningsOf(checks).length - 3) + all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length),
     hiddenWarnings: all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length,
     socialLinks: Array.isArray(links) ? links : null, freeFacts: freeFacts(full),
-    facts: { tokenName: pick("tokenName"), tokenSymbol: pick("tokenSymbol"), tokenImage: pick("tokenImage"), mintAuthority: pick("mintAuthority"), freezeAuthority: pick("freezeAuthority"), top1Pct: pick("top1Pct"), top10Pct: pick("top10Pct"), holderCount: pick("holderCount"), ageHours: pick("ageHours"), liquidityUsd: pick("liquidityUsd") },
+    facts: { tokenName: pick("tokenName"), tokenSymbol: pick("tokenSymbol"), tokenImage: pick("tokenImage"), mintAuthority: pick("mintAuthority"), freezeAuthority: pick("freezeAuthority"), top1Pct: pick("top1Pct"), top10Pct: pick("top10Pct"), holderCount: pick("holderCount"), ageHours: pick("ageHours"), liquidityUsd: pick("liquidityUsd"), marketUnknown: pick("marketUnknown") },
     lockedSignals: LOCKED_SIGNALS, unlock: "Credits unlock the full report (paste a credit key above, or send X-RugRadar-Key).",
     disclaimer: full?.disclaimer ?? DISCLAIMER, generatedAt: full?.generatedAt ?? new Date().toISOString(),
   };
@@ -624,7 +624,8 @@ async function mcpCall(d: WebDeps, name: string, args: any, headerKey: string | 
 }
 
 
-function primeFromLimited(l: any, token: string, chain: string) {
+/** Prime the share-card cache from a limited report. Skips when market data was truly unavailable so we never cache an under-scored card. */
+export function primeFromLimited(l: any, token: string, chain: string) {
   try { if (l?.facts?.marketUnknown) return; const ws = warningsOf(l.checks); primeShare(shareData(l, ws, shownLevel(l.riskLevel, ws), token, chain)); } catch {}
 }
 const OG_RE = /<meta property="og:type"[^\n]*?preview-x402-v2\.png">/;
