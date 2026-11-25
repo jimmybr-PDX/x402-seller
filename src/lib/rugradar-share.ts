@@ -73,6 +73,31 @@ export function wrapText(t: string, width: number, lines: number): string[] {
   if (used < t.trim().length && out.length) out[out.length - 1] = fit(out[out.length - 1]! + " …", width);
   return out.slice(0, lines);
 }
+/** Wrap every word onto as many lines as needed. Never ellipsize. A single over-long word stays on its own line. */
+export function wrapAll(t: string, width: number): string[] {
+  const out: string[] = []; let cur = "";
+  for (const w of t.split(/\s+/).filter(Boolean)) {
+    if (!cur) cur = w; else if ((cur + " " + w).length <= width) cur += " " + w; else { out.push(cur); cur = w; }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+export type TensionLayout = { font: number; lineH: number; lines: string[] };
+/** Fit a tension line (max 140 chars) in the share-card slot: wrap first, shrink font if needed, never truncate. */
+export function layoutTension(t: string): TensionLayout {
+  const attempts = [
+    { font: 19, lineH: 24, width: 30, maxLines: 4 },
+    { font: 17, lineH: 21, width: 33, maxLines: 5 },
+    { font: 16, lineH: 20, width: 36, maxLines: 5 },
+    { font: 15, lineH: 19, width: 38, maxLines: 5 },
+  ];
+  for (const a of attempts) {
+    const lines = wrapAll(t, a.width);
+    if (lines.length <= a.maxLines) return { font: a.font, lineH: a.lineH, lines };
+  }
+  const last = attempts[attempts.length - 1]!;
+  return { font: last.font, lineH: last.lineH, lines: wrapAll(t, last.width) };
+}
 /** 600x600 SVG in the site's look (dark card, conic score dial, warning cards with red/amber bars). */
 export function shareSvg(v: ShareData, host: string): string {
   const c = COLOR[v.level], p = v.level === "low" ? Math.max(4, v.score) : Math.max(4, v.score), W = 600;
@@ -94,7 +119,7 @@ ${LOGO ? `<image href="${LOGO}" x="32" y="30" width="40" height="40"/>` : ""}<te
 <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#ffffff" stroke-opacity=".12" stroke-width="22"/>${arc}
 <circle cx="${cx}" cy="${cy}" r="${r - 15}" fill="#0f1526"/><text x="${cx}" y="${cy + 14}" font-size="50" font-weight="700" fill="#fff" text-anchor="middle">${v.score}</text>
 <text x="${cx}" y="${cy + 38}" font-size="15" fill="#9AA4B8" text-anchor="middle">/100</text>
-<text x="222" y="226" font-size="40" font-weight="700" fill="${c}">${v.label}</text>${v.tension ? wrapText(v.tension, 30, 4).map((ln, i) => `<text x="222" y="${256 + i * 24}" font-size="19" font-weight="700" fill="#EEF2F8">${esc(ln)}</text>`).join("") : `<text x="222" y="258" font-size="19" fill="#C9D1E0">${sub}</text>`}
+<text x="222" y="226" font-size="40" font-weight="700" fill="${c}">${v.label}</text>${v.tension ? ((lay) => lay.lines.map((ln, i) => `<text x="222" y="${256 + i * lay.lineH}" font-size="${lay.font}" font-weight="700" fill="#EEF2F8">${esc(ln)}</text>`).join(""))(layoutTension(v.tension)) : `<text x="222" y="258" font-size="19" fill="#C9D1E0">${sub}</text>`}
 ${v.tension ? "" : v.facts.length ? `<text x="222" y="290" font-size="17" fill="#9AA4B8">${esc(v.facts.slice(0, 2).join(" \u00b7 "))}</text>${v.facts[2] ? `<text x="222" y="314" font-size="17" fill="#9AA4B8">${esc(v.facts[2])}</text>` : ""}` : ""}
 ${rows}${tail ? `<text x="32" y="${Math.min(y + 16, 560)}" font-size="17" font-weight="700" fill="#38BDF8">${esc(tail)}</text>` : ""}
 <text x="32" y="580" font-size="14" fill="#6f7990">Danger warnings only</text><text x="568" y="580" font-size="15" font-weight="700" fill="#9AA4B8" text-anchor="end">${esc(host)}/rugradar</text>

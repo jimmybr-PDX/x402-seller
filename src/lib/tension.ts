@@ -1076,11 +1076,33 @@ export function syntheticChangeFixtures(now = Date.now()): { id: string; label: 
   ];
 }
 
-/** Tension line for a finished rugCheck result, or null when nothing is flagged or a hard rule would trip. */
-export function tensionFor(out: any, now = Date.now()): string | null {
+const CREATOR_CODES = new Set(["deployer_history", "known_pattern"]);
+
+/** Drop creator-history inputs so a free Solana line cannot name earlier tokens, no-liquidity, or honeypots. */
+export function withoutCreatorHistory(f: SlimFacts): SlimFacts {
+  const strip = (codes?: string[] | null) => (codes ?? []).filter((c) => !CREATOR_CODES.has(c));
+  const previous = f.previous
+    ? { ...f.previous, codes: f.previous.codes ? strip(f.previous.codes) : f.previous.codes, creatorEarlierHoneypots: null }
+    : f.previous;
+  return {
+    ...f,
+    creatorEarlierHoneypots: null,
+    priorLaunches: null,
+    priorDead: null,
+    creatorFlagged: false,
+    codes: strip(f.codes),
+    previousCodes: f.previousCodes ? strip(f.previousCodes) : f.previousCodes,
+    previous,
+  };
+}
+
+/** Tension line for a finished rugCheck result, or null when nothing is flagged or a hard rule would trip.
+ *  Pass hideCreatorHistory for free/unpaid Solana results (paid answers keep the full line). */
+export function tensionFor(out: any, now = Date.now(), opts?: { hideCreatorHistory?: boolean }): string | null {
   try {
     if (!out || !Array.isArray(out.checks) || !out.checks.some((c: any) => c && Number(c.points) > 0)) return null;
-    const f = slimFromRugCheck(out, { chain: String(out.chain ?? "solana"), token: String(out.token ?? ""), label: String(out?.facts?.tokenSymbol ?? out?.facts?.token ?? "") });
+    let f = slimFromRugCheck(out, { chain: String(out.chain ?? "solana"), token: String(out.token ?? ""), label: String(out?.facts?.tokenSymbol ?? out?.facts?.token ?? "") });
+    if (opts?.hideCreatorHistory) f = withoutCreatorHistory(f);
     const r = tensionLine(f, new Set(), now);
     if (!r || r.ruleFlags.length || r.chars > HARD_MAX) return null;
     return r.line.replace(/pump\.fun/gi, "pump fun");

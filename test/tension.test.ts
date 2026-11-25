@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  tensionLine, tensionFor, lintLine, baseFacts, syntheticChangeFixtures, hoursAgoIso,
+  tensionLine, tensionFor, lintLine, baseFacts, syntheticChangeFixtures, hoursAgoIso, withoutCreatorHistory,
   type SlimFacts, type TensionResult,
 } from "../src/lib/tension.js";
 
@@ -224,6 +224,61 @@ if (fs.existsSync(factsPath)) {
   if (!hp) fail("tensionFor honeypot", "expected a line"); else { checkLine("tensionFor honeypot", hp, "cant_sell" as any); if (/pump\.fun/i.test(hp)) fail("tensionFor pump", hp); }
   const nopool = tensionFor({ chain: "solana", token: "Mlg1111111111111111111111111111111111111pump", riskScore: 52, checks: [{ check: "liquidity", points: 15, detail: "No DEX pool found." }], facts: { liquidityUsd: null, top1Pct: 90, buyer: { sellableOnPumpCurve: true } } });
   if (nopool && /pump\.fun/i.test(nopool)) fail("tensionFor pump fun", nopool); else pass("tensionFor pump fun wording");
+}
+
+
+// --- free Solana results hide creator history; paid and EVM keep it ---
+{
+  const onlyCreator = {
+    chain: "solana",
+    token: "FreeCreat111111111111111111111111111111111",
+    riskScore: 20,
+    checks: [{ check: "deployer_history", points: 20, detail: "Creator wallet launched 5 other token(s); 4 never graduated or have no liquidity left." }],
+    facts: { priorLaunches: 5, priorDead: 4, creatorEarlierHoneypots: 3, top1Pct: 8, liquidityUsd: 80_000, volume24hUsd: 10_000, ageHours: 200 },
+  };
+  const paid = tensionFor(onlyCreator);
+  if (!paid || !/creator|honeypot|no liquidity/i.test(paid)) fail("paid-creator", `expected creator line, got ${paid}`);
+  else pass(`paid keeps creator history "${paid}"`);
+  const free = tensionFor(onlyCreator, Date.now(), { hideCreatorHistory: true });
+  if (free !== null) fail("free-solana-only-creator", `expected null, got "${free}"`);
+  else pass("free Solana with only creator history → no line");
+}
+{
+  const both = {
+    chain: "solana",
+    token: "FreeHold1111111111111111111111111111111111",
+    riskScore: 40,
+    checks: [
+      { check: "deployer_history", points: 20, detail: "Creator deployed 4 earlier honeypot token(s)." },
+      { check: "holders", points: 15, detail: "One wallet holds 61%." },
+    ],
+    facts: { creatorEarlierHoneypots: 4, top1Pct: 61, top10Pct: 70, holderCount: 80, liquidityUsd: 90_000, volume24hUsd: 20_000, ageHours: 200 },
+  };
+  const paid = tensionFor(both);
+  const free = tensionFor(both, Date.now(), { hideCreatorHistory: true });
+  if (!paid || !/creator|honeypot/i.test(paid)) fail("paid-both", `expected creator in paid, got ${paid}`);
+  else pass(`paid both keeps creator "${paid}"`);
+  if (!free) fail("free-solana-fallback", "expected fallback to holders");
+  else if (/creator|honeypot|earlier token|no liquidity|deployed/i.test(free)) fail("free-solana-leak", free);
+  else if (!/wallet holds|one address|top holder/i.test(free)) fail("free-solana-fallback", `expected holders, got ${free}`);
+  else { pass(`free Solana falls back to holders "${free}"`); checkLine("free-solana-fallback", free, "holders"); }
+}
+{
+  const evm = {
+    chain: "base",
+    token: "0x1111111111111111111111111111111111111111",
+    riskScore: 25,
+    checks: [{ check: "deployer_history", points: 25, detail: "Creator deployed 2 earlier honeypot token(s)." }],
+    facts: { creatorEarlierHoneypots: 2, liquidityUsd: 50_000, volume24hUsd: 8_000, ageHours: 400, buyer: { creatorEarlierHoneypots: 2 } },
+  };
+  const line = tensionFor(evm);
+  if (!line || !/creator|honeypot/i.test(line)) fail("evm-creator", `expected creator line, got ${line}`);
+  else pass(`EVM keeps creator history "${line}"`);
+  const stripped = withoutCreatorHistory(baseFacts({ codes: ["deployer_history", "holders"], creatorEarlierHoneypots: 3, priorLaunches: 5, priorDead: 4, creatorFlagged: true, previous: { codes: ["deployer_history"], creatorEarlierHoneypots: 1 } }));
+  if (stripped.creatorEarlierHoneypots != null || stripped.priorLaunches != null || stripped.priorDead != null || stripped.creatorFlagged || stripped.codes.includes("deployer_history") || stripped.previous?.creatorEarlierHoneypots != null || (stripped.previous?.codes ?? []).includes("deployer_history")) {
+    fail("withoutCreatorHistory", JSON.stringify(stripped));
+  } else if (!stripped.codes.includes("holders")) fail("withoutCreatorHistory-keepers", "dropped holders");
+  else pass("withoutCreatorHistory strips only creator inputs");
 }
 
 console.log(`\n${ok.length} passed, ${failures.length} failed`);

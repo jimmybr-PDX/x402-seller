@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import express from "express";
 import type { AddressInfo } from "node:net";
 import { registerRugradarWeb, __resetFree, __resetEmbed } from "../src/lib/rugradar-web.js";
-import { __resetShare, shareSvg, shareData } from "../src/lib/rugradar-share.js";
+import { __resetShare, shareSvg, shareData, layoutTension, renderSharePng } from "../src/lib/rugradar-share.js";
+import { limitedReport } from "../src/lib/rugradar-web.js";
+import { tensionFor } from "../src/lib/tension.js";
 
 const MINT = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
 const FULL = (t: string) => ({ product: "RugRadar", chain: "solana", token: t, riskScore: 48, riskLevel: "medium", buyer: { devSoldPctOfBought: 95 },
@@ -48,4 +50,52 @@ test("share card: free data only, never 'safe', no paid signals", () => {
   const svg = shareSvg(shareData(l, [{ sev: "DANGER", title: "Thin liquidity" }], "medium", MINT, "solana"), "example.com");
   assert.ok(!/safe/i.test(svg)); assert.ok(!/guarantee/i.test(svg)); assert.ok(svg.includes("Danger warnings only")); assert.ok(svg.includes("Thin liquidity")); assert.ok(svg.includes("Top 10 hold 40%")); assert.ok(svg.includes("+2 more warnings"));
   for (const bad of ["Dev sold", "Creator launched", "sniper"]) assert.ok(!svg.includes(bad));
+});
+
+const LINE_140 = "Sellers flipped to 3-to-1 since last check. Exit got crowded overnight and one wallet now holds 61% of this token's circulating supply here.";
+
+test("share card: a 140-char tension line fits in full (wrap/shrink, no ellipsis)", () => {
+  assert.equal(LINE_140.length, 140);
+  const l = { riskScore: 72, riskLevel: "high", facts: { tokenName: "Demo", tokenSymbol: "DEMO", top10Pct: 70, liquidityUsd: 2100, ageHours: 3 }, tensionLine: LINE_140 };
+  const data = shareData(l, [{ sev: "DANGER", title: "Thin liquidity" }, { sev: "CAUTION", title: "Heavy selling" }], "high", MINT, "solana");
+  assert.equal(data.tension, LINE_140);
+  const lay = layoutTension(LINE_140);
+  assert.equal(lay.lines.join(" "), LINE_140);
+  assert.ok(!lay.lines.some((x) => /…|\.\.\./.test(x)), "layout must not ellipsize");
+  assert.ok(lay.lines.length >= 2);
+  const lastY = 256 + (lay.lines.length - 1) * lay.lineH;
+  assert.ok(lastY < 362, `tension must stay above warnings (last baseline ${lastY})`);
+  const svg = shareSvg(data, "example.com");
+  for (const ln of lay.lines) {
+    const enc = ln.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    assert.ok(svg.includes(enc) || svg.includes(ln), ln);
+    assert.ok(!/…|\.\.\./.test(ln));
+  }
+  for (const w of LINE_140.split(/\s+/)) {
+    const enc = w.replace(/&/g, "&amp;").replace(/'/g, "&#39;").replace(/"/g, "&quot;");
+    assert.ok(svg.includes(w) || svg.includes(enc), `missing word ${w}`);
+  }
+  const png = renderSharePng(data, "example.com");
+  assert.equal(png.subarray(1, 4).toString(), "PNG");
+});
+
+test("share card and limited Solana report do not leak creator history", () => {
+  const full: any = {
+    product: "RugRadar", chain: "solana", token: MINT, riskScore: 40, riskLevel: "medium",
+    checks: [
+      { check: "deployer_history", points: 20, detail: "Creator deployed 4 earlier honeypot token(s)." },
+      { check: "holders", points: 15, detail: "One wallet holds 61%." },
+    ],
+    facts: { tokenName: "Demo", tokenSymbol: "DEMO", creatorEarlierHoneypots: 4, priorLaunches: 5, priorDead: 4, top1Pct: 61, top10Pct: 70, holderCount: 80, liquidityUsd: 90_000, volume24hUsd: 20_000, ageHours: 200 },
+  };
+  full.tensionLine = tensionFor(full);
+  assert.ok(full.tensionLine && /creator|honeypot/i.test(full.tensionLine), "paid line keeps creator history");
+  const lim = limitedReport(full);
+  assert.ok(lim.tensionLine == null || !/creator|honeypot|earlier token|no liquidity/i.test(lim.tensionLine), `free leak: ${lim.tensionLine}`);
+  assert.ok(lim.tensionLine && /wallet holds|one address|top holder/i.test(lim.tensionLine), `expected holders fallback, got ${lim.tensionLine}`);
+  assert.ok(!("priorLaunches" in (lim.facts ?? {})));
+  assert.ok(!(lim.reasons ?? []).some((r: string) => /creator|honeypot/i.test(r)));
+  assert.ok(!lim.warnDetails?.deployer_history);
+  const svg = shareSvg(shareData(lim, [{ sev: "DANGER", title: "A few wallets hold most coins" }], "medium", MINT, "solana"), "example.com");
+  assert.ok(!/honeypot|earlier token|Creator has|Creator's last/i.test(svg));
 });

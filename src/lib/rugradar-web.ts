@@ -10,6 +10,7 @@ import { CLEAN_JS } from "./token-name.js";
 import type { Recent } from "./rugradar-recent.js";
 import { challenge, verifyChallenge, sessionWallet, isEvmAddr, isSolAddr, type WalletHistory } from "./wallet-history.js";
 import { shareData, primeShare, sharePng, cachedShare, shortAddr, noSafe, marketFactLine } from "./rugradar-share.js";
+import { tensionFor } from "./tension.js";
 import { swapClientJs, type SwapCfg } from "./swap.js";
 import type { Express, Request, Response } from "express";
 import { randomBytes, createHash } from "node:crypto";
@@ -74,7 +75,7 @@ export function limitedReport(full: any) {
     moreWarnings: Math.max(0, warningsOf(checks).length - 3) + all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && !(c.check === "deployer_history" && full?.chain !== "solana") && Number(c.points) > 0 && WARN[c.check]).length,
     lockedTeaser: lockedTeaser(Math.max(0, warningsOf(checks).length - 3) + all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && !(c.check === "deployer_history" && full?.chain !== "solana") && Number(c.points) > 0 && WARN[c.check]).length),
     hiddenWarnings: all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && !(c.check === "deployer_history" && full?.chain !== "solana") && Number(c.points) > 0 && WARN[c.check]).length,
-    socialLinks: Array.isArray(links) ? links : null, freeFacts: freeFacts(full), tensionLine: typeof full?.tensionLine === "string" ? full.tensionLine : null, warnDetails: warnDetails(full),
+    socialLinks: Array.isArray(links) ? links : null, freeFacts: freeFacts(full), tensionLine: tensionFor(full, Date.now(), { hideCreatorHistory: full?.chain === "solana" }), warnDetails: warnDetails(full),
     facts: { tokenName: pick("tokenName"), tokenSymbol: pick("tokenSymbol"), tokenImage: pick("tokenImage"), mintAuthority: pick("mintAuthority"), freezeAuthority: pick("freezeAuthority"), top1Pct: pick("top1Pct"), top10Pct: pick("top10Pct"), holderCount: pick("holderCount"), ageHours: pick("ageHours"), liquidityUsd: pick("liquidityUsd"), marketUnknown: pick("marketUnknown"), volume24hUsd: pick("volume24hUsd"), buys24h: pick("buys24h"), sells24h: pick("sells24h"), priceChange24hPct: pick("priceChange24hPct") },
     lockedSignals: LOCKED_SIGNALS, unlock: "Credits unlock the full report (paste a credit key above, or send X-RugRadar-Key).",
     generatedAt: full?.generatedAt ?? new Date().toISOString(),
