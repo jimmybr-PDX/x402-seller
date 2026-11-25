@@ -53,7 +53,7 @@ import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
 import { paidRugCheck } from "./lib/rug-paid.js";
 import { rugCheck, RugBusyError, flaggedWallets, DISCLAIMER as RUG_DISCLAIMER } from "./lib/rug.js";
-import { registerRugradarWeb } from "./lib/rugradar-web.js";
+import { registerRugradarWeb, primeFromLimited, limitedReport } from "./lib/rugradar-web.js";
 import { createRecent } from "./lib/rugradar-recent.js";
 import { createWatcher, WATCH_PLANS, planOf, type Watch } from "./lib/watch.js";
 import { registerWatchRoutes, watchKeyMiddleware, watchPaidHandler, createWithCredits, watchConfig, type WatchRouteDeps } from "./lib/watch-routes.js";
@@ -1565,7 +1565,7 @@ async function main() {
       `- GET ${PUBLIC_URL}/token-safety?token=<mint|0x>  (${RUG_PRICE}) — same RugRadar engine as /rug-check, listed for token safety / memecoin safety / honeypot search terms. Optional chain=.`,
       `- GET ${PUBLIC_URL}/honeypot-check?token=<mint|0x>  (${RUG_PRICE}) — honeypot check: can I sell this token? Simulated buy/sell + tax on EVM; live sell quote + freeze authority on Solana. Optional chain=.`,
       `- GET ${PUBLIC_URL}/watch?token=<solana mint>&hours=24|48&webhook=<https url>  ($0.05 for 24h, $0.10 for 48h) — RugRadar Watch + Alert: re-checked ~every 10 min; HMAC-signed webhook alert (X-RugRadar-Signature) when the dev sells, liquidity drops 30%+, mint/freeze authority appears, risk score jumps 20+, or it can't be sold. Credit keys: POST /rugradar/watch with X-RugRadar-Key (5 / 10 credits).`,
-      `- MCP (streamable HTTP): ${PUBLIC_URL}/mcp — tools rug_check, token_safety, honeypot_check ($0.01 each), watch_token ($0.05/24h, $0.10/48h). Bots & agents guide: ${PUBLIC_URL}/rugradar#agents`,
+      `- MCP (streamable HTTP): ${PUBLIC_URL}/mcp — tools rug_check, token_safety, honeypot_check (${RUG_PRICE} each), watch_token ($0.05/24h, $0.10/48h), research_brief (${REPORT_PRICE}), read_page (${READ_PRICE}), news_search (${NEWS_PRICE}), token_price (${TOKEN_PRICE}). Bots & agents guide: ${PUBLIC_URL}/rugradar#agents`,
       `- GET ${PUBLIC_URL}/credits/buy?credits=N  (${RUG_PRICE} each) — RugRadar prepaid credits (1-1000): returns a secret key once; send X-RugRadar-Key to skip x402 (~1.8x faster). Balance: /credits/balance.`,
       "",
       "## How to pay",
@@ -1611,7 +1611,7 @@ async function main() {
   app.get("/watch", watchPaidHandler(watchDeps, decodeB64Json));
   const watchTimer = setInterval(() => { track("watch checks", () => watcher.tick()).catch(() => {}); }, 30_000); watchTimer.unref?.();
   process.once("SIGTERM", () => { watcher.flush().catch(() => {}); recent.flush().catch(() => {}); });
-  registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), paidCheck: (t, c) => paidRugCheck(t, c), spend, refund, recent, balance: creditBalance, watch: { create: (k, a) => createWithCredits(watchDeps, k, a), config: () => watchConfig(watchDeps) }, swap: swapConfig() });
+  registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), paidCheck: (t, c) => paidRugCheck(t, c), spend, refund, recent, balance: creditBalance, watch: { create: (k, a) => createWithCredits(watchDeps, k, a), config: () => watchConfig(watchDeps) }, swap: swapConfig(), researchPrices: { report: REPORT_PRICE, read: READ_PRICE, news: NEWS_PRICE, price: TOKEN_PRICE } });
   app.get("/icon.png", (_req, res) => {
     if (!ICON_PNG) return res.redirect(302, "/icon.svg");
     res.type("image/png").set("Cache-Control", "public, max-age=86400").send(ICON_PNG);
@@ -2074,7 +2074,10 @@ async function main() {
       async (req) => {
         const token = qs(req.query.token) || qs(req.query.mint);
         if (!token) throw new SolanaInputError("token is required (Solana mint address, or Base 0x contract with chain=base)");
-        return { ...(await paidRugCheck(token, qs(req.query.chain) || (token.startsWith("0x") ? "base" : "solana"), { noCache: req.query.nocache === "1" })), tip: creditTip() };
+        const chain = qs(req.query.chain) || (token.startsWith("0x") ? "base" : "solana");
+        const out = { ...(await paidRugCheck(token, chain, { noCache: req.query.nocache === "1" })), tip: creditTip() };
+        if (!out.error) primeFromLimited(limitedReport(out), token, chain);
+        return out;
       },
       [SolanaInputError],
       "Public Solana RPC / token data APIs did not answer",

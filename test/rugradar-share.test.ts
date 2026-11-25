@@ -17,18 +17,29 @@ async function start() {
   return { srv, base, calls: () => calls };
 }
 
-test("share: per-token page has summary card + per-token image; PNG is cached per mint (one check)", async () => {
+test("share: permalink and PNG render from a stored check only; views never start a new check", async () => {
   __resetFree(); __resetEmbed(); __resetShare(); const s = await start();
   try {
-    const h = await (await fetch(`${s.base}/rugradar?t=${MINT}&s=x`)).text();
+    const empty = await (await fetch(`${s.base}/rugradar/c/solana/${MINT}`)).text();
+    assert.match(empty, /<meta name="twitter:card" content="summary">/);
+    assert.ok(empty.includes("No saved danger warnings")); assert.ok(empty.includes("/rugradar/rug-radar-512.png"));
+    assert.ok(!/safe|good|clean|guarantee/i.test(empty));
+    assert.equal(s.calls(), 0, "permalink view never runs a check");
+    const miss = await fetch(`${s.base}/rugradar/share/solana/${MINT}.png`, { redirect: "manual" });
+    assert.equal(miss.status, 302); assert.equal(s.calls(), 0, "uncached PNG never runs a check");
+    const chk = await fetch(`${s.base}/rugradar/api/check?token=${MINT}&chain=solana`, { method: "POST" });
+    assert.equal(chk.status, 200); const body = await chk.json(); assert.match(body.shareUrl, new RegExp(`/rugradar/c/solana/${MINT}`));
+    assert.equal(s.calls(), 1);
+    const h = await (await fetch(`${s.base}/rugradar/c/solana/${MINT}`)).text();
     assert.match(h, /<meta name="twitter:card" content="summary">/);
-    assert.ok(h.includes(`/rugradar/share/solana/${MINT}.png`)); assert.ok(!h.includes("preview-x402-v2.png\"><meta name=\"twitter:card\" content=\"summary_large_image"));
-    assert.equal(s.calls(), 0, "page render never runs a check");
-    const plain = await (await fetch(`${s.base}/rugradar`)).text(); assert.match(plain, /summary_large_image/);
+    assert.ok(h.includes(`/rugradar/share/solana/${MINT}.png`)); assert.ok(h.includes("Thin liquidity") || h.includes("Very new") || h.includes("warning"));
+    assert.ok(!/safe|guarantee/i.test(h));
+    assert.equal(s.calls(), 1, "permalink after a check does not check again");
     const r = await fetch(`${s.base}/rugradar/share/solana/${MINT}.png`); assert.equal(r.status, 200); assert.equal(r.headers.get("content-type"), "image/png");
     const png = Buffer.from(await r.arrayBuffer()); assert.equal(png.subarray(1, 4).toString(), "PNG");
-    await fetch(`${s.base}/rugradar/share/solana/${MINT}.png`); assert.equal(s.calls(), 1);
+    await fetch(`${s.base}/rugradar/share/solana/${MINT}.png`); assert.equal(s.calls(), 1, "cached PNG does not check again");
     const r2 = await fetch(`${s.base}/rugradar/share/solana/not-a-mint.png`, { redirect: "manual" }); assert.equal(r2.status, 302);
+    const plain = await (await fetch(`${s.base}/rugradar`)).text(); assert.match(plain, /summary_large_image/);
   } finally { s.srv.closeAllConnections(); s.srv.close(); }
 });
 

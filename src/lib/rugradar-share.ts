@@ -1,10 +1,10 @@
 /**
- * Per-token X share preview for RugRadar. /rugradar?t=<mint>&s=x gets per-token og/twitter tags whose image is
- * /rugradar/share/<chain>/<token>.png: a 600x600 card (twitter:card "summary") drawn like the site: token name + short
- * address, the score dial, up to 3 free-check danger warnings and free facts (top-10 %, liquidity, age).
+ * Per-token share preview for RugRadar. /rugradar/c/<chain>/<token> is the share permalink (og/twitter tags);
+ * /rugradar/share/<chain>/<token>.png is a 600x600 card (twitter:card "summary"): token name + short address, the
+ * score dial, up to 3 free-check danger warnings and free facts (top-10 %, liquidity, age).
  * Only free-check data (limitedReport): never paid/unlocked details or private signals, and never the word "safe".
- * Results are cached per chain:mint (6 h) and primed by the site's own free check, so the X crawler normally costs no
- * new check; a cache miss runs the same cached free check (rugCheck) the embed uses.
+ * Results are cached per chain:mint (6 h) and primed by a completed check. Views render from that cache only and
+ * never start a new check.
  */
 import { Resvg } from "@resvg/resvg-js";
 import { readFileSync } from "node:fs";

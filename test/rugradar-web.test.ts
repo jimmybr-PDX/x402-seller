@@ -49,9 +49,19 @@ test("MCP: initialize, tools/list, tools/call with credit key, and payment_requi
   try {
     const rpc = (body: object, h: Record<string, string> = {}) => fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...h }, body: JSON.stringify(body) }).then((r) => r.json() as any);
     assert.equal((await rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })).result.serverInfo.name, "rugradar");
-    assert.deepEqual((await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" })).result.tools.map((t: any) => t.name), ["rug_check", "token_safety", "honeypot_check"]);
+    const names = (await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" })).result.tools.map((t: any) => t.name);
+    assert.deepEqual(names, ["rug_check", "token_safety", "honeypot_check", "research_brief", "read_page", "news_search", "token_price"]);
+    const listed = (await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" })).result.tools;
+    const rug = listed.find((t: any) => t.name === "rug_check"), safe = listed.find((t: any) => t.name === "token_safety"), honey = listed.find((t: any) => t.name === "honeypot_check");
+    assert.ok(rug.description.includes("overall rug-pull") && rug.description.includes("honeypot_check") && !rug.description.includes("45+ data points"));
+    assert.ok(safe.description.includes("token-safety breakdown") && safe.description.includes("honeypot_check") && !safe.description.includes("45+ data points"));
+    assert.ok(honey.description.includes("can I sell") && honey.description.includes("rug_check") && !honey.description.includes("45+ data points"));
+    const brief = await rpc({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "research_brief", arguments: { q: "what is MCP" } } });
+    assert.equal(brief.result.isError, true); assert.equal(brief.result.structuredContent.error, "payment_required");
+    assert.match(String(brief.result.structuredContent.payWith.x402.url), /\/report\?q=/);
+    assert.equal(brief.result.structuredContent.priceUsd, "$0.01");
     const paid = await rpc({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "rug_check", arguments: { token: MINT } } }, { "x-rugradar-key": "rr_good" });
-    assert.equal(paid.result.isError, false); assert.equal(paid.result.structuredContent.buyerSummary, "FULL"); assert.equal(paid.result.structuredContent.riskScore, 48); assert.equal(paid.result.structuredContent.credits_remaining, 1);
+    assert.equal(paid.result.isError, false); assert.equal(paid.result.structuredContent.buyerSummary, "FULL"); assert.equal(paid.result.structuredContent.riskScore, 48); assert.equal(paid.result.structuredContent.credits_remaining, 1); assert.match(paid.result.structuredContent.shareUrl, /\/rugradar\/c\/solana\//);
     const unpaid = await rpc({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "honeypot_check", arguments: { token: MINT, api_key: "rr_bad" } } });
     assert.equal(unpaid.result.isError, true); assert.equal(unpaid.result.structuredContent.error, "payment_required");
   } finally { srv.closeAllConnections(); srv.close(); }

@@ -4,7 +4,6 @@ import { countRugradar, countRugradarRejected } from "./rugradar-counts.js";
  * and cookie), an embeddable result card (/rugradar/embed), sitemap.xml, and an MCP server (streamable HTTP, JSON responses) at /mcp.
  * Page copy shows danger warnings only, in plain words; it never names how a warning was found.
  */
-import { RUG_EDGE } from "./rug-extra.js";
 import { RugBusyError } from "./rug.js";
 import { LIVE_JS } from "./rugradar-live.js";
 import { CLEAN_JS } from "./token-name.js";
@@ -29,6 +28,8 @@ export type WebDeps = {
   detectChain?: (token: string) => Promise<string>;
   /** Recent full reports per credit key (optional) and the key check it needs (balance is null for an unknown key). */
   recent?: Recent; balance?: (k: string) => Promise<number | null>;
+  /** Display prices for the research MCP tools; must match the HTTP x402 routes. Defaults match server.ts. */
+  researchPrices?: { report: string; read: string; news: string; price: string };
 };
 export const FREE_PER_VISITOR = 1;
 /** Launch promo: the one free daily check returns the full report until this time (env RUGRADAR_FULL_FREE_UNTIL overrides; default Nov 12 2026 00:00 PT = 14 days). Then it reverts to the basic free check on its own. */
@@ -268,7 +269,7 @@ footer{color:var(--mut);font-size:12px;padding:8px 0 40px}
 
 
 /** Pure share-text helpers (also unit-tested). Only the free score, label, warning titles and address ever go in. */
-export const SHARE_JS = CLEAN_JS + String.raw`function rrLink(o,a,c){return o+'/rugradar?t='+encodeURIComponent(a)+(c&&/^0x/i.test(a)?'&chain='+encodeURIComponent(c):'')+'&s=x'}
+export const SHARE_JS = CLEAN_JS + String.raw`function rrLink(o,a,c){c=c||(/^0x/i.test(a)?'base':'solana');return o+'/rugradar/c/'+encodeURIComponent(c)+'/'+encodeURIComponent(a)}
 function rrNm(n){n=String(n||'');const d=n.charAt(0)==='$',x=rrClean(n,33);return d&&x&&!/\s/.test(x)?'$'+x:x}
 function rrShareText(sc,lb,ws,a,c,o,p,n){n=rrNm(n);const L=rrLink(o,a,c),h='Checked '+(n||'this token')+' on RugRadar \u2014 '+sc+' '+lb+'.',t=' Full report $'+p+'. '+L,room=270-h.length-t.length-2;let w=ws.slice(0,2).join(' + ');if(w.length>room)w=ws[0]||'';if(w.length>room)w=room>9?w.slice(0,room-1).trim()+'\u2026':'';return h+(w?' '+w+'.':'')+t}
 function rrReportText(sc,lb,ws,a,c,o,n){n=rrNm(n);return 'RugRadar \u2014 '+(n?n+' \u2014 ':'')+sc+' '+lb+'\n'+ws.slice(0,3).map(x=>'\u2022 '+x).join('\n')+(ws.length?'\n':'')+a+'\n'+rrLink(o,a,c)}
@@ -453,7 +454,7 @@ ${CSS_PAGE}</style></head><body><div class="wrap">
 <div style="margin-top:6px;font-size:13px"><a href="#agents">For developers \u203a</a></div>
 </section></aside>
 </div>
-${devSection(U, p)}
+${devSection(U, p, d.researchPrices ?? RESEARCH_DEFAULTS)}
 <details class="fold"><summary>How RugRadar works</summary><p class="mut">We turn public on-chain and market data into a 0-100 risk score with plain danger warnings. Danger warnings only \u00b7 based on public on-chain data.</p>${faq.map(([q, a]) => `<h3 style="font-size:15px;margin:12px 0 2px">${q}</h3><p class="mut" style="margin:0">${a}</p>`).join("")}</details>
 <footer>RugRadar \u00b7 ${DISCLAIMER} Danger warnings only \u00b7 based on public on-chain data; it never labels people.</footer>
 </div>
@@ -480,7 +481,7 @@ export function agentSnippets(U: string) {
   };
 }
 export const DEV_MINT = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
-function devSection(U: string, p: string) {
+function devSection(U: string, p: string, rp = RESEARCH_DEFAULTS) {
   const cp = (t: string) => `<div class="cpw"><button class="cpb" type="button" aria-label="Copy code">Copy</button><pre>${escH(t)}</pre></div>`;
   const iframe = `<iframe src="${U}/rugradar/embed?token=${DEV_MINT}" width="380" height="420" style="border:0;max-width:100%" loading="lazy" title="RugRadar token risk"></iframe>`;
   const curl = `curl -s "${U}/rugradar/embed.json?token=${DEV_MINT}"\n# -> {"riskScore":..,"riskLevel":"..","verdict":"..","warnings":[..],"reportUrl":"${U}/rugradar?token=.."}`;
@@ -490,10 +491,14 @@ curl -s "${U}/rug-check?token=${DEV_MINT}"   # 402 + PAYMENT-REQUIRED header
 curl -s -H "X-RugRadar-Key: rr_YOURKEY" "${U}/rug-check?token=${DEV_MINT}"`;
   const c = agentSnippets(U), pre = (t: string) => `<pre>${escH(t)}</pre>`;
   const tools: [string, string, string][] = [
-    ["rug_check", "0-100 rug risk score, plain danger warnings and a buyer summary (Solana incl. pump.fun, BNB, Base, Ethereum, Arbitrum)", `$${p}`],
-    ["token_safety", "Same engine, token-safety wording: authorities, holders, liquidity, dev selling, snipers, bundles", `$${p}`],
-    ["honeypot_check", "Can I sell it? Sell quote / simulated sell and tax, freeze authority", `$${p}`],
+    ["rug_check", "Overall rug-pull report: 0-100 score, danger warnings and a buyer summary (Solana incl. pump.fun, BNB, Base, Ethereum, Arbitrum)", `$${p}`],
+    ["token_safety", "Safety breakdown: mint/freeze authority, holders, liquidity, age, dev holding/sold, snipers, bundles, volume vs market cap, socials", `$${p}`],
+    ["honeypot_check", "Can I sell it? Simulated buy/sell and tax on EVM; live sell quote plus freeze/mint and transfer controls on Solana", `$${p}`],
     ["watch_token", "Watch one Solana token; signed webhook alert on dev sells, liquidity drop, new mint/freeze authority, score jump, can't sell", "$0.05 / 24h, $0.10 / 48h"],
+    ["research_brief", "Cited brief for a question (not a token check)", rp.report],
+    ["read_page", "https URL to clean Markdown", rp.read],
+    ["news_search", "Recent headlines and links on a topic", rp.news],
+    ["token_price", "On-chain USD price + 24h change (not a rug check)", rp.price],
   ];
   const eps: [string, string][] = [
     [`GET /rug-check?token=&lt;mint|0x&gt;[&amp;chain=]`, `$${p}`], [`GET /token-safety?token=…`, `$${p}`], [`GET /honeypot-check?token=…`, `$${p}`],
@@ -575,11 +580,27 @@ async function embedFor(d: WebDeps, req: Request): Promise<{ status: number; v: 
 }
 
 // ---------- MCP (streamable HTTP, JSON responses, stateless) ----------
-const TOOLS = [
-  ["rug_check", "RugRadar rug check / rug pull checker: 0-100 risk score with plain reasons and a buyer summary for a token on Solana (incl. pump.fun), BNB, Base, Ethereum or Arbitrum. " + RUG_EDGE],
-  ["token_safety", "RugRadar token safety check: mint/freeze authority, holder concentration, liquidity, age, deployer history, dev holding/sold, snipers, bundles, volume vs market cap, socials; 0-100 risk score. " + RUG_EDGE],
-  ["honeypot_check", "RugRadar honeypot check: can I sell this token? Simulated buy/sell and tax on EVM chains, live Jupiter sell quote plus freeze/mint authority and token-2022 transfer controls on Solana; 0-100 risk score. " + RUG_EDGE],
-] as const;
+const RESEARCH_DEFAULTS = { report: "$0.01", read: "$0.004", news: "$0.004", price: "$0.001" };
+const RO = { readOnlyHint: true, openWorldHint: true };
+function rugMcpTools(price: string) {
+  const p = price.startsWith("$") ? price : `$${price}`;
+  return [
+    { name: "rug_check", description: `Use for an overall rug-pull report on one token (Solana incl. pump.fun, BNB, Base, Ethereum or Arbitrum): 0-100 risk score, plain danger warnings and a buyer summary. For sellability only, use honeypot_check; for authority/holder/liquidity emphasis, use token_safety. ${p} per check; pass a RugRadar credit key or pay the x402 requirement.`, inputSchema: schema, annotations: RO },
+    { name: "token_safety", description: `Use when you need a token-safety breakdown: mint/freeze authority, holder concentration, liquidity, age, dev holding/sold, snipers, bundles, volume vs market cap and socials, plus a 0-100 risk score. Same engine and price as rug_check (${p}), different emphasis. For "can I sell this?", use honeypot_check.`, inputSchema: schema, annotations: RO },
+    { name: "honeypot_check", description: `Use to answer "can I sell this token?": simulated buy/sell and tax on EVM; live Jupiter sell quote plus freeze/mint authority and token-2022 transfer controls on Solana; 0-100 risk score. ${p} per check. For a full rug report use rug_check; for authority/holder/liquidity emphasis use token_safety.`, inputSchema: schema, annotations: RO },
+  ];
+}
+function researchMcpTools(rp: { report: string; read: string; news: string; price: string }) {
+  return [
+    { name: "research_brief", description: `Use when you need a cited research brief on a question (not a token rug check). Returns a short answer, key points and sources. ${rp.report} per call via x402 on GET /report?q=. No RugRadar credit key. For a URL's text use read_page; for recent headlines use news_search.`, inputSchema: { type: "object", properties: { q: { type: "string", description: "Question or topic (2-300 chars)" }, lang: { type: "string", description: "default en" }, depth: { type: "string", enum: ["quick", "standard"], description: "default standard" } }, required: ["q"] }, annotations: RO },
+    { name: "read_page", description: `Use when you already have an https URL and need its text as clean Markdown (title, headings, links). Not a web search and not a token check. ${rp.read} per call via x402 on GET /read?url=.`, inputSchema: { type: "object", properties: { url: { type: "string", description: "https URL to read" }, maxChars: { type: "number", description: "max markdown chars (default 20000)" } }, required: ["url"] }, annotations: RO },
+    { name: "news_search", description: `Use for recent news headlines and links on a topic (last 1-7 days). Headlines only — use read_page for full article text. ${rp.news} per call via x402 on GET /news?q=.`, inputSchema: { type: "object", properties: { q: { type: "string", description: "Keywords (2-200 chars)" }, hours: { type: "number", description: "1-168, default 72" }, limit: { type: "number", description: "1-25, default 10" } }, required: ["q"] }, annotations: RO },
+    { name: "token_price", description: `Use for a verifiable USD price and 24h change of a token (symbol, 0x address, or Solana mint). Not a rug or honeypot check — use rug_check or honeypot_check for danger warnings. ${rp.price} per call via x402 on GET /price?token=.`, inputSchema: { type: "object", properties: { token: { type: "string", description: "Symbol, 0x address or Solana mint" }, chain: { type: "string", description: "optional: ethereum, base, arbitrum, polygon, solana" } }, required: ["token"] }, annotations: RO },
+  ];
+}
+function mcpTools(d: WebDeps) {
+  return [...rugMcpTools(d.priceUsd), ...researchMcpTools(d.researchPrices ?? RESEARCH_DEFAULTS), ...(d.watch ? [WATCH_TOOL] : [])];
+}
 const WATCH_TOOL = { name: "watch_token", description: "RugRadar Watch + Alert: watch one Solana token for 24h ($0.05 = 5 credits) or 48h ($0.10 = 10 credits). Re-checked about every 10 min with the RugRadar engine; signed webhook alert when the dev sells, liquidity drops 30%+, mint/freeze authority appears, risk score jumps 20+ points, or it can't be sold. Pass a RugRadar credit key; without one the tool returns the x402 payment requirement for GET /watch.",
   inputSchema: { type: "object", properties: { token: { type: "string", description: "Solana mint address" }, hours: { type: "string", enum: ["24", "48"], description: "default 24" }, webhook_url: { type: "string", description: "https URL for signed JSON POST alerts" }, telegram_chat_id: { type: "string", description: "Telegram chat id (coming soon)" }, api_key: { type: "string", description: "RugRadar credit key (or header X-RugRadar-Key)" } }, required: ["token"] },
   annotations: { readOnlyHint: false, openWorldHint: true } };
@@ -600,8 +621,30 @@ async function mcpWatch(d: WebDeps, args: any, headerKey: string | undefined) {
   try { const r = await fetch(url, { headers: { accept: "application/json", "user-agent": "rugradar-mcp-self (self)" }, signal: AbortSignal.timeout(5000) }); const h = r.headers.get("payment-required"); requirement = h ? JSON.parse(Buffer.from(h, "base64").toString()) : null; } catch {}
   return text({ error: "payment_required", ...d.watch.config(), payWith: { x402: { url, method: "GET", paymentRequired: requirement }, credits: { buy: `${d.publicUrl}/credits/buy?credits=10`, use: "pass api_key or header X-RugRadar-Key" } } }, true);
 }
+async function mcpResearch(d: WebDeps, name: string, args: any) {
+  const text = (o: unknown, isError = false) => ({ result: { isError, content: [{ type: "text", text: JSON.stringify(o) }], structuredContent: o } });
+  const rp = d.researchPrices ?? RESEARCH_DEFAULTS;
+  const specs: Record<string, { path: string; price: string; required: [string, string]; extra?: Record<string, (a: any) => string | undefined> }> = {
+    research_brief: { path: "/report", price: rp.report, required: ["q", "q is required (2-300 chars)"], extra: { lang: (a) => a?.lang, depth: (a) => a?.depth } },
+    read_page: { path: "/read", price: rp.read, required: ["url", "url is required (https)"], extra: { maxChars: (a) => a?.maxChars != null ? String(a.maxChars) : undefined } },
+    news_search: { path: "/news", price: rp.news, required: ["q", "q is required (2-200 chars)"], extra: { hours: (a) => a?.hours != null ? String(a.hours) : undefined, limit: (a) => a?.limit != null ? String(a.limit) : undefined } },
+    token_price: { path: "/price", price: rp.price, required: ["token", "token is required (symbol, 0x address or Solana mint)"], extra: { chain: (a) => a?.chain } },
+  };
+  const spec = specs[name];
+  if (!spec) return { error: { code: -32602, message: `unknown tool ${name}` } };
+  const [field, msg] = spec.required;
+  const val = String(args?.[field] ?? "").trim();
+  if (!val) return text({ error: "bad_input", message: msg }, true);
+  const q = new URLSearchParams({ [field]: val });
+  if (spec.extra) for (const [k, fn] of Object.entries(spec.extra)) { const v = fn(args); if (v != null && String(v).trim()) q.set(k, String(v).trim()); }
+  const url = `${d.publicUrl}${spec.path}?${q}`;
+  let requirement: unknown = null;
+  try { const r = await fetch(url, { headers: { accept: "application/json", "user-agent": "rugradar-mcp-self (self)" }, signal: AbortSignal.timeout(5000) }); const h = r.headers.get("payment-required"); requirement = h ? JSON.parse(Buffer.from(h, "base64").toString()) : null; } catch {}
+  return text({ error: "payment_required", priceUsd: spec.price, payWith: { x402: { url, method: "GET", paymentRequired: requirement } } }, true);
+}
 async function mcpCall(d: WebDeps, name: string, args: any, headerKey: string | undefined) {
   if (name === "watch_token") return mcpWatch(d, args, headerKey);
+  if (name === "research_brief" || name === "read_page" || name === "news_search" || name === "token_price") return mcpResearch(d, name, args);
   const route = ROUTE[name];
   if (!route) return { error: { code: -32602, message: `unknown tool ${name}` } };
   const token = String(args?.token ?? "").trim();
@@ -612,7 +655,11 @@ async function mcpCall(d: WebDeps, name: string, args: any, headerKey: string | 
   if (key) {
     const left = await d.spend(key).catch(() => null);
     if (left != null) {
-      try { return text({ ...(await (d.paidCheck ?? d.rugCheck)(token, chain)), paidWith: "credits", credits_remaining: left }); }
+      try {
+        const full = await (d.paidCheck ?? d.rugCheck)(token, chain);
+        primeFromLimited(limitedReport(full), token, chain);
+        return text({ ...full, paidWith: "credits", credits_remaining: left, shareUrl: `${d.publicUrl}/rugradar/c/${chain}/${encodeURIComponent(token)}` });
+      }
       catch (e) { await d.refund(key); return text({ error: String((e as Error).message ?? e) + (e instanceof RugBusyError ? ". You weren't charged." : ""), refunded: true }, true); }
     }
   }
@@ -639,8 +686,27 @@ function shareMeta(U: string, token: string, chain: string) {
   const c = cachedShare(chain, token)?.v, nm = c?.name || shortAddr(token);
   const title = escA(noSafe(`${nm}: RugRadar risk ${c ? `${c.score}/100 ${c.label}` : "check"}`));
   const desc = escA(noSafe(c && c.warnings.length ? c.warnings.map((w) => w.title).join(" \u00b7 ") + ". Danger warnings only \u00b7 based on public on-chain data." : "0-100 token risk score with plain danger warnings. Danger warnings only \u00b7 based on public on-chain data."));
-  const url = escA(`${U}/rugradar?t=${encodeURIComponent(token)}${chain !== "solana" ? `&chain=${chain}` : ""}&s=x`), img = escA(`${U}/rugradar/share/${chain}/${encodeURIComponent(token)}.png`);
+  const url = escA(`${U}/rugradar/c/${chain}/${encodeURIComponent(token)}`), img = escA(c ? `${U}/rugradar/share/${chain}/${encodeURIComponent(token)}.png` : `${U}/rugradar/rug-radar-512.png`);
   return `<meta property="og:type" content="website"><meta property="og:title" content="${title}"><meta property="og:description" content="${desc}"><meta property="og:url" content="${url}"><meta property="og:image" content="${img}"><meta property="og:image:width" content="600"><meta property="og:image:height" content="600"><meta name="twitter:card" content="summary"><meta name="twitter:title" content="${title}"><meta name="twitter:description" content="${desc}"><meta name="twitter:image" content="${img}"><meta name="twitter:image:alt" content="RugRadar risk score and danger warnings for ${escA(shortAddr(token))}">`;
+}
+function shareCardHtml(U: string, chain: string, token: string, v: { name: string; score: number; label: string; level: string; warnings: { severity: string; title: string }[]; more: number; facts: string[] } | null): string {
+  const check = `${U}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`;
+  const title = escA(noSafe(v ? `${v.name || shortAddr(token)} — RugRadar danger warnings` : `RugRadar — ${shortAddr(token)}`));
+  const meta = shareMeta(U, token, chain);
+  const rows = (v?.warnings ?? []).map((w) => `<div class="w ${w.severity === "DANGER" ? "d" : "c"}"><b>${escA(w.severity)}</b> ${escA(noSafe(w.title))}</div>`).join("");
+  const more = v && v.more > 0 ? `<p class="more">+${v.more} more warning${v.more > 1 ? "s" : ""} in the full report</p>` : "";
+  const body = v
+    ? `<p class="tok">${escA(noSafe(v.name || shortAddr(token)))}<small>${escA(shortAddr(token))} · ${escA(CHAIN_NAME[chain] ?? chain)}</small></p>
+<div class="score"><strong>${v.score}</strong><span>/100</span></div>
+${v.warnings.length ? rows : `<p class="none">No danger warnings found.</p>`}
+${v.facts.length ? `<p class="facts">${escA(v.facts.slice(0, 3).join(" · "))}</p>` : ""}${more}
+<p class="foot">Danger warnings only · <a href="${escA(check)}">Open the full check</a></p>`
+    : `<p class="tok">${escA(shortAddr(token))}<small>${escA(CHAIN_NAME[chain] ?? chain)}</small></p>
+<p class="none">No saved danger warnings for this token yet.</p>
+<p class="foot"><a href="${escA(check)}">Check this token on RugRadar</a></p>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>${meta}
+<style>body{margin:0;background:#0B1020;color:#EEF2F8;font:16px/1.45 system-ui,sans-serif}main{max-width:420px;margin:24px auto;padding:20px;background:#131A2E;border:1px solid #232C47;border-radius:16px}.tok{margin:0 0 12px;font-weight:700}.tok small{display:block;color:#9AA4B8;font-weight:500;margin-top:4px}.score{font-size:40px;font-weight:700;margin:0 0 14px}.score span{font-size:16px;color:#9AA4B8;margin-left:4px}.w{display:flex;gap:8px;align-items:center;font-weight:700;padding:9px 10px;margin:0 0 6px;border-radius:10px;background:#0F1628}.w.d{border-left:4px solid #EF4444}.w.c{border-left:4px solid #F59E0B}.w b{font-size:11px;letter-spacing:.04em}.none,.facts,.more,.foot{color:#9AA4B8;font-size:14px}a{color:#38BDF8;font-weight:700}</style></head>
+<body><main>${body}</main></body></html>`;
 }
 export function registerRugradarWeb(app: Express, d: WebDeps) {
   const htmlBase = page(d), htmlPromo = page(d, true);
@@ -648,16 +714,22 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     const html = fullFreeActive() ? htmlPromo : htmlBase, t = shareTarget(req);
     res.set("Cache-Control", "public, max-age=300").type("html").send(t ? html.replace(OG_RE, shareMeta(d.publicUrl, t.token, t.chain)) : html);
   });
-  // Per-token share image (free-check data only). Cached per mint; a miss runs the same cached free check as /rugradar/embed.
+  // Per-token share image (free-check data only). Rendered only from a stored result — never starts a new check.
   app.get("/rugradar/share/:chain/:file", async (req: Request, res: Response) => {
     const chain = String(req.params.chain).toLowerCase(), token = String(req.params.file).replace(/\.png$/, "");
     const fallback = () => res.set("Cache-Control", "public, max-age=120").redirect(302, "/rugradar/rug-radar-512.png");
-    if (!CHAINS.includes(chain) || !validToken(token, chain)) { fallback(); return; }
-    if (!cachedShare(chain, token) && embedLimited(ipOf(req))) { fallback(); return; }
+    if (!CHAINS.includes(chain) || !validToken(token, chain) || !cachedShare(chain, token)) { fallback(); return; }
     try {
-      const png = await sharePng(chain, token, new URL(d.publicUrl).host, async () => { const v = await embedData(d, token, chain); const c = cachedShare(chain, token); if (c) return c.v; throw Object.assign(new Error("degraded " + v.token), { code: "degraded" }); });
+      const png = await sharePng(chain, token, new URL(d.publicUrl).host, async () => { throw Object.assign(new Error("uncached"), { code: "uncached" }); });
       res.set("Cache-Control", "public, max-age=3600").type("image/png").send(png);
     } catch { fallback(); }
+  });
+  // Shareable warnings-only permalink + OG tags. Renders from the stored share card only; never starts a new check.
+  app.get("/rugradar/c/:chain/:token", (req: Request, res: Response) => {
+    const chain = String(req.params.chain).toLowerCase(), token = String(req.params.token);
+    if (!CHAINS.includes(chain) || !validToken(token, chain)) { res.status(404).type("html").send("<!doctype html><title>RugRadar</title><p>That is not a token address RugRadar can check. <a href=\"/rugradar\">Open RugRadar</a></p>"); return; }
+    const hit = cachedShare(chain, token)?.v;
+    res.set("Cache-Control", hit ? "public, max-age=300" : "public, max-age=60").type("html").send(shareCardHtml(d.publicUrl, chain, token, hit ?? null));
   });
   app.get("/rugradar/live.js", (_req, res) => { res.set("Cache-Control", "public, max-age=86400").type("application/javascript").send(LIVE_JS); });
   app.get("/rugradar/embed", async (req: Request, res: Response) => {
@@ -693,7 +765,7 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
       catch (e) { refundFree(ip, vid); countRugradarRejected("error"); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
       return;
     }
-    try { const lr = limitedReport(await d.rugCheck(token, chain)); primeFromLimited(lr, token, chain); countRugradar("free"); res.json({ ...lr, reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
+    try { const lr = limitedReport(await d.rugCheck(token, chain)); primeFromLimited(lr, token, chain); countRugradar("free"); res.json({ ...lr, reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, shareUrl: `${d.publicUrl}/rugradar/c/${chain}/${encodeURIComponent(token)}`, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
     catch (e) { refundFree(ip, vid); countRugradarRejected("error"); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
   };
   app.post("/rugradar/api/check", checkFree);
@@ -721,16 +793,17 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     const now = new Date().toISOString().slice(0, 10);
     res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${["/rugradar", "/", "/examples"].map((p) => `<url><loc>${d.publicUrl}${p}</loc><lastmod>${now}</lastmod></url>`).join("\n")}\n</urlset>\n`);
   });
-  app.get("/mcp", (_req, res) => { res.status(405).set("Allow", "POST").json({ error: "use POST (MCP streamable HTTP, JSON responses)", tools: [...TOOLS.map(([n]) => n), ...(d.watch ? [WATCH_TOOL.name] : [])] }); });
+  app.get("/mcp", (_req, res) => { res.status(405).set("Allow", "POST").json({ error: "use POST (MCP streamable HTTP, JSON responses)", tools: mcpTools(d).map((x) => x.name) }); });
   app.post("/mcp", async (req: Request, res: Response) => {
     const m = req.body ?? {};
     const reply = (o: object) => res.json({ jsonrpc: "2.0", id: m.id ?? null, ...o });
     if (Array.isArray(m)) { res.status(400).json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "batching not supported" } }); return; }
     if (m.id === undefined) { res.status(202).end(); return; } // notifications
+    const rp = d.researchPrices ?? RESEARCH_DEFAULTS;
     switch (m.method) {
-      case "initialize": return reply({ result: { protocolVersion: m.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "rugradar", title: "RugRadar", version: "1.0.0" }, instructions: `Token rug/honeypot risk checks. Each call costs $${d.priceUsd}: pass a RugRadar credit key (header X-RugRadar-Key or api_key), otherwise the tool returns the x402 payment requirement. ${DISCLAIMER}` } });
+      case "initialize": return reply({ result: { protocolVersion: m.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "rugradar", title: "RugRadar", version: "1.0.0" }, instructions: `RugRadar danger checks (rug_check, token_safety, honeypot_check at $${d.priceUsd}; watch_token $0.05/24h) plus research tools on the same server: research_brief ${rp.report}, read_page ${rp.read}, news_search ${rp.news}, token_price ${rp.price}. RugRadar tools accept a credit key (header X-RugRadar-Key or api_key); otherwise each tool returns the x402 payment requirement for its HTTP route. ${DISCLAIMER}` } });
       case "ping": return reply({ result: {} });
-      case "tools/list": return reply({ result: { tools: [...TOOLS.map(([name, description]) => ({ name, description, inputSchema: schema, annotations: { readOnlyHint: true, openWorldHint: true } })), ...(d.watch ? [WATCH_TOOL] : [])] } });
+      case "tools/list": return reply({ result: { tools: mcpTools(d) } });
       case "tools/call": return reply(await mcpCall(d, m.params?.name, m.params?.arguments, req.header("x-rugradar-key")));
       default: return reply({ error: { code: -32601, message: `method not found: ${m.method}` } });
     }

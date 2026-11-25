@@ -1,5 +1,7 @@
 # Agent Research Tools — pay-per-call x402 APIs (USDC on Base, Polygon, Arbitrum, Solana, Avalanche, Sei)
 
+[![RugRadar MCP connector](https://glama.ai/mcp/connectors/io.github.jimmybr-PDX/rugradar/badges/score.svg)](https://glama.ai/mcp/connectors/io.github.jimmybr-PDX/rugradar)
+
 Live: **https://x402-seller-pmlm.onrender.com** · Agent guide: [`/llms.txt`](https://x402-seller-pmlm.onrender.com/llms.txt) · OpenAPI: [`/openapi.json`](https://x402-seller-pmlm.onrender.com/openapi.json) · Discovery: [`/.well-known/x402`](https://x402-seller-pmlm.onrender.com/.well-known/x402)
 
 No API key, no signup. AI agents pay per request in USDC on Base (`eip155:8453`), Polygon (`eip155:137`),
