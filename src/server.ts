@@ -53,10 +53,11 @@ import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
 import { paidRugCheck } from "./lib/rug-paid.js";
 import { rugCheck, RugBusyError, flaggedWallets } from "./lib/rug.js";
-import { registerRugradarWeb, primeFromLimited, limitedReport, freeFacts } from "./lib/rugradar-web.js";
+import { registerRugradarWeb, primeFromLimited, limitedReport, freeFacts, warnDetails } from "./lib/rugradar-web.js";
 import { createRecent } from "./lib/rugradar-recent.js";
+import { createWalletHistory } from "./lib/wallet-history.js";
 import { createWatcher, WATCH_PLANS, planOf, type Watch } from "./lib/watch.js";
-import { registerWatchRoutes, watchKeyMiddleware, watchPaidHandler, createWithCredits, watchConfig, type WatchRouteDeps } from "./lib/watch-routes.js";
+import { registerWatchRoutes, watchKeyMiddleware, watchPaidHandler, createWithCredits, watchConfig, listWatchesForKey, cancelWatchForKey, type WatchRouteDeps } from "./lib/watch-routes.js";
 import { initCredits, issueKey, issueKeyOnce, isRedeemed, revokeKey, spend, refund, balance as creditBalance, creditsStatus, canSell , spendN, refundN, loadDoc, saveDoc, saveDocs, listDocs, syncStore, loadRaw, saveStoreFiles } from "./lib/credits.js";
 import { registerWalletPay, orderSecret, solUsdPublic, type PayDeps } from "./lib/solpay.js";
 import { startSales, salesStats } from "./lib/sales.js";
@@ -269,6 +270,8 @@ async function main() {
   const app = express();
   // RugRadar "Recent": last 20 unlocked full reports per credit key, same durable store as the credits (one small doc per key).
   const recent = createRecent({ load: (n) => loadDoc<any>(n, null), save: (docs, msg) => saveDocs(docs, msg) });
+  // Private wallet history (paid x402 rug checks + connected-wallet free checks); same private store, never public.
+  const walletHistory = createWalletHistory({ load: (n) => loadDoc<any>(n, null), save: (docs, msg) => saveDocs(docs, msg) });
   // RugRadar Watch + Alert: public RugRadar engine only (no Helius, no private signals); watches persist in the private credit store.
   const watcher = createWatcher({
     rugCheck: (m) => rugCheck(m, "solana", { noCache: true }),
@@ -411,6 +414,8 @@ async function main() {
           transaction: pr.transaction ?? null,
           query: String(req.query.q ?? req.body?.q ?? req.query.url ?? req.query.token ?? req.query.address ?? req.query.hash ?? req.query.chain ?? "").slice(0, 200),
         });
+        const rr = (req as any).rrCheck as { token: string; chain: string; score: unknown } | undefined;
+        if (RUG_PATHS.has(p) && rr && pr.payer) void walletHistory.log(String(pr.payer), rr.chain, rr.token, rr.score, "x402");
       }
     });
     next();
@@ -1607,8 +1612,8 @@ async function main() {
   registerWatchRoutes(app, watchDeps);
   app.get("/watch", watchPaidHandler(watchDeps, decodeB64Json));
   const watchTimer = setInterval(() => { track("watch checks", () => watcher.tick()).catch(() => {}); }, 30_000); watchTimer.unref?.();
-  process.once("SIGTERM", () => { watcher.flush().catch(() => {}); recent.flush().catch(() => {}); });
-  registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), paidCheck: (t, c) => paidRugCheck(t, c), spend, refund, recent, balance: creditBalance, watch: { create: (k, a) => createWithCredits(watchDeps, k, a), config: () => watchConfig(watchDeps) }, swap: swapConfig(), researchPrices: { report: REPORT_PRICE, read: READ_PRICE, news: NEWS_PRICE, price: TOKEN_PRICE } });
+  process.once("SIGTERM", () => { watcher.flush().catch(() => {}); recent.flush().catch(() => {}); walletHistory.flush().catch(() => {}); });
+  registerRugradarWeb(app, { publicUrl: PUBLIC_URL, port: PORT, priceUsd: usd(RUG_PRICE), speed: CREDIT_GAP_S ? CREDIT_SPEED : null, rugCheck: (t, c) => rugCheck(t, c), paidCheck: (t, c) => paidRugCheck(t, c), spend, refund, recent, balance: creditBalance, wallets: walletHistory, watch: { create: (k, a) => createWithCredits(watchDeps, k, a), config: () => watchConfig(watchDeps), list: (k) => listWatchesForKey(watchDeps, k), cancel: (k, id) => cancelWatchForKey(watchDeps, k, id) }, swap: swapConfig(), researchPrices: { report: REPORT_PRICE, read: READ_PRICE, news: NEWS_PRICE, price: TOKEN_PRICE } });
   app.get("/icon.png", (_req, res) => {
     if (!ICON_PNG) return res.redirect(302, "/icon.svg");
     res.type("image/png").set("Cache-Control", "public, max-age=86400").send(ICON_PNG);
@@ -2072,7 +2077,8 @@ async function main() {
         const token = qs(req.query.token) || qs(req.query.mint);
         if (!token) throw new SolanaInputError("token is required (Solana mint address, or Base 0x contract with chain=base)");
         const chain = qs(req.query.chain) || (token.startsWith("0x") ? "base" : "solana");
-        const raw = await paidRugCheck(token, chain, { noCache: req.query.nocache === "1" }); const out = { ...raw, tip: creditTip(), freeFacts: freeFacts(raw) };
+        const raw = await paidRugCheck(token, chain, { noCache: req.query.nocache === "1" }); const out = { ...raw, tensionLine: raw?.tensionLine ?? null, tip: creditTip(), freeFacts: freeFacts(raw), warnDetails: warnDetails(raw) };
+        (req as any).rrCheck = { token: String(raw?.token ?? token), chain: String(raw?.chain ?? chain), score: raw?.riskScore };
         if (!out.error) primeFromLimited(limitedReport(out), token, chain);
         return out;
       },

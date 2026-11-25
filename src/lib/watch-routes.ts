@@ -1,3 +1,4 @@
+import { hashKey } from "./credits.js";
 /** HTTP surface for RugRadar Watch + Alert. See watch.ts for the engine. */
 import type { Express, Request, Response, NextFunction } from "express";
 import { randomBytes } from "node:crypto";
@@ -26,8 +27,22 @@ export async function createWithCredits(d: WatchRouteDeps, key: string, src: any
   const n = WATCH_PLANS[input.plan].credits;
   const left = await d.spendN(key, n);
   if (left == null) throw new WatchError("insufficient_credits", 402, `A ${WATCH_PLANS[input.plan].hours}h watch costs ${n} credits; this key has fewer (or is unknown). Buy credits with Phantom/Solflare at /rugradar, or pay $${WATCH_PLANS[input.plan].priceUsd} with x402 at GET /watch.`);
-  try { const { publicView } = await d.watcher.create({ ...input, paidWith: "credits" }); return { ...publicView, paidWith: "credits", creditsSpent: n, credits_remaining: left }; }
+  try { const { publicView } = await d.watcher.create({ ...input, paidWith: "credits", owner: ownerOf(key) }); return { ...publicView, paidWith: "credits", creditsSpent: n, credits_remaining: left }; }
   catch (e) { await d.refundN(key, n); if (e instanceof WatchError) { e.message += " Your credits were refunded."; } throw e; }
+}
+
+const ownerOf = (key: string) => (key ? hashKey(key).slice(0, 32) : "");
+/** Watches started with this credit key (list_watches). Reading is free. */
+export async function listWatchesForKey(d: WatchRouteDeps, key: string) {
+  const ws = await d.watcher.listByOwner(ownerOf(key));
+  return { watches: ws.map((w) => { const v: any = d.watcher.view(w); return { watchId: v.watchId, token: v.token, chain: v.chain, status: v.status, hours: v.hours, createdAt: v.createdAt, expiresAt: v.expiresAt, destination: v.destination, checks: v.checks, alerts: v.alerts.length }; }), count: ws.length };
+}
+/** Cancel one watch started with this credit key (cancel_watch). Stops alerts; no refund. */
+export async function cancelWatchForKey(d: WatchRouteDeps, key: string, id: string) {
+  const w = await d.watcher.cancelByOwner(ownerOf(key), id);
+  if (!w) throw new WatchError("not_found", 404, "No watch with that id was started with this credit key.");
+  const v: any = d.watcher.view(w);
+  return { watchId: v.watchId, token: v.token, status: v.status, expiresAt: v.expiresAt, refunded: false, message: "Watch cancelled. Alerts stop now. No credits are refunded." };
 }
 
 export function watchConfig(d: WatchRouteDeps) {

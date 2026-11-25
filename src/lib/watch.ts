@@ -20,7 +20,7 @@ export type Snap = { at: number; score: number; level: string; mintAuthority: bo
   devSells: number | null; devSoldPct: number | null; devHoldingPct: number | null; priceUsd: number | null; partial?: boolean; young?: boolean };
 export type Dest = { type: "webhook"; url: string } | { type: "telegram"; chatId: string };
 export type Alert = { kind: string; key: string; message: string; at: number };
-export type Watch = { id: string; token: string; chain: "solana"; plan: Plan; createdAt: number; expiresAt: number; dest: Dest; secret: string; paidWith: string;
+export type Watch = { id: string; token: string; chain: "solana"; plan: Plan; createdAt: number; expiresAt: number; dest: Dest; secret: string; paidWith: string; owner?: string;
   status: "active" | "expired" | "cancelled"; base: Snap; last: Snap; peakLiq: number | null; noSell: number; lowLiq?: number; checks: number; fails: number; lastCheckAt: number;
   sent: string[]; alerts: Alert[]; outbox: { body: string; tries: number; next: number }[]; delivered: number; deliveryFails: number };
 
@@ -174,7 +174,7 @@ export function createWatcher(d: WatchDeps) {
     } finally { running = false; }
   }
 
-  async function create(input: { token: string; plan: Plan; dest: Dest; paidWith: string }, preflightOnly = false): Promise<{ watch: Watch; publicView: object }> {
+  async function create(input: { token: string; plan: Plan; dest: Dest; paidWith: string; owner?: string }, preflightOnly = false): Promise<{ watch: Watch; publicView: object }> {
     await ensure();
     const token = input.token.trim();
     if (!B58.test(token)) throw new WatchError("invalid_input", 400, "token must be a Solana mint address");
@@ -187,7 +187,7 @@ export function createWatcher(d: WatchDeps) {
     try { r = await d.rugCheck(token); if (!r?.buyer) { const r2 = await d.rugCheck(token).catch(() => null); if (r2?.buyer) r = r2; } } catch (e) { throw new WatchError("check_failed", 422, `Could not check this token: ${String((e as Error).message ?? e).slice(0, 120)}`); }
     const s = snapOf(r, now()), t = now(), p = WATCH_PLANS[input.plan];
     const w: Watch = { id: "w_" + randomBytes(9).toString("base64url"), token, chain: "solana", plan: input.plan, createdAt: t, expiresAt: t + p.hours * 3600_000, dest: input.dest,
-      secret: "whsec_" + randomBytes(24).toString("base64url"), paidWith: input.paidWith, status: "active", base: s, last: s, peakLiq: s.liquidityUsd, noSell: 0, checks: 1, fails: 0,
+      secret: "whsec_" + randomBytes(24).toString("base64url"), paidWith: input.paidWith, ...(input.owner ? { owner: input.owner } : {}), status: "active", base: s, last: s, peakLiq: s.liquidityUsd, noSell: 0, checks: 1, fails: 0,
       lastCheckAt: t, sent: [], alerts: [], outbox: [], delivered: 0, deliveryFails: 0 };
     ws.push(w);
     enqueue(w, payload(w, "watch.started", { atStart: pub(s) }));
@@ -207,7 +207,10 @@ export function createWatcher(d: WatchDeps) {
   async function cancel(w: Watch) { w.status = "cancelled"; await persist("watch cancelled"); }
   async function remove(id: string) { await ensure(); ws = ws.filter((w) => w.id !== id); await persist("watch revoked (unpaid)"); }
   async function flush() { if (dirty) await persist("watch flush"); }
+  /** Watches started with one credit key (owner = hash prefix of that key), newest first. Never another key's watches. */
+  async function listByOwner(owner: string) { await ensure(); return owner ? ws.filter((w) => w.owner === owner).sort((a, b) => b.createdAt - a.createdAt) : []; }
+  async function cancelByOwner(owner: string, id: string) { await ensure(); const w = owner ? ws.find((x) => x.id === id && x.owner === owner) : undefined; if (!w) return null; if (w.status === "active") await cancel(w); return w; }
   const status = () => ({ costPerCheck: { helius: 0, publicSolanaRpc: 4, jupiter: 2, dexscreener: 1, pumpFun: "up to 4" }, active: active().length, max: MAX, checkEveryMin: Math.round(interval() / 60000), destinations: destinations(), ...stat });
-  return { create, tick, get, view, cancel, remove, flush, status, destinations, _all: () => ws, payload };
+  return { create, tick, get, view, cancel, remove, flush, listByOwner, cancelByOwner, status, destinations, _all: () => ws, payload };
 }
 export type Watcher = ReturnType<typeof createWatcher>;

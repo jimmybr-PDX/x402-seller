@@ -8,6 +8,7 @@ import { RugBusyError } from "./rug.js";
 import { LIVE_JS } from "./rugradar-live.js";
 import { CLEAN_JS } from "./token-name.js";
 import type { Recent } from "./rugradar-recent.js";
+import { challenge, verifyChallenge, sessionWallet, isEvmAddr, isSolAddr, type WalletHistory } from "./wallet-history.js";
 import { shareData, primeShare, sharePng, cachedShare, shortAddr, noSafe, marketFactLine } from "./rugradar-share.js";
 import { swapClientJs, type SwapCfg } from "./swap.js";
 import type { Express, Request, Response } from "express";
@@ -21,7 +22,9 @@ export type WebDeps = {
   paidCheck?: (t: string, chain: string) => Promise<any>;
   spend: (k: string) => Promise<number | null>; refund: (k: string) => Promise<void>;
   /** RugRadar Watch + Alert (optional): create a watch paid with credits; config for prices/destinations. */
-  watch?: { create: (key: string, args: any) => Promise<any>; config: () => any };
+  watch?: { create: (key: string, args: any) => Promise<any>; config: () => any; list?: (key: string) => Promise<any>; cancel?: (key: string, id: string) => Promise<any> };
+  /** Private wallet history (paid x402 checks + connected-wallet free checks). Never listed publicly. */
+  wallets?: WalletHistory;
   /** Jupiter "Buy this token" button; off unless swapConfig() says enabled. */
   swap?: SwapCfg;
   /** Optional chain detector for 0x addresses (tests inject one; default asks DexScreener). */
@@ -37,7 +40,7 @@ const FULL_FREE_UNTIL = Date.parse(process.env.RUGRADAR_FULL_FREE_UNTIL || "2026
 export const fullFreeActive = () => Date.now() < FULL_FREE_UNTIL;
 export const FREE_COPY_PROMO = "1 free full report every day per visitor for a limited time, then a basic free check plus credits for the full report.";
 export const FREE_COPY = "1 free limited check every day per visitor, then credits for the full report.";
-const LIMITED_CHECKS = new Set(["mint_authority", "freeze_authority", "mint_function", "holders", "liquidity", "age", "dead_token", "sell_route", "sell_impact", "honeypot", "tax"]);
+const LIMITED_CHECKS = new Set(["mint_authority", "freeze_authority", "mint_function", "holders", "liquidity", "age", "dead_token", "sell_route", "sell_impact", "honeypot", "tax", "heavy_selling", "thin_trading", "liquidity_vs_mcap"]);
 export const LOCKED_SIGNALS = ["exact dev-sold %", "sniper share", "launch-bundle share", "can-you-sell quote with price impact", "creator's past launches", "organic/bot score", "full buyer summary"];
 export const UNLOCK_CREDITS = 10;
 /** Conversion offer shown after a free check (or when it is used up). Points only at the existing credits flow and x402 paths. */
@@ -56,8 +59,11 @@ export function limitedReport(full: any) {
   const basic = all.filter((c: any) => LIMITED_CHECKS.has(c?.check) && c?.check !== "dead_token").map((c: any) => ({ check: c.check, points: Number(c.points) || 0, detail: PUBLIC.has(c.check) && WARN[c.check] ? WARN[c.check][1] : c.detail }));
   const sum = basic.reduce((a: number, c: any) => a + c.points, 0);
   const dead = all.find((c: any) => c?.check === "dead_token");
-  const checks = dead ? [{ check: "dead_token", points: Math.max(5, 60 - sum), detail: dead.detail }, ...basic] : basic;
-  const score = Math.min(100, checks.reduce((a: number, c: any) => a + c.points, 0));
+  const scored = dead ? [{ check: "dead_token", points: Math.max(5, 60 - sum), detail: dead.detail }, ...basic] : basic;
+  const score = Math.min(100, scored.reduce((a: number, c: any) => a + c.points, 0));
+  // Shown on the free result but not counted in the basic score: a creator's earlier honeypot tokens (EVM chains).
+  const showOnly = full?.chain !== "solana" ? all.filter((c: any) => c?.check === "deployer_history" && Number(c.points) > 0).map((c: any) => ({ check: c.check, points: Number(c.points) || 0, detail: "Creator deployed earlier honeypot tokens.", shownOnly: true })) : [];
+  const checks = [...scored, ...showOnly];
   const level = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
   const pick = (k: string) => (f[k] === undefined ? null : f[k]);
   const links = full?.buyer?.socialLinks;
@@ -65,10 +71,10 @@ export function limitedReport(full: any) {
     product: "RugRadar", report: "limited", chain: full?.chain ?? null, token: full?.token ?? null, riskScore: score, riskLevel: level, scoring: "basic score (mint/freeze authority, top holders, age, liquidity, dead token, sell warnings)",
     verdict: level === "high" ? "Multiple high-risk patterns found." : level === "medium" ? "Some high-risk patterns found." : "No major high-risk patterns found in the basic checks.",
     reasons: checks.filter((c: any) => c.points > 0).map((c: any) => c.detail), checks,
-    moreWarnings: Math.max(0, warningsOf(checks).length - 3) + all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length,
-    lockedTeaser: lockedTeaser(Math.max(0, warningsOf(checks).length - 3) + all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length),
-    hiddenWarnings: all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length,
-    socialLinks: Array.isArray(links) ? links : null, freeFacts: freeFacts(full),
+    moreWarnings: Math.max(0, warningsOf(checks).length - 3) + all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && !(c.check === "deployer_history" && full?.chain !== "solana") && Number(c.points) > 0 && WARN[c.check]).length,
+    lockedTeaser: lockedTeaser(Math.max(0, warningsOf(checks).length - 3) + all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && !(c.check === "deployer_history" && full?.chain !== "solana") && Number(c.points) > 0 && WARN[c.check]).length),
+    hiddenWarnings: all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && !(c.check === "deployer_history" && full?.chain !== "solana") && Number(c.points) > 0 && WARN[c.check]).length,
+    socialLinks: Array.isArray(links) ? links : null, freeFacts: freeFacts(full), tensionLine: typeof full?.tensionLine === "string" ? full.tensionLine : null, warnDetails: warnDetails(full),
     facts: { tokenName: pick("tokenName"), tokenSymbol: pick("tokenSymbol"), tokenImage: pick("tokenImage"), mintAuthority: pick("mintAuthority"), freezeAuthority: pick("freezeAuthority"), top1Pct: pick("top1Pct"), top10Pct: pick("top10Pct"), holderCount: pick("holderCount"), ageHours: pick("ageHours"), liquidityUsd: pick("liquidityUsd"), marketUnknown: pick("marketUnknown"), volume24hUsd: pick("volume24hUsd"), buys24h: pick("buys24h"), sells24h: pick("sells24h"), priceChange24hPct: pick("priceChange24hPct") },
     lockedSignals: LOCKED_SIGNALS, unlock: "Credits unlock the full report (paste a credit key above, or send X-RugRadar-Key).",
     generatedAt: full?.generatedAt ?? new Date().toISOString(),
@@ -129,12 +135,38 @@ export const WARN: Record<string, [string, string]> = {
   liquidity_drop: ["Liquidity dropped fast", "Much of the pool left in 24 h."],
   inorganic_volume: ["Trading looks fake", "Volume looks bot-driven."],
   no_socials: ["No website or socials", "The creator listed no links."],
+  heavy_selling: ["Heavy selling", "Far more sells than buys in 24 hours."],
+  thin_trading: ["Thin trading", "24-hour volume is thin relative to the token's size."],
 };
+/** Short noun phrases for the result headline ("Thin liquidity, heavy selling, and ..."). Falls back to the card title. */
+export const HEAD: Record<string, string> = {
+  dead_token: "no way to sell", mint_authority: "creator can mint more", mint_function: "owner can mint more", freeze_authority: "creator can freeze tokens",
+  holders: "a few wallets hold most coins", liquidity: "thin liquidity", age: "very new token", sell_route: "no sell route", sell_impact: "big price impact on sells",
+  honeypot: "selling looks blocked", tax: "high trade tax", owner_control: "owner can pause or blacklist", unverified: "unverified contract", proxy: "contract code can change",
+  lp_unlocked: "liquidity can be pulled", dev_holding: "dev holds a lot", dev_sold: "dev sold most coins", heavy_selling: "heavy selling", thin_trading: "thin trading",
+  liquidity_vs_mcap: "liquidity tiny vs market cap", liquidity_drop: "liquidity dropped fast", deployer_history: "creator's earlier tokens went bad", no_socials: "no website or socials",
+};
+const nfmt = (v: unknown) => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+const kusd = (n: number) => (n >= 1e6 ? `$${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M` : n >= 1000 ? `$${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : `$${Math.round(n)}`);
+/** Card [title, line] with real numbers for the market and creator warnings. Danger wording only; never names how it was found. */
+export function warnDetails(full: any): Record<string, [string, string]> {
+  const out: Record<string, [string, string]> = {}, f = full?.facts ?? {}, b = (f.buyer && typeof f.buyer === "object" ? f.buyer : null) ?? (full?.buyer && typeof full.buyer === "object" ? full.buyer : {}) ?? {};
+  const on = new Set((Array.isArray(full?.checks) ? full.checks : []).filter((c: any) => c && Number(c.points) > 0).map((c: any) => c.check));
+  const vol = nfmt(f.volume24hUsd), buys = nfmt(f.buys24h), sells = nfmt(f.sells24h), mcap = nfmt(f.marketCapUsd) ?? nfmt(b.marketCapUsd), liq = nfmt(f.liquidityUsd);
+  if (on.has("heavy_selling") && sells != null) { const x = sells / Math.max(1, buys ?? 0); out.heavy_selling = [`Heavy selling: ${x >= 10 ? Math.round(x) : x.toFixed(1)} sells per buy (24h)`, `${sells.toLocaleString("en-US")} sells vs ${(buys ?? 0).toLocaleString("en-US")} buys in 24 hours.`]; }
+  if (on.has("thin_trading") && vol != null) out.thin_trading = [`Thin trading: ${kusd(vol)} volume in 24h`, "24-hour volume is thin relative to the token's size."];
+  if (on.has("liquidity_vs_mcap") && mcap != null && liq != null && mcap > 0) out.liquidity_vs_mcap = ["Liquidity tiny vs market cap", `Liquidity is ${kusd(liq)}, ${((liq / mcap) * 100).toFixed(2)}% of a ${kusd(mcap)} market cap.`];
+  if (on.has("deployer_history")) {
+    const hp = full?.chain !== "solana" ? nfmt(b.creatorEarlierHoneypots) : null;
+    if (hp != null && hp > 0) out.deployer_history = ["Creator made earlier honeypot coins", `This creator deployed ${hp} earlier honeypot token${hp === 1 ? "" : "s"}.`];
+  }
+  return out;
+}
 /** Warnings to show (points > 0), worst first, one card per title. */
-export function warningsOf(checks: any): { sev: "DANGER" | "CAUTION"; title: string; line: string; points: number }[] {
+export function warningsOf(checks: any, det?: Record<string, [string, string]> | null): { sev: "DANGER" | "CAUTION"; title: string; line: string; points: number }[] {
   const seen = new Set<string>(), out: any[] = [];
-  for (const c of (Array.isArray(checks) ? checks : []).filter((x: any) => x && Number(x.points) > 0 && WARN[x.check]).sort((a: any, b: any) => b.points - a.points)) {
-    const w = WARN[c.check]!; if (seen.has(w[0])) continue; seen.add(w[0]);
+  for (const c of (Array.isArray(checks) ? checks : []).filter((x: any) => x && Number(x.points) > 0 && (WARN[x.check] || det?.[x.check])).sort((a: any, b: any) => b.points - a.points)) {
+    const w = det?.[c.check] ?? WARN[c.check]!; if (seen.has(w[0])) continue; seen.add(w[0]);
     out.push({ sev: Number(c.points) >= 15 ? "DANGER" : "CAUTION", title: w[0], line: w[1], points: Number(c.points) });
   }
   return out;
@@ -192,20 +224,20 @@ const CSS_BASE = `:root{--bg:#0B1020;--card:#131A2E;--line:#232C47;--tx:#EEF2F8;
 .verdict{display:flex;gap:16px;align-items:center;padding:16px;border-radius:16px}
 .v-high{background:linear-gradient(135deg,rgba(239,68,68,.32),rgba(239,68,68,.12));border:2px solid var(--bad)}
 .v-medium{background:linear-gradient(135deg,rgba(245,158,11,.30),rgba(245,158,11,.10));border:2px solid var(--warn)}
-.v-low{background:linear-gradient(135deg,rgba(74,222,128,.34),rgba(74,222,128,.14));border:2px solid var(--ok)}
+.v-low{background:linear-gradient(135deg,rgba(58,70,112,.34),rgba(58,70,112,.14));border:2px solid #3a4670}
 .gauge{--p:0;--c:var(--bad);width:120px;height:120px;border-radius:50%;flex:none;background:conic-gradient(var(--c) calc(var(--p)*1%),rgba(255,255,255,.12) 0);display:grid;place-items:center;box-shadow:0 0 18px color-mix(in srgb,var(--c) 45%,transparent)}
 .gauge i{width:88px;height:88px;border-radius:50%;background:#0f1526;display:grid;place-items:center;font-style:normal;font-weight:900;font-size:36px;line-height:1;color:#fff}
 .gauge i small{display:block;font-size:11px;font-weight:600;color:var(--mut);text-align:center}
-.g-high{--c:var(--bad)}.g-medium{--c:var(--warn)}.g-low{--c:var(--ok)}.g-low i{color:#6CFFA0}.g-wait{--c:#3a4670;box-shadow:none}
+.g-high{--c:var(--bad)}.g-medium{--c:var(--warn)}.g-low{--c:#3a4670;box-shadow:none}.g-low i{color:#c9d1e0}.g-wait{--c:#3a4670;box-shadow:none}
 .verdict{flex-wrap:wrap}.vfree{flex-basis:100%;font-size:13px;font-weight:700;color:#fff;background:rgba(0,0,0,.35);border-radius:8px;padding:6px 10px;margin-top:-4px}
-.vt{font-size:24px;font-weight:900;line-height:1.1}.vt.high{color:#ff6b6b}.vt.medium{color:#fbbf24}.vt.low{color:#6CFFA0}.vl{font-size:16px;margin-top:4px}.vtrust{font-size:12px;color:var(--mut);margin-top:6px}
+.vt{font-size:21px;font-weight:900;line-height:1.15}.vt.high{color:#ff6b6b}.vt.medium{color:#fbbf24}.vt.low{color:#EEF2F8}.vtx{flex:1 1 220px;min-width:0}.vtl{font-size:17px;font-weight:700;margin-top:8px;color:#fff;line-height:1.35}.quiet.det .sub .wcards{margin-top:6px}.sec-title{font-size:13px;color:var(--mut);margin:12px 0 6px;letter-spacing:.04em;text-transform:uppercase}.vl{font-size:16px;margin-top:4px}.vtrust{font-size:12px;color:var(--mut);margin-top:6px}
 .wcards{display:grid;gap:8px;margin:10px 0 6px}
 .wc{border-radius:12px;border:1px solid var(--line);background:#0F1628}.wc.d{border-left:5px solid var(--bad)}.wc.c{border-left:5px solid var(--warn)}
 .wc summary{display:flex;gap:10px;align-items:center;padding:12px;list-style:none;cursor:pointer;font-weight:700;font-size:16px;color:#fff}.wc summary::-webkit-details-marker{display:none}
 .wc summary .tt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .wc summary .ch{margin-left:auto;color:var(--mut);font-weight:400}.wc summary .ch::before{content:"\\25BE"}.wc[open] summary .ch::before{content:"\\25B4"}
 .sev{flex:none;font-size:11px;font-weight:900;border-radius:6px;padding:3px 7px;letter-spacing:.4px}.s3{background:var(--bad);color:#fff}.s2{background:var(--warn);color:#1b1200}
-.wc p{margin:0;padding:0 12px 12px;font-size:14px;color:#c9d1e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.wc p a{font-weight:700}
+.wc p{margin:0;padding:0 12px 12px;font-size:14px;color:#c9d1e0;white-space:normal}.wc p a{font-weight:700}
 .ffl{font-size:14px;color:#c9d1e0;margin:2px 0 6px}`;
 const CSS_PAGE = `body{margin:0;background:var(--bg);color:var(--tx);font:17px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 @media(min-width:900px){body{font-size:16px}}
@@ -222,7 +254,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:12p
 .chainchip option{background:var(--card)}.trust{font-size:13px;color:var(--mut)}
 .keyd{font-size:12px;margin:0 0 8px}.keyd summary{cursor:pointer;display:inline;list-style:none;color:var(--acc);text-decoration:underline}.keyd summary::-webkit-details-marker{display:none}.keyd input{width:100%;max-width:420px;margin-top:6px;background:#0E1528;border:1px solid var(--line);color:var(--tx);border-radius:10px;padding:10px;font-size:15px}
 #quota{display:block;font-size:12px;color:var(--mut)}#quota:empty{display:none}#keybox{display:block;margin-top:6px;font-size:13px}
-#recent{max-width:100%;margin:0 0 8px}.kbtn{background:#232C47;color:var(--tx);border:0;border-radius:6px;padding:3px 9px;font-size:13px;cursor:pointer;margin-left:4px}
+#recent{max-width:100%;margin:0 0 8px}.wnote{font-size:13px;color:var(--mut);margin:6px 0}.whist{margin:6px 0 0;padding-left:18px;font-size:13px}.whist li{margin:2px 0}#walbox .row{display:flex;gap:6px;flex-wrap:wrap}#walbox .kbtn{margin-left:0;padding:6px 10px}.kbtn{background:#232C47;color:var(--tx);border:0;border-radius:6px;padding:3px 9px;font-size:13px;cursor:pointer;margin-left:4px}
 .grid{display:grid;gap:16px}@media(min-width:900px){.grid{grid-template-columns:1.6fr 1fr;align-items:start}.hero h1{font-size:34px}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
 .tok{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.av{width:44px;height:44px;border-radius:50%;background:#2a3456;display:grid;place-items:center;font-weight:800;flex:none;overflow:hidden}.av img{width:100%;height:100%;object-fit:cover}
@@ -280,7 +312,7 @@ xs.filter(c=>c.points>0&&W[c.check]).sort((a,c)=>c.points-a.points).forEach(c=>{
 `;
 
 /** Page client JS (no template interpolation on purpose; config arrives as CFG). */
-const PAGE_JS = String.raw`${SHARE_JS}const WALLETS=[],WAPI={register:(...ws)=>{ws.forEach(w=>{if(w&&w.features&&w.features['solana:signAndSendTransaction']&&w.features['standard:connect']&&!WALLETS.includes(w))WALLETS.push(w)});return()=>{}}};
+const PAGE_JS = String.raw`${SHARE_JS}const WALLETS=[],WAPI={register:(...ws)=>{ws.forEach(w=>{if(w&&w.features&&(w.features['solana:signAndSendTransaction']||w.features['solana:signMessage'])&&w.features['standard:connect']&&!WALLETS.includes(w))WALLETS.push(w)});return()=>{}}};
 window.addEventListener('wallet-standard:register-wallet',e=>{try{e.detail(WAPI)}catch(x){}});try{window.dispatchEvent(new CustomEvent('wallet-standard:app-ready',{detail:WAPI}))}catch(x){}
 let PAYCFG=null;const payCfg=fetch('/rugradar/pay/config').then(r=>r.json()).then(j=>PAYCFG=j).catch(()=>null);
 const B58='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -332,7 +364,8 @@ const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=nu
 const OFFER=CFG.offer,DESK=matchMedia('(min-width:900px)').matches;
 const short=a=>{a=String(a||'');return a.length>14?a.slice(0,4)+'\u2026'+a.slice(-6):a};
 const ageTxt=h=>{if(typeof h!=='number')return null;if(h<1)return Math.max(1,Math.round(h*60))+' min old';if(h<48)return Math.round(h)+' h old';if(h<24*60)return Math.round(h/24)+' d old';return (h/24/365).toFixed(1).replace(/\.0$/,'')+' y old'};
-function warnings(checks){const seen={},o=[];(Array.isArray(checks)?checks:[]).filter(c=>c&&Number(c.points)>0&&CFG.warn[c.check]).sort((a,b)=>b.points-a.points).forEach(c=>{const w=CFG.warn[c.check];if(seen[w[0]])return;seen[w[0]]=1;o.push({d:Number(c.points)>=15,t:w[0],l:w[1]})});return o}
+function warnings(checks,det){det=det||{};const seen={},o=[];(Array.isArray(checks)?checks:[]).filter(c=>c&&Number(c.points)>0&&(CFG.warn[c.check]||det[c.check])).sort((a,b)=>b.points-a.points).forEach(c=>{const w=det[c.check]||CFG.warn[c.check];if(seen[w[0]])return;seen[w[0]]=1;o.push({d:Number(c.points)>=15,t:w[0],l:w[1],k:c.check})});return o}
+function headline(ws){const p=ws.slice(0,3).map(w=>(CFG.head&&CFG.head[w.k])||String(w.t).toLowerCase());if(!p.length)return '';const s=p.length===1?p[0]:p.length===2?p[0]+' and '+p[1]:p[0]+', '+p[1]+', and '+p[2];return s.charAt(0).toUpperCase()+s.slice(1)}
 function card(w,j,open){const d=el('details','wc '+(w.d?'d':'c'));if(open)d.open=true;const s=el('summary');s.append(el('span','sev '+(w.d?'s3':'s2'),w.d?'DANGER':'CAUTION'),el('span','tt',w.t),el('span','ch'));d.append(s);
  d.append(el('p',null,w.l));return d}
 const SV=d=>'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="'+d+'"/></svg>';
@@ -348,11 +381,13 @@ function socials(j){const raw=Array.isArray(j.socialLinks)?j.socialLinks:(j.buye
  links.filter(l=>!SOC.some(s=>s[2].test(String(l.type||'')))).slice(0,3).forEach(x=>{const n=String(x.type||'link');mk(x,n,n.slice(0,2).toUpperCase());have.push(n)});
  row.title='Links set by the token creator';const fb=el('div','socfb',have.join(' \u00b7 '));if(miss.length){if(have.length)fb.append(' \u00b7 ');fb.append(el('span','miss',miss.join(', ')+' missing'))}
  w.append(row,fb);return w}
-function gauge(lv,score){const g=el('div','gauge g-'+lv);g.style.setProperty('--p',lv==='low'?100:Math.max(4,Math.min(100,score)));const i=el('i',null,String(score));i.append(el('small',null,'/100'));g.append(i);return g}
-const VT={high:['HIGH RISK','Strong rug warning signs.'],medium:['CAUTION','Some rug warning signs.'],low:['LOW RISK','No danger warnings found.']};
+function gauge(lv,score){const g=el('div','gauge g-'+lv);g.style.setProperty('--p',Math.max(4,Math.min(100,score)));const i=el('i',null,String(score));i.append(el('small',null,'/100'));g.append(i);return g}
+const VT={high:['HIGH RISK','Strong rug warning signs.'],medium:['CAUTION','Some rug warning signs.'],low:['NO WARNINGS','No danger warnings found.']};
 function shownLevel(j,ws){const l=VT[j.riskLevel]?j.riskLevel:'medium';if(l!=='low'||!ws.length)return l;return ws.some(w=>w.d)?'high':'medium'}
-function verdictBox(j,ws){const lv=shownLevel(j,ws),s=Number(j.riskScore)||0,v=el('div','verdict v-'+lv),t=el('div');
- t.append(el('div','vt '+lv,VT[lv][0]),el('div','vl',VT[lv][1]));if(j.report!=='limited')t.append(el('div','vtrust','Full report.'));else t.append(el('div','vtrust','Danger warnings only · based on public on-chain data'));v.append(gauge(lv,s),t);return v}
+function verdictBox(j,ws){const lv=shownLevel(j,ws),s=Number(j.riskScore)||0,v=el('div','verdict v-'+lv),t=el('div','vtx');
+ if(!ws.length){t.append(el('div','vt low','No danger warnings found.'),el('div','vl','Open details for market and contract figures.'))}
+ else{t.append(el('div','vt '+lv,headline(ws)));if(j.tensionLine)t.append(el('div','vtl',j.tensionLine));else t.append(el('div','vl','Top danger warnings. More figures are in details.'))}
+ v.append(gauge(lv,s),t);return v}
 function lockedPanel(note,cta,sec){const b=el('div','lock');b.id='unlock';if(note!=='')b.append(el('span',null,'\u{1F512} '+(note||'Full report: live chart, dev and sniper wallets, biggest buys and sells, sell test.')));const a=el('button','btn pri',cta||CFG.cta);a.type='button';a.addEventListener('click',()=>openBuy(true));b.append(a);if(sec){const s=el('button','linkbtn credsec',sec);s.type='button';s.addEventListener('click',()=>openBuy(true));b.append(s)}return b}
 function openBuy(scroll){const x=$('buyx');x.hidden=false;const w=$('wpay');if(scroll&&w){$('credits').scrollIntoView({block:'start',behavior:'smooth'});w.classList.add('flash');setTimeout(()=>w.classList.remove('flash'),1600)}}
 let LIVEP=null;function liveLoad(){if(!LIVEP)LIVEP=new Promise((ok,no)=>{const s=document.createElement('script');s.src='/rugradar/live.js?v=${LIVE_V}';s.onload=ok;s.onerror=()=>{LIVEP=null;no()};document.head.append(s)});return LIVEP}
@@ -369,25 +404,46 @@ function shareBar(j,ws){const lv=shownLevel(j,ws),sc=Number(j.riskScore)||0,lb=V
  const nm=rrTok(j.facts).share,txt=rrShareText(sc,lb,tl,a,j.chain,CFG.u,CFG.p,nm),x=el('a','btn xb','Share on X');x.href='https://x.com/intent/post?text='+encodeURIComponent(txt);x.target='_blank';x.rel='noopener noreferrer';
  const bt=(n,f)=>{const y=el('button','btn sec',n);y.type='button';y.addEventListener('click',()=>f(y));return y};
  b.append(x,bt('Share',()=>shotMode(j,ws,lv,sc,lb,txt)),bt('Copy report',y=>rrCopy(rrReportText(sc,lb,tl,a,j.chain,CFG.u,nm),y)),bt('Copy link',y=>rrCopy(rrLink(CFG.u,a,j.chain),y)));return b}
-function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings(j.checks),fa=j.facts||{},tk=rrTok(fa);
+const WS={get(){try{return localStorage.getItem('rr_wsess')||''}catch(e){return ''}},set(v){try{localStorage.setItem('rr_wsess',v)}catch(e){}},del(){try{localStorage.removeItem('rr_wsess')}catch(e){}}};
+const hexs=u=>Array.from(u,b=>b.toString(16).padStart(2,'0')).join('');
+async function walConnect(kind,st){try{let addr,sign;
+ if(kind==='sol'){const wal=WALLETS.find(x=>/phantom/i.test(x.name)&&x.features['solana:signMessage'])||WALLETS.find(x=>x.features['solana:signMessage']);
+  if(wal){const acc=(await wal.features['standard:connect'].connect()).accounts[0]||wal.accounts[0];addr=acc.address;sign=async m=>{const r=await wal.features['solana:signMessage'].signMessage({account:acc,message:new TextEncoder().encode(m)});return hexs((Array.isArray(r)?r[0]:r).signature)}}
+  else if(window.solana&&window.solana.signMessage){const r=await window.solana.connect();addr=r.publicKey.toString();sign=async m=>{const o=await window.solana.signMessage(new TextEncoder().encode(m),'utf8');return hexs(o.signature||o)}}
+  else{st.textContent=MOBILE?'Open RugRadar in your Phantom or Solflare app to connect.':'No Solana wallet found in this browser.';return}}
+ else{const eth=window.ethereum;if(!eth){st.textContent='No Base / EVM wallet found in this browser.';return}const a=await eth.request({method:'eth_requestAccounts'});addr=a[0];sign=m=>eth.request({method:'personal_sign',params:[m,addr]})}
+ st.textContent='Sign the message in your wallet. No transaction, no cost.';
+ const cr=await fetch('/rugradar/api/wallet/challenge?address='+encodeURIComponent(addr));const c=await cr.json().catch(()=>({}));if(!cr.ok||!c.message){st.textContent=c.message||'Could not connect right now.';return}
+ const sig=await sign(c.message);
+ const vr=await fetch('/rugradar/api/wallet/verify',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({address:addr,message:c.message,signature:sig})});const v=await vr.json().catch(()=>({}));
+ if(!v.session){st.textContent=v.message||'Signature not accepted.';return}
+ WS.set(v.session);walLoad()}catch(e){st.textContent='Wallet did not sign ('+((e&&e.message)||'cancelled')+'). Nothing was sent.'}}
+function walLoad(){const b=$('walbox');if(!b)return;b.textContent='';const s=WS.get(),st=el('div','wstat');
+ if(!s){const row=el('div','row');const mk=(t,k)=>{const x=el('button','kbtn',t);x.type='button';x.addEventListener('click',()=>walConnect(k,st));return x};row.append(mk('Solana wallet','sol'),mk('Base / EVM wallet','evm'));b.append(el('p','wnote','Sign a message to prove the wallet is yours. No transaction, no cost. Only you see your list.'),row,st);return}
+ fetch('/rugradar/api/wallet/history',{headers:{'X-RugRadar-Wallet':s}}).then(async r=>{const j=await r.json().catch(()=>({}));if(r.status===401){WS.del();walLoad();return}if(!r.ok)return;
+  const hd=el('div','wnote','Connected: '+short(j.wallet)+' ');const fg=el('button','kbtn','Disconnect');fg.type='button';fg.addEventListener('click',()=>{WS.del();walLoad()});hd.append(fg);b.append(hd);
+  const items=Array.isArray(j.items)?j.items:[];if(!items.length){b.append(el('p','wnote','No past checks yet. Checks you run while connected show up here.'));return}
+  const ul=el('ul','whist');items.forEach(it=>{const li=el('li'),a=el('a',null,short(it.token)+' \u00b7 '+(CFG.chains[it.chain]||it.chain)+(it.score!=null?' \u00b7 '+it.score+'/100':'')+' \u00b7 '+new Date(it.at).toLocaleDateString());a.href='/rugradar?token='+encodeURIComponent(it.token)+'&chain='+encodeURIComponent(it.chain);li.append(a);ul.append(li)});b.append(ul)}).catch(()=>{})}
+function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings(j.checks,j.warnDetails),fa=j.facts||{},tk=rrTok(fa);
  const tok=el('div','tok'),info=el('div'),lt=(tk.s||tk.n||String(j.token||'?')).slice(0,2).toUpperCase(),av=el('div','av',lt);if(tk.img){const im=el('img');im.alt='';im.referrerPolicy='no-referrer';im.loading='lazy';im.onerror=()=>{im.remove();av.textContent=lt};im.src=tk.img;av.textContent='';av.append(im)}tok.append(av);
  info.append(el('b',null,tk.line||short(j.token)),el('div','addr',[tk.line?short(j.token):null,CFG.chains[j.chain]||j.chain,ageTxt(fa.ageHours)].filter(Boolean).join(' \u00b7 ')));tok.append(info);const sw=socials(j);if(sw)tok.append(sw);c.append(tok);
  c.append(verdictBox(j,ws));
- if(j.report==='limited'&&j.checks){c.append(el('div','unlockwhat','Full report also shows: live chart, dev activity, biggest buys/sells.'));c.append(lockedPanel('','Unlock for $'+CFG.p,'or buy credits to skip the wait'));c.append(el('div','buyline','Checks finish faster with credits · buy once, skip the payment wait'));c.append(el('div','tease',j.lockedTeaser||'Full report'))}
- if(Array.isArray(j.freeFacts)&&j.freeFacts.length)c.append(el('div','ffl',j.freeFacts.join(' \u00b7 ')));
  if(typeof SWAPHOOK==='function'&&j.token===t&&shownLevel(j,ws)==='low'){const sb=SWAPHOOK(j);if(sb)c.append(sb)}
- const wc=el('div','wcards');ws.slice(0,3).forEach((w,i)=>wc.append(card(w,j,DESK&&i===0)));if(ws.length)c.append(wc);
- if(j.report==='limited'&&j.checks){c.append(shareBar(j,ws))}
- else{if(ws.length>3){const b=el('button','tease','+'+(ws.length-3)+' more warnings');b.type='button';b.addEventListener('click',()=>{ws.slice(3).forEach(w=>wc.append(card(w,j,false)));b.remove()});c.append(b)}
-  if(Array.isArray(j.checks)){const fr=rrFree(j.checks,CFG.lim,CFG.warn);c.append(shareBar({riskScore:fr.sc,riskLevel:fr.lv,token:j.token,chain:j.chain,facts:fa},fr.ws))}}
- if(j.liveReport){const h=el('div');c.append(h);liveLoad().then(()=>{const b=window.RRLive(j);if(b)h.append(b)}).catch(()=>{})}
- const mo=el('details','quiet');mo.id='more';mo.append(el('summary',null,'More'));const ws2=el('div','sub soon');ws2.append(el('span',null,'\u{1F514} Watch token: coming soon'));mo.append(ws2);c.append(mo);
- c.append(el('div','disc','Danger warnings only \u00b7 based on public on-chain data.'));out.append(c)}
+ const wc=el('div','wcards');ws.slice(0,3).forEach(w=>wc.append(card(w,j,true)));if(ws.length)c.append(wc);
+ const full=!(j.report==='limited'&&j.checks);
+ if(!full){c.append(shareBar(j,ws));c.append(el('div','unlockwhat','Full report also shows: live chart, dev activity, biggest buys/sells.'));c.append(lockedPanel('','Unlock for $'+CFG.p,'or buy credits to skip the wait'));c.append(el('div','buyline','Checks finish faster with credits · buy once, skip the payment wait'));c.append(el('div','tease',j.lockedTeaser||'Full report'))}
+ else if(Array.isArray(j.checks)){const fr=rrFree(j.checks,CFG.lim,CFG.warn);c.append(shareBar({riskScore:fr.sc,riskLevel:fr.lv,token:j.token,chain:j.chain,facts:fa},fr.ws))}
+ const dt=el('details','quiet det');dt.id='more';if(full&&j.liveReport&&DESK)dt.open=true;dt.append(el('summary',null,'Show details'));const sub=el('div','sub');dt.append(sub);
+ if(Array.isArray(j.freeFacts)&&j.freeFacts.length)sub.append(el('div','ffl',j.freeFacts.join(' \u00b7 ')));
+ if(ws.length>3){sub.append(el('div','sec-title','More warnings'));const w2=el('div','wcards');ws.slice(3).forEach(w=>w2.append(card(w,j,true)));sub.append(w2)}
+ if(j.liveReport){const h=el('div');sub.append(h);liveLoad().then(()=>{const b=window.RRLive(j);if(b)h.append(b)}).catch(()=>{})}
+ const ws2=el('div','sub soon');ws2.append(el('span',null,'\u{1F514} Watch token: coming soon'));sub.append(ws2);c.append(dt);
+ c.append(el('div','disc','Danger warnings only'));out.append(c)}
 function waitCard(){out.textContent='';const c=el('div','card res'),v=el('div','verdict'),t=el('div');t.append(el('div','vt','Checking\u2026'),el('div','vl','Usually a few seconds.'));v.append(gauge('wait',0),t);v.querySelector('i').firstChild.textContent='\u2026';c.append(v);out.append(c)}
 function msgCard(text,lock,note){out.textContent='';const c=el('div','card res');c.append(el('p',null,text));if(lock)c.append(lockedPanel(note));out.append(c)}
 async function chainFor(t){const c=$('chain').value;if(c!=='auto')return c;if(!t.startsWith('0x'))return 'solana';try{const r=await fetch('/rugradar/api/chain?token='+encodeURIComponent(t));const j=await r.json();return j.chain||'base'}catch(e){return 'base'}}
 f.addEventListener('submit',async e=>{e.preventDefault();const t=$('tok').value.trim(),k=f.dataset.free?'':$('key').value.trim();delete f.dataset.free;if(!t)return;waitCard();go.disabled=true;
- try{const c=await chainFor(t);const r=k?await fetch('/rug-check?token='+encodeURIComponent(t)+'&chain='+c,{headers:{'X-RugRadar-Key':k}}):await fetch('/rugradar/api/check?token='+encodeURIComponent(t)+'&chain='+c,{method:'POST'});
+ try{const c=await chainFor(t);const r=k?await fetch('/rug-check?token='+encodeURIComponent(t)+'&chain='+c,{headers:{'X-RugRadar-Key':k}}):await fetch('/rugradar/api/check?token='+encodeURIComponent(t)+'&chain='+c,{method:'POST',headers:WS.get()?{'X-RugRadar-Wallet':WS.get()}:{}});
  const j=await r.json().catch(()=>({}));
  if(!r.ok){const used=j.error==='free_checks_used';msgCard(j.message||(r.status===402&&k?'Credit key not accepted or out of credits.':'Error '+r.status),r.status===402||used,used?'Free check used. Credits unlock the full report.':null);return}
  render(j,t);
@@ -406,7 +462,7 @@ document.querySelectorAll('.cpb').forEach(b=>b.addEventListener('click',()=>{con
 if(location.hash==='#credits')openBuy(false);
 try{const u=new URLSearchParams(location.search),t=u.get('token')||u.get('t'),c=u.get('chain');if(t&&t.length<=64){$('tok').value=t;if(c&&$('chain').querySelector('option[value="'+c.replace(/[^a-z]/g,'')+'"]'))$('chain').value=c;if(/^[A-Za-z0-9]{20,64}$/.test(t))setTimeout(()=>{f.dataset.free='1';f.dispatchEvent(new Event('submit',{cancelable:true}))},0)}}catch(e){}
 {const tk=$('tok'),cl=$('clr'),cs=()=>{cl.hidden=!tk.value};tk.addEventListener('input',cs);cl.addEventListener('click',()=>{tk.value='';cs();tk.focus()});cs()}
-keyUI();recentLoad();document.getElementById('wpayHome').append(walletPacks());
+keyUI();recentLoad();walLoad();document.getElementById('wpayHome').append(walletPacks());
 (function(){const k=KS.get();if(!k)return;fetch('/credits/balance',{headers:{'X-RugRadar-Key':k}}).then(r=>r.json()).then(j=>{if(j&&j.known)pill(j.credits)}).catch(()=>{})})();
 `;
 
@@ -424,7 +480,7 @@ function page(d: WebDeps, promo = false) {
       description: "Free Solana rug check and honeypot checker: 0-100 token risk score with plain danger warnings for Solana, BNB, Base, Ethereum and Arbitrum.", offers: { "@type": "Offer", price: p, priceCurrency: "USD" } },
     { "@context": "https://schema.org", "@type": "FAQPage", mainEntity: faq.map(([q, a]) => ({ "@type": "Question", name: q, acceptedAnswer: { "@type": "Answer", text: a } })) },
   ];
-  const cfg = { u: U, offer: unlockOffer(U, p), warn: WARN, lim: [...LIMITED_CHECKS], chains: CHAIN_NAME, p, cta: `Unlock full report - $${p}`, promo };
+  const cfg = { u: U, offer: unlockOffer(U, p), warn: WARN, head: HEAD, lim: [...LIMITED_CHECKS], chains: CHAIN_NAME, p, cta: `Unlock full report - $${p}`, promo };
   const swapJs = d.swap?.enabled ? "\n" + swapClientJs(d.swap) + "\nconst SWAPHOOK=swapBox;" : "";
   const json = (o: unknown) => JSON.stringify(o).replace(/</g, "\\u003c");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -442,6 +498,7 @@ ${CSS_PAGE}</style></head><body><div class="wrap">
 <form id="f" class="search"><span class="tw"><input id="tok" name="token" required autocomplete="off" spellcheck="false" placeholder="Token address (Solana mint or 0x contract)" aria-label="Token address"><button type="button" id="clr" class="clr" aria-label="Clear" hidden>\u00d7</button></span><button class="btn pri" id="go">Check token</button></form>
 <div class="subrow"><select id="chain" class="chainchip" aria-label="Chain" title="Chain: Auto-detect (Solana, Base, BNB, Ethereum, Arbitrum)"><option value="auto">Auto \u25BE</option>${CHAINS.map((c) => `<option value="${c}">${CHAIN_NAME[c]}</option>`).join("")}</select><span class="trust">Free \u00b7 no sign-up</span></div>
 <details class="keyd" id="keyd"><summary>Have a credit key?</summary><input id="key" type="password" placeholder="Credit key (rr_...)" autocomplete="off" aria-label="Credit key"><small id="keybox" hidden></small></details>
+<details class="keyd" id="wald"><summary>Connect wallet to see your past checks</summary><div id="walbox"></div></details>
 <select id="recent" class="chainchip" hidden aria-label="Recent full reports"></select>
 <small id="quota"></small>
 </section>
@@ -525,7 +582,7 @@ curl -s -H "X-RugRadar-Key: rr_YOURKEY" "${U}/rug-check?token=${DEV_MINT}"`;
 
 // ---------- embed card + JSON (free check data, danger warnings only) ----------
 const escA = (t: unknown) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-const VERDICT: Record<string, [string, string]> = { high: ["HIGH RISK", "Strong rug warning signs."], medium: ["CAUTION", "Some rug warning signs."], low: ["LOW RISK", "No danger warnings found."] };
+const VERDICT: Record<string, [string, string]> = { high: ["HIGH RISK", "Strong rug warning signs."], medium: ["CAUTION", "Some rug warning signs."], low: ["NO WARNINGS", "No danger warnings found."] };
 export type EmbedData = { product: "RugRadar"; report: "free"; token: string; chain: string; riskScore: number; riskLevel: string; label: string; verdict: string; warnings: { severity: string; title: string; line: string }[]; moreWarnings: number; reportUrl: string; generatedAt: string };
 const embedCache = new Map<string, { at: number; v: EmbedData }>();
 let embedBusy = 0;
@@ -539,7 +596,7 @@ export async function embedData(d: WebDeps, token: string, chain: string): Promi
   try {
     const full = await d.rugCheck(token, chain), l = limitedReport(full);
     const degraded = !!full?.facts?.marketUnknown || (chain === "solana" && full?.facts?.ageHours == null);
-    const ws = warningsOf(l.checks), lv = shownLevel(l.riskLevel, ws), verdict = VERDICT[lv]![1];
+    const ws = warningsOf(l.checks, l.warnDetails), lv = shownLevel(l.riskLevel, ws), verdict = VERDICT[lv]![1];
     const v: EmbedData = { product: "RugRadar", report: "free", token, chain, riskScore: l.riskScore, riskLevel: lv, label: VERDICT[lv]![0], verdict,
       warnings: ws.slice(0, 3).map((w) => ({ severity: w.sev, title: w.title, line: w.line })), moreWarnings: Math.max(0, ws.length - 3) + (Number(l.hiddenWarnings) || 0),
       reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, generatedAt: new Date().toISOString() };
@@ -608,6 +665,7 @@ function rugMcpTools(price: string) {
     token: { type: "string" }, chain: { type: "string" },
     riskScore: { type: "number", description: "0-100 risk score" },
     riskLevel: { type: "string" },
+    tensionLine: { type: ["string", "null"], description: "One short token-specific danger line (max 140 chars) that leads the result; null when nothing is flagged" },
     reasons: { type: "array", items: { type: "string" }, description: "Plain danger warnings" },
     buyerSummary: { type: "string", description: "Buyer-facing summary of the overall report" },
     facts: { type: "object", description: "Named safety fields (authority, holders, liquidity, age, and related public facts)" },
@@ -624,13 +682,36 @@ function researchMcpTools(rp: { report: string; read: string; news: string; pric
     { name: "research_brief", description: `Use when you need a cited research brief on a question (not a token rug check). Returns a short answer, key points and sources. ${rp.report} per call via x402 on GET /report?q=. No RugRadar credit key, and no free daily check. depth defaults to standard (more sources, can take longer) at the same price; pass quick for a shorter brief with fewer sources. lang defaults to en. For a URL's text use read_page; for recent headlines use news_search. ${PAY_X402}`, inputSchema: { type: "object", properties: { q: { type: "string", description: "Question or topic (2-300 chars)" }, lang: { type: "string", description: "default en; sources and wording prefer this language when available" }, depth: { type: "string", enum: ["quick", "standard"], description: "default standard. standard uses more sources and can take longer, same ${rp.report} price; quick is shorter with fewer sources" } }, required: ["q"] }, outputSchema: outSchema({ answer: { type: "string" }, key_points: { type: "array" }, sources: { type: "array" }, depth: { type: "string" }, lang: { type: "string" }, query: { type: "string" } }), annotations: RO },
     { name: "read_page", description: `Use when you already have an https URL and need its text as clean Markdown (title, headings, links). Not a web search and not a token check. ${rp.read} per call via x402 on GET /read?url=. No free daily check. maxChars defaults to 20000 (allowed 1000-100000); if the Markdown is longer it is cut at that limit and truncated=true. Non-https URLs are rejected and not charged. ${PAY_X402}`, inputSchema: { type: "object", properties: { url: { type: "string", description: "https URL to read; non-https is rejected and not charged" }, maxChars: { type: "number", description: "max markdown chars (default 20000, min 1000, max 100000). Longer text is cut and truncated=true" } }, required: ["url"] }, outputSchema: outSchema({ url: { type: "string" }, finalUrl: { type: "string" }, title: { type: "string" }, markdown: { type: "string" }, headings: { type: "array" }, links: { type: "array" }, truncated: { type: "boolean", description: "true when markdown was cut at maxChars or the fetch was size-capped" }, wordCount: { type: "number" } }), annotations: RO },
     { name: "news_search", description: `Use for recent news headlines and links on a topic (last 1-7 days). Headlines only — use read_page for full article text. ${rp.news} per call via x402 on GET /news?q=. No free daily check. hours is the lookback window (1-168, default 72); limit caps how many headlines are returned (1-25, default 10). An empty or unmatched query is not charged. ${PAY_X402}`, inputSchema: { type: "object", properties: { q: { type: "string", description: "Keywords (2-200 chars)" }, hours: { type: "number", description: "Lookback window in hours, 1-168, default 72" }, limit: { type: "number", description: "Max headlines to return, 1-25, default 10" } }, required: ["q"] }, outputSchema: outSchema({ query: { type: "string" }, hours: { type: "number" }, count: { type: "number" }, articles: { type: "array", description: "Headlines and links only" } }), annotations: RO },
-    { name: "token_price", description: `Use for a verifiable USD price and 24h change of a token (symbol, 0x address, or Solana mint). Not a rug or honeypot check — use rug_check or honeypot_check for danger warnings. ${rp.price} per call via x402 on GET /price?token=. No free daily check. If a symbol or 0x address exists on more than one chain, pass chain (ethereum, base, arbitrum, polygon, solana); Solana mints use solana. Unknown or unpriced tokens return an error and are not charged. ${PAY_X402}`, inputSchema: { type: "object", properties: { token: { type: "string", description: "Symbol, 0x address or Solana mint" }, chain: { type: "string", description: "optional: ethereum, base, arbitrum, polygon, solana. Pass it when the identifier exists on more than one chain; Solana mints use solana" } }, required: ["token"] }, outputSchema: outSchema({ priceUsd: { type: "number" }, change24hPct: { type: "number" }, token: { type: "string" }, chain: { type: "string" } }), annotations: RO },
+    { name: "token_price", description: `Use for a verifiable USD price and 24h change of a token (symbol, 0x address, or Solana mint). Not a rug or honeypot check — use rug_check or honeypot_check for danger warnings. ${rp.price} per call via x402 on GET /price?token=. No free daily check. If a symbol or 0x address exists on more than one chain, pass chain (ethereum, base, arbitrum, polygon, solana); Solana mints use solana. Unknown or unpriced tokens return an error and are not charged. ${PAY_X402}`, inputSchema: { type: "object", properties: { token: { type: "string", description: "Symbol, 0x address or Solana mint" }, chain: { type: "string", enum: ["ethereum", "base", "arbitrum", "polygon", "solana"], description: "optional: ethereum, base, arbitrum, polygon, solana. Pass it when the identifier exists on more than one chain; Solana mints use solana" } }, required: ["token"] }, outputSchema: outSchema({ priceUsd: { type: "number" }, change24hPct: { type: "number" }, token: { type: "string" }, chain: { type: "string" } }), annotations: RO },
   ];
 }
-function mcpTools(d: WebDeps) {
-  return [...rugMcpTools(d.priceUsd), ...researchMcpTools(d.researchPrices ?? RESEARCH_DEFAULTS), ...(d.watch ? [WATCH_TOOL] : [])];
+const TITLES: Record<string, string> = { rug_check: "Rug Check (overall report)", token_safety: "Token Safety Breakdown", honeypot_check: "Honeypot / Can I Sell Check", research_brief: "Cited Research Brief",
+  read_page: "Read Web Page as Markdown", news_search: "Recent News Search", token_price: "Token USD Price", watch_token: "Start Token Watch + Alert", list_watches: "List My Token Watches", cancel_watch: "Cancel a Token Watch" };
+const EXAMPLES: Record<string, Record<string, unknown[]>> = {
+  rug_check: { token: [EXAMPLE_MINT, "0x532f27101965dd16442E59d40670FaF5eBB142E4"], chain: ["solana", "base"] }, token_safety: { token: [EXAMPLE_MINT], chain: ["solana"] }, honeypot_check: { token: ["0x532f27101965dd16442E59d40670FaF5eBB142E4"], chain: ["base"] },
+  research_brief: { q: ["What is retrieval-augmented generation?"] }, read_page: { url: ["https://x402.org"] }, news_search: { q: ["solana memecoin"] }, token_price: { token: ["JUP", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"], chain: ["solana", "base"] },
+  watch_token: { token: [EXAMPLE_MINT], hours: ["24"], webhook_url: ["https://example.com/rugradar-hook"] }, cancel_watch: { watch_id: ["w_AbCdEfGhIjKl"] },
+};
+const LIST_WATCHES_TOOL = { name: "list_watches", description: "Use to see the Watch + Alert watches started with your RugRadar credit key (api_key or header X-RugRadar-Key): watchId, token, status (active, expired, cancelled), expiry, destination and alert count, newest first. Read-only and free: it never spends a credit or starts a check. Only watches paid with that same credit key are listed; watches paid per-call with x402 are not tied to a key and do not appear (use the watchId and secret you got back for those). To start a watch use watch_token; to stop one use cancel_watch.",
+  inputSchema: { type: "object", properties: { api_key: { type: "string", description: "RugRadar credit key used to start the watches (or header X-RugRadar-Key)" } }, required: [] },
+  outputSchema: outSchema({ watches: { type: "array", items: { type: "object", properties: { watchId: { type: "string" }, token: { type: "string" }, chain: { type: "string" }, status: { type: "string", enum: ["active", "expired", "cancelled"] }, hours: { type: "number" }, createdAt: { type: "string" }, expiresAt: { type: "string" }, destination: { type: "object" }, checks: { type: "number" }, alerts: { type: "number" } } } }, count: { type: "number" } }),
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } };
+const CANCEL_WATCH_TOOL = { name: "cancel_watch", description: "Use to stop one Watch + Alert watch that was started with your RugRadar credit key; pass its watch_id (from watch_token or list_watches) and the same key (api_key or header X-RugRadar-Key). Alerts stop right away and the watch cannot be restarted. No refund: credits spent on the watch are not returned, even if hours remain. Free to call. Cancelling an already cancelled or expired watch returns its current status and changes nothing. A watch started with a different key, or paid per-call with x402, returns not_found.",
+  inputSchema: { type: "object", properties: { watch_id: { type: "string", description: "Watch id (w_...) from watch_token or list_watches" }, api_key: { type: "string", description: "RugRadar credit key that started the watch (or header X-RugRadar-Key)" } }, required: ["watch_id"] },
+  outputSchema: outSchema({ watchId: { type: "string" }, token: { type: "string" }, status: { type: "string" }, expiresAt: { type: "string" }, refunded: { type: "boolean", description: "Always false: cancelling never refunds credits" }, message: { type: "string" } }),
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false } };
+function decorate(t: any) {
+  const ex = EXAMPLES[t.name] ?? {}, props = t.inputSchema?.properties ?? {};
+  const p2: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(props)) p2[k] = ex[k] ? { ...(v as object), examples: ex[k] } : v;
+  const title = TITLES[t.name] ?? t.name;
+  return { ...t, title, inputSchema: { ...t.inputSchema, properties: p2 }, annotations: { title, ...(t.annotations ?? {}) } };
 }
-const WATCH_TOOL = { name: "watch_token", description: "Use to start a Watch + Alert on one Solana token, not for a one-shot check (use rug_check, token_safety, or honeypot_check for those). hours=24 costs $0.05 (5 credits); hours=48 costs $0.10 (10 credits); hours defaults to 24. Re-checked about every 10 min; signed webhook alert when the dev sells, liquidity drops 30%+, mint/freeze authority appears, risk score jumps 20+ points, or it can't be sold. Each call starts a new paid watch (not idempotent) and returns watchId, expiry, and destination; there is no list or cancel tool. Pass a RugRadar credit key (api_key or header X-RugRadar-Key); without one the tool returns the x402 payment requirement for GET /watch. telegram_chat_id is not available yet — use webhook_url for signed JSON POST alerts. Invalid or failed creates are not charged. No free daily check on this tool.",
+function mcpTools(d: WebDeps) {
+  const watch = d.watch ? [WATCH_TOOL, ...(d.watch.list ? [LIST_WATCHES_TOOL] : []), ...(d.watch.cancel ? [CANCEL_WATCH_TOOL] : [])] : [];
+  return [...rugMcpTools(d.priceUsd), ...researchMcpTools(d.researchPrices ?? RESEARCH_DEFAULTS), ...watch].map(decorate);
+}
+const WATCH_TOOL = { name: "watch_token", description: "Use to start a Watch + Alert on one Solana token, not for a one-shot check (use rug_check, token_safety, or honeypot_check for those). hours=24 costs $0.05 (5 credits); hours=48 costs $0.10 (10 credits); hours defaults to 24. Re-checked about every 10 min; signed webhook alert when the dev sells, liquidity drops 30%+, mint/freeze authority appears, risk score jumps 20+ points, or it can't be sold. Each call starts a new paid watch (not idempotent) and returns watchId, expiry, and destination. To see or stop watches started with your credit key, use list_watches or cancel_watch. Pass a RugRadar credit key (api_key or header X-RugRadar-Key); without one the tool returns the x402 payment requirement for GET /watch. telegram_chat_id is not available yet — use webhook_url for signed JSON POST alerts. Invalid or failed creates are not charged. No free daily check on this tool.",
   inputSchema: { type: "object", properties: { token: { type: "string", description: "Solana mint address (this tool is Solana only)" }, hours: { type: "string", enum: ["24", "48"], description: "default 24. 24 = $0.05 (5 credits); 48 = $0.10 (10 credits)" }, webhook_url: { type: "string", description: "https URL for signed JSON POST alerts" }, telegram_chat_id: { type: "string", description: "Telegram chat id (not available yet; use webhook_url)" }, api_key: { type: "string", description: "RugRadar credit key (or header X-RugRadar-Key)" } }, required: ["token"] },
   outputSchema: outSchema({ watchId: { type: "string", description: "Id of the new watch" }, token: { type: "string" }, chain: { type: "string" }, status: { type: "string" }, hours: { type: "number" }, createdAt: { type: "string" }, expiresAt: { type: "string" }, destination: { type: "object" }, checkEveryMin: { type: "number" } }),
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } };
@@ -650,6 +731,18 @@ async function mcpWatch(d: WebDeps, args: any, headerKey: string | undefined) {
   let requirement: unknown = null;
   try { const r = await fetch(url, { headers: { accept: "application/json", "user-agent": "rugradar-mcp-self (self)" }, signal: AbortSignal.timeout(5000) }); const h = r.headers.get("payment-required"); requirement = h ? JSON.parse(Buffer.from(h, "base64").toString()) : null; } catch {}
   return text({ error: "payment_required", ...d.watch.config(), payWith: { x402: { url, method: "GET", paymentRequired: requirement }, credits: { buy: `${d.publicUrl}/credits/buy?credits=10`, use: "pass api_key or header X-RugRadar-Key" } } }, true);
+}
+async function mcpWatchManage(d: WebDeps, name: string, args: any, headerKey: string | undefined) {
+  const text = (o: unknown, isError = false) => ({ result: { isError, content: [{ type: "text", text: JSON.stringify(o) }], structuredContent: o } });
+  if (!d.watch?.list || !d.watch?.cancel) return text({ error: "unavailable" }, true);
+  const key = headerKey || (typeof args?.api_key === "string" ? args.api_key : "");
+  if (!key || key.length > 200) return text({ error: "missing_key", message: "Pass the RugRadar credit key that started the watch (api_key or header X-RugRadar-Key)." }, true);
+  try {
+    if (name === "list_watches") return text(await d.watch.list(key));
+    const id = String(args?.watch_id ?? "").trim();
+    if (!/^w_[A-Za-z0-9_-]{4,40}$/.test(id)) return text({ error: "bad_input", message: "watch_id is required (w_...)" }, true);
+    return text(await d.watch.cancel(key, id));
+  } catch (e: any) { return text({ error: e?.code ?? "unavailable", message: String(e?.message ?? e) }, true); }
 }
 async function mcpResearch(d: WebDeps, name: string, args: any) {
   const text = (o: unknown, isError = false) => ({ result: { isError, content: [{ type: "text", text: JSON.stringify(o) }], structuredContent: o } });
@@ -674,6 +767,7 @@ async function mcpResearch(d: WebDeps, name: string, args: any) {
 }
 async function mcpCall(d: WebDeps, name: string, args: any, headerKey: string | undefined) {
   if (name === "watch_token") return mcpWatch(d, args, headerKey);
+  if (name === "list_watches" || name === "cancel_watch") return mcpWatchManage(d, name, args, headerKey);
   if (name === "research_brief" || name === "read_page" || name === "news_search" || name === "token_price") return mcpResearch(d, name, args);
   const route = ROUTE[name];
   if (!route) return { error: { code: -32602, message: `unknown tool ${name}` } };
@@ -688,7 +782,7 @@ async function mcpCall(d: WebDeps, name: string, args: any, headerKey: string | 
       try {
         const full = await (d.paidCheck ?? d.rugCheck)(token, chain);
         primeFromLimited(limitedReport(full), token, chain);
-        return text({ ...full, paidWith: "credits", credits_remaining: left, shareUrl: `${d.publicUrl}/rugradar/c/${chain}/${encodeURIComponent(token)}`, freeFacts: freeFacts(full) });
+        return text({ ...full, tensionLine: full?.tensionLine ?? null, paidWith: "credits", credits_remaining: left, shareUrl: `${d.publicUrl}/rugradar/c/${chain}/${encodeURIComponent(token)}`, freeFacts: freeFacts(full), warnDetails: warnDetails(full) });
       }
       catch (e) { await d.refund(key); return text({ error: String((e as Error).message ?? e) + (e instanceof RugBusyError ? ". You weren't charged." : ""), refunded: true }, true); }
     }
@@ -703,7 +797,7 @@ async function mcpCall(d: WebDeps, name: string, args: any, headerKey: string | 
 
 /** Prime the share-card cache from a limited report. Skips when market data was truly unavailable so we never cache an under-scored card. */
 export function primeFromLimited(l: any, token: string, chain: string) {
-  try { if (l?.facts?.marketUnknown) return; const ws = warningsOf(l.checks); primeShare(shareData(l, ws, shownLevel(l.riskLevel, ws), token, chain)); } catch {}
+  try { if (l?.facts?.marketUnknown) return; const ws = warningsOf(l.checks, l.warnDetails); primeShare(shareData(l, ws, shownLevel(l.riskLevel, ws), token, chain)); } catch {}
 }
 const OG_RE = /<meta property="og:type"[^\n]*?preview-x402-v2\.png">/;
 function shareTarget(req: Request): { token: string; chain: string } | null {
@@ -715,11 +809,11 @@ function shareTarget(req: Request): { token: string; chain: string } | null {
 function shareMeta(U: string, token: string, chain: string) {
   const c = cachedShare(chain, token)?.v, nm = c?.name || shortAddr(token);
   const title = escA(noSafe(`${nm}: RugRadar risk ${c ? `${c.score}/100 ${c.label}` : "check"}`));
-  const desc = escA(noSafe(c && c.warnings.length ? c.warnings.map((w) => w.title).join(" \u00b7 ") + ". Danger warnings only \u00b7 based on public on-chain data." : "0-100 token risk score with plain danger warnings. Danger warnings only \u00b7 based on public on-chain data."));
+  const desc = escA(noSafe(c && c.warnings.length ? (c.tension ? c.tension + " " : "") + c.warnings.map((w) => w.title).join(" \u00b7 ") + ". Danger warnings only." : "0-100 token risk score with plain danger warnings. Danger warnings only."));
   const url = escA(`${U}/rugradar/c/${chain}/${encodeURIComponent(token)}`), img = escA(c ? `${U}/rugradar/share/${chain}/${encodeURIComponent(token)}.png` : `${U}/rugradar/rug-radar-512.png`);
   return `<meta property="og:type" content="website"><meta property="og:title" content="${title}"><meta property="og:description" content="${desc}"><meta property="og:url" content="${url}"><meta property="og:image" content="${img}"><meta property="og:image:width" content="600"><meta property="og:image:height" content="600"><meta name="twitter:card" content="summary"><meta name="twitter:title" content="${title}"><meta name="twitter:description" content="${desc}"><meta name="twitter:image" content="${img}"><meta name="twitter:image:alt" content="RugRadar risk score and danger warnings for ${escA(shortAddr(token))}">`;
 }
-function shareCardHtml(U: string, chain: string, token: string, v: { name: string; score: number; label: string; level: string; warnings: { severity: string; title: string }[]; more: number; facts: string[] } | null): string {
+function shareCardHtml(U: string, chain: string, token: string, v: { name: string; score: number; label: string; level: string; warnings: { severity: string; title: string }[]; more: number; facts: string[]; tension?: string | null } | null): string {
   const check = `${U}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`;
   const title = escA(noSafe(v ? `${v.name || shortAddr(token)} — RugRadar danger warnings` : `RugRadar — ${shortAddr(token)}`));
   const meta = shareMeta(U, token, chain);
@@ -728,14 +822,14 @@ function shareCardHtml(U: string, chain: string, token: string, v: { name: strin
   const body = v
     ? `<p class="tok">${escA(noSafe(v.name || shortAddr(token)))}<small>${escA(shortAddr(token))} · ${escA(CHAIN_NAME[chain] ?? chain)}</small></p>
 <div class="score"><strong>${v.score}</strong><span>/100</span></div>
-${v.warnings.length ? rows : `<p class="none">No danger warnings found.</p>`}
+${v.tension ? `<p class="tl">${escA(noSafe(v.tension))}</p>` : ""}${v.warnings.length ? rows : `<p class="none">No danger warnings found.</p>`}
 ${v.facts.length ? `<p class="facts">${escA(v.facts.slice(0, 3).join(" · "))}</p>` : ""}${more}
 <p class="foot">Danger warnings only · <a href="${escA(check)}">Open the full check</a></p>`
     : `<p class="tok">${escA(shortAddr(token))}<small>${escA(CHAIN_NAME[chain] ?? chain)}</small></p>
 <p class="none">No saved danger warnings for this token yet.</p>
 <p class="foot"><a href="${escA(check)}">Check this token on RugRadar</a></p>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>${meta}
-<style>body{margin:0;background:#0B1020;color:#EEF2F8;font:16px/1.45 system-ui,sans-serif}main{max-width:420px;margin:24px auto;padding:20px;background:#131A2E;border:1px solid #232C47;border-radius:16px}.tok{margin:0 0 12px;font-weight:700}.tok small{display:block;color:#9AA4B8;font-weight:500;margin-top:4px}.score{font-size:40px;font-weight:700;margin:0 0 14px}.score span{font-size:16px;color:#9AA4B8;margin-left:4px}.w{display:flex;gap:8px;align-items:center;font-weight:700;padding:9px 10px;margin:0 0 6px;border-radius:10px;background:#0F1628}.w.d{border-left:4px solid #EF4444}.w.c{border-left:4px solid #F59E0B}.w b{font-size:11px;letter-spacing:.04em}.none,.facts,.more,.foot{color:#9AA4B8;font-size:14px}a{color:#38BDF8;font-weight:700}</style></head>
+<style>.tl{font-weight:700;font-size:17px;margin:0 0 12px;color:#EEF2F8}body{margin:0;background:#0B1020;color:#EEF2F8;font:16px/1.45 system-ui,sans-serif}main{max-width:420px;margin:24px auto;padding:20px;background:#131A2E;border:1px solid #232C47;border-radius:16px}.tok{margin:0 0 12px;font-weight:700}.tok small{display:block;color:#9AA4B8;font-weight:500;margin-top:4px}.score{font-size:40px;font-weight:700;margin:0 0 14px}.score span{font-size:16px;color:#9AA4B8;margin-left:4px}.w{display:flex;gap:8px;align-items:center;font-weight:700;padding:9px 10px;margin:0 0 6px;border-radius:10px;background:#0F1628}.w.d{border-left:4px solid #EF4444}.w.c{border-left:4px solid #F59E0B}.w b{font-size:11px;letter-spacing:.04em}.none,.facts,.more,.foot{color:#9AA4B8;font-size:14px}a{color:#38BDF8;font-weight:700}</style></head>
 <body><main>${body}</main></body></html>`;
 }
 export function registerRugradarWeb(app: Express, d: WebDeps) {
@@ -777,6 +871,34 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     if (!/^0x[0-9a-fA-F]{40}$/.test(t)) { res.json({ chain: "solana" }); return; }
     res.json({ chain: await (d.detectChain ?? detectEvmChain)(t) });
   });
+  /** Connected wallet (signed session) on a free check: logged privately, never shown to anyone else. */
+  const logConnected = (req: Request, chain: string, token: string, score: unknown) => { try { const w = sessionWallet(req.header("x-rugradar-wallet")); if (w && d.wallets) void d.wallets.log(w, chain, token, score, "connected"); } catch {} };
+  const wHits = new Map<string, number[]>();
+  const wLimited = (ip: string, n = 20) => { const now = Date.now(), xs = (wHits.get(ip) ?? []).filter((t) => now - t < 10 * 60_000); xs.push(now); wHits.set(ip, xs); if (wHits.size > 2000) wHits.delete(wHits.keys().next().value!); return xs.length > n; };
+  // "Connect wallet to see your past checks": sign a message (no transaction, no payment); the wallet sees only its own checks.
+  app.get("/rugradar/api/wallet/challenge", (req: Request, res: Response) => {
+    res.set("Cache-Control", "no-store");
+    const a = String(req.query.address ?? "").trim();
+    if (!d.wallets) { res.status(404).json({ error: "not_available" }); return; }
+    if (!(isEvmAddr(a) || isSolAddr(a))) { res.status(400).json({ error: "invalid_input", message: "Send a Solana or 0x wallet address." }); return; }
+    if (wLimited(ipOf(req))) { res.status(429).json({ error: "slow_down", message: "Too many tries; wait a few minutes." }); return; }
+    res.json(challenge(a));
+  });
+  app.post("/rugradar/api/wallet/verify", async (req: Request, res: Response) => {
+    res.set("Cache-Control", "no-store");
+    if (!d.wallets) { res.status(404).json({ error: "not_available" }); return; }
+    if (wLimited(ipOf(req))) { res.status(429).json({ error: "slow_down", message: "Too many tries; wait a few minutes." }); return; }
+    const b = req.body ?? {}, tok = await verifyChallenge(String(b.address ?? ""), String(b.message ?? ""), String(b.signature ?? ""));
+    if (!tok) { res.status(401).json({ error: "bad_signature", message: "The signature did not match this wallet, or the message expired. Try connecting again." }); return; }
+    res.json({ session: tok, expiresInDays: 7 });
+  });
+  app.get("/rugradar/api/wallet/history", async (req: Request, res: Response) => {
+    res.set("Cache-Control", "no-store");
+    const w = sessionWallet(req.header("x-rugradar-wallet"));
+    if (!d.wallets) { res.status(404).json({ error: "not_available" }); return; }
+    if (!w) { res.status(401).json({ error: "not_connected", message: "Connect your wallet again to see your past checks." }); return; }
+    res.json({ wallet: w, items: await d.wallets.list(w) });
+  });
   const checkFree = async (req: Request, res: Response) => {
     res.set("Cache-Control", "no-store");
     const token = String(req.query.token ?? "").trim(), chain = String(req.query.chain ?? "solana").toLowerCase();
@@ -791,11 +913,11 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     }
     useFree(ip, vid);
     if (fullFreeActive() && d.paidCheck) {
-      try { const full = await d.paidCheck(token, chain); primeFromLimited(limitedReport(full), token, chain); countRugradar("free"); res.json({ ...full, paidWith: "free_promo", free_checks_left: a.left, freeFacts: freeFacts(full) }); }
+      try { const full = await d.paidCheck(token, chain); primeFromLimited(limitedReport(full), token, chain); countRugradar("free"); logConnected(req, chain, token, full?.riskScore); res.json({ ...full, tensionLine: full?.tensionLine ?? null, paidWith: "free_promo", free_checks_left: a.left, freeFacts: freeFacts(full), warnDetails: warnDetails(full) }); }
       catch (e) { refundFree(ip, vid); countRugradarRejected("error"); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
       return;
     }
-    try { const lr = limitedReport(await d.rugCheck(token, chain)); primeFromLimited(lr, token, chain); countRugradar("free"); res.json({ ...lr, reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, shareUrl: `${d.publicUrl}/rugradar/c/${chain}/${encodeURIComponent(token)}`, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
+    try { const lr = limitedReport(await d.rugCheck(token, chain)); primeFromLimited(lr, token, chain); countRugradar("free"); logConnected(req, chain, token, lr.riskScore); res.json({ ...lr, reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, shareUrl: `${d.publicUrl}/rugradar/c/${chain}/${encodeURIComponent(token)}`, unlockOffer: unlockOffer(d.publicUrl, d.priceUsd), free_checks_left: a.left }); }
     catch (e) { refundFree(ip, vid); countRugradarRejected("error"); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
   };
   app.post("/rugradar/api/check", checkFree);
@@ -831,7 +953,7 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     if (m.id === undefined) { res.status(202).end(); return; } // notifications
     const rp = d.researchPrices ?? RESEARCH_DEFAULTS;
     switch (m.method) {
-      case "initialize": return reply({ result: { protocolVersion: m.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "rugradar", title: "RugRadar", version: "1.0.0" }, instructions: `RugRadar danger checks (rug_check, token_safety, honeypot_check at $${d.priceUsd}; watch_token $0.05/24h) plus research tools on the same server: research_brief ${rp.report}, read_page ${rp.read}, news_search ${rp.news}, token_price ${rp.price}. RugRadar tools accept a credit key (header X-RugRadar-Key or api_key); otherwise each tool returns the x402 payment requirement for its HTTP route.` } });
+      case "initialize": return reply({ result: { protocolVersion: m.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "rugradar", title: "RugRadar", version: "1.0.0" }, instructions: `RugRadar danger checks (rug_check, token_safety, honeypot_check at $${d.priceUsd}; watch_token $0.05/24h; list_watches and cancel_watch are free with the same credit key) plus research tools on the same server: research_brief ${rp.report}, read_page ${rp.read}, news_search ${rp.news}, token_price ${rp.price}. RugRadar tools accept a credit key (header X-RugRadar-Key or api_key); otherwise each tool returns the x402 payment requirement for its HTTP route.` } });
       case "ping": return reply({ result: {} });
       case "tools/list": return reply({ result: { tools: mcpTools(d) } });
       case "tools/call": return reply(await mcpCall(d, m.params?.name, m.params?.arguments, req.header("x-rugradar-key")));

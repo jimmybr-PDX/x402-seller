@@ -5,6 +5,7 @@ import { applyEvmSellWarnings, evmDecimals, evmSellAmount, evmSellQuote } from "
  * (public Solana RPC + keyless DexScreener API).
  */
 import fs from "node:fs";
+import { tensionFor } from "./tension.js";
 import { jupFetch } from "./jup-gate.js";
 import { pickTokenMeta, type TokenMeta } from "./token-name.js";
 import path from "node:path";
@@ -448,11 +449,53 @@ export async function rugCheck(mintRaw: string, chainRaw = "solana", opts: { noC
   const ck = `${(chainRaw || "solana").toLowerCase()}:${mintRaw.trim()}`;
   const hit = cache.get(ck);
   if (!opts.noCache && hit && Date.now() - hit.at < CACHE_MS) return { ...hit.v, cached: true };
-  if (opts.noCache) { bypass = true; try { const v = await rugCheckUncached(mintRaw, chainRaw); return { ...v, cached: false }; } finally { bypass = false; } }
-  const v: any = await rugCheckUncached(mintRaw, chainRaw);
+  if (opts.noCache) { bypass = true; try { const v = finalizeReport(await rugCheckUncached(mintRaw, chainRaw)); return { ...v, cached: false }; } finally { bypass = false; } }
+  const v: any = finalizeReport(await rugCheckUncached(mintRaw, chainRaw));
   if (!v?.facts?.jupiterMissing) cache.set(ck, { at: Date.now(), v });
   if (cache.size > 500) cache.delete(cache.keys().next().value!);
   return { ...v, cached: false };
+}
+const fnum = (v: unknown) => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+const kUsd = (n: number) => (n >= 1e6 ? `$${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M` : n >= 1000 ? `$${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : `$${Math.round(n)}`);
+/**
+ * Market danger warnings from 24h facts the check already has (no extra calls):
+ * heavy selling (>= 1.5 sells per buy, 20+ sells, >= $1k volume), thin trading (< 0.1% of market cap, or < $5k when the
+ * cap is unknown or under $50k), thin liquidity (< 2% of market cap when the cap is $50k-$50M).
+ */
+export function marketWarnings(out: any): Reason[] {
+  const f = out?.facts ?? {}, b = (f.buyer && typeof f.buyer === "object" ? f.buyer : null) ?? (out?.buyer && typeof out.buyer === "object" ? out.buyer : {}) ?? {};
+  const pick = (k: string) => fnum(f[k]) ?? fnum(b[k]);
+  const have = new Set((Array.isArray(out?.checks) ? out.checks : []).map((c: any) => c?.check));
+  if (f.marketUnknown || have.has("dead_token")) return [];
+  const r: Reason[] = [];
+  // 24h trading only from the summed pool facts (null when the market source failed), never a fallback source
+  const vol = fnum(f.volume24hUsd), buys = fnum(f.buys24h), sells = fnum(f.sells24h), mcap = pick("marketCapUsd"), liq = pick("liquidityUsd") ?? fnum(f.liquidityUsd), age = fnum(f.ageHours);
+  if (sells != null && sells >= 20 && vol != null && vol >= 1000 && sells / Math.max(1, buys ?? 0) >= 1.5 && !have.has("heavy_selling")) {
+    const x = sells / Math.max(1, buys ?? 0);
+    r.push({ check: "heavy_selling", points: 5, detail: `Heavy selling: ${x >= 10 ? Math.round(x) : x.toFixed(1)} sells per buy in 24h (${sells} sells vs ${buys ?? 0} buys).` });
+  }
+  if (vol != null && vol > 0 && !(age != null && age < 1) && !have.has("thin_trading")) {
+    const thin = mcap != null && mcap >= 50_000 ? vol < mcap * 0.001 : vol < 5000;
+    if (thin) r.push({ check: "thin_trading", points: 3, detail: `Thin trading: ${kUsd(vol)} volume in 24h.` });
+  }
+  if (mcap != null && mcap >= 50_000 && mcap <= 50_000_000 && liq != null && liq > 0 && (liq / mcap) * 100 < 2 && !have.has("liquidity_vs_mcap")) {
+    r.push({ check: "liquidity_vs_mcap", points: 8, detail: `Liquidity is ${((liq / mcap) * 100).toFixed(2)}% of market cap.` });
+  }
+  return r;
+}
+/** Adds market warnings (re-scoring) and the tension line to a finished check. */
+export function finalizeReport(v: any) {
+  if (!v || !Array.isArray(v.checks)) return v;
+  const add = marketWarnings(v);
+  let out = v;
+  if (add.length) {
+    const checks = [...v.checks, ...add].sort((a: any, b: any) => b.points - a.points);
+    const score = Math.min(100, checks.reduce((a: number, x: any) => a + (Number(x.points) || 0), 0));
+    const level: "low" | "medium" | "high" = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
+    out = { ...v, riskScore: score, riskLevel: level, verdict: verdictOf(level), checks, reasons: [...(Array.isArray(v.reasons) ? v.reasons : []), ...add.map((x) => x.detail)],
+      buyerSummary: buyerSummary(level, checks.filter((x: any) => x.points > 0).map((x: any) => x.detail), v.confidence) };
+  }
+  return { ...out, tensionLine: tensionFor(out) };
 }
 async function rugCheckUncached(mintRaw: string, chainRaw = "solana") {
   const c0 = (chainRaw || "solana").toLowerCase(); const chain = ALIAS[c0] ?? c0;

@@ -50,7 +50,7 @@ test("see_also uses the approved wording and does not overwrite an existing fiel
   assert.equal(seeAlsoLine("", BASE), `Check this token on RugRadar: ${BASE}/rugradar`);
   assert.equal(seeAlsoLine(JUP, BASE), `Check this token on RugRadar: ${BASE}/rugradar?token=${JUP}`);
   const added = withSeeAlso({ tool: "x" }, "", BASE);
-  assert.equal(added.see_also, `Check this token on RugRadar: ${BASE}/rugradar`);
+  assert.equal((added as any).see_also, `Check this token on RugRadar: ${BASE}/rugradar`);
   const kept = withSeeAlso({ see_also: "keep me" }, JUP, BASE);
   assert.equal(kept.see_also, "keep me");
   assert.deepEqual(withSeeAlso("nope"), "nope");

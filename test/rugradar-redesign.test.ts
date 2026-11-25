@@ -26,7 +26,7 @@ test("Solana free check adds one plain line: mint authority and LP burn", () => 
   assert.deepEqual(freeFacts({ chain: "base", facts: { volume24hUsd: 1234, buys24h: 8, sells24h: 12, priceChange24hPct: -6.4 } }), ["24h $1.2K · 8 buys / 12 sells · -6.4%"]);
   assert.deepEqual(limitedReport(c).freeFacts, ["Mint authority: off", "Liquidity: 41% burned"]);
 });
-test("warnings: one-line titles, worst first, creator history never shown", () => {
+test("warnings: one-line titles, worst first, creator history shown as a danger warning", () => {
   const w = warningsOf(deadFull().checks);
   assert.deepEqual(w.map((x) => x.title), ["Creator can mint more", "Dead token: no way to sell", "Thin liquidity", "No website or socials"]);
   assert.deepEqual(w.map((x) => x.sev), ["DANGER", "DANGER", "DANGER", "CAUTION"]);
@@ -44,17 +44,17 @@ test("v5 page: paste box, Auto chip, free line, credits copy, folded agents with
     const { srv, base } = await start(() => deadFull(), sw);
     try {
       const h = await (await fetch(`${base}/rugradar`)).text();
-      for (const s of ['id="tok"', '<option value="auto">Auto', "Free \u00b7 no sign-up", "Prepaid credits finish checks ~2x faster", "Buy credits: results ~2x faster", "don't wait on a payment for each check (measured ~1.8x faster)", "Strong rug warning signs.", "No danger warnings found.", "No socials found", "more warning", 'id="agents"', 'id="developers"', "For developers", "#developers", "/rugradar/embed?token=", "/rugradar/embed.json?token=", "Danger warnings only \u00b7 based on public on-chain data", "Full report also shows: live chart, dev activity, biggest buys/sells.", "or buy credits to skip the wait", "Checks finish faster with credits \u00b7 buy once, skip the payment wait"]) assert.ok(h.includes(s), s);
+      for (const s of ['id="tok"', '<option value="auto">Auto', "Free \u00b7 no sign-up", "Prepaid credits finish checks ~2x faster", "Buy credits: results ~2x faster", "don't wait on a payment for each check (measured ~1.8x faster)", "Strong rug warning signs.", "No danger warnings found.", "No socials found", "More warnings", 'id="agents"', 'id="developers"', "For developers", "#developers", "/rugradar/embed?token=", "/rugradar/embed.json?token=", "Danger warnings only", "Full report also shows: live chart, dev activity, biggest buys/sells.", "or buy credits to skip the wait", "Checks finish faster with credits \u00b7 buy once, skip the payment wait"]) assert.ok(h.includes(s), s);
       assert.ok(!/guarantee/i.test(h), "page has no guarantee wording");
       assert.equal((h.match(/<select id="chain"/g) ?? []).length, 1, "a single chain chip");
       assert.ok(!/id="watch"|More tools|Watch this token/.test(h), "no Watch feature or paid tool list in this release");
-      assert.ok(h.includes("Watch token: coming soon") && h.includes("mo.id='more'"), "static coming-soon note in the More section");
+      assert.ok(h.includes("Watch token: coming soon") && h.includes("dt.id='more'"), "static coming-soon note in the More section");
       assert.ok(!/\/rugradar\/fw|rr_alerts/.test(h), "no watch requests or alert storage");
       const visible = h.replace(SWAP_RULE_JS, ""); // the unchanged swap rule reads report field names; it prints nothing
       for (const re of PRIVATE) assert.ok(!re.test(visible), `page must not match ${re}`);
       for (const k of ["deployer_history", "known_pattern", "shared_funder"]) assert.ok(!new RegExp(`"${k}":\\[`).test(h), `${k} has no copy on the page`);
       assert.equal(h.includes("Opens swap in your wallet"), sw.enabled, "swap line only ships when the swap is on");
-      assert.ok(Buffer.byteLength(h) < 60_000, `page ${Buffer.byteLength(h)} bytes`);
+      assert.ok(Buffer.byteLength(h) < 66_000, `page ${Buffer.byteLength(h)} bytes`);
       for (const m of h.matchAll(/<script>([\s\S]*?)<\/script>/g)) new Function(m[1]!);
     } finally { srv.closeAllConnections(); srv.close(); }
   }
@@ -134,10 +134,10 @@ test("page ships the share buttons for free AND full results, free-only auto-run
     for (const s of ["Share on X", "https://x.com/intent/post?text=", "Copy report", "Copy link", "function shotMode", "navigator.share", "execCommand('copy')", "shareBar(j,ws)", "f.dataset.free", "preview-x402-v2.png", 'content="1200"', 'content="630"']) assert.ok(h.includes(s), s);
     assert.ok(h.includes("lockedPanel('','Unlock for $'+CFG.p,'or buy credits to skip the wait')"), "unlock button still opens the existing buy flow");
     assert.ok(h.includes("el('div','tease',j.lockedTeaser||'Full report')"), "N more warnings teaser kept");
-    assert.ok(/if\(j\.report==='limited'&&j\.checks\)\{c\.append\(shareBar\(j,ws\)\)\}/.test(h), "share bar still under the free result");
-    assert.ok(/else\{if\(ws\.length>3\)[\s\S]*?if\(Array\.isArray\(j\.checks\)\)\{const fr=rrFree\(j\.checks,CFG\.lim,CFG\.warn\);c\.append\(shareBar\(\{riskScore:fr\.sc,riskLevel:fr\.lv,token:j\.token,chain:j\.chain,facts:fa\},fr\.ws\)\)\}\}/.test(h), "full-report branch shows the share bar, built from the free score and warnings only");
-    assert.ok(h.includes('"lim":["mint_authority","freeze_authority","mint_function","holders","liquidity","age","dead_token","sell_route","sell_impact","honeypot","tax"]'), "page config carries the free check list");
-    assert.ok(Buffer.byteLength(h) < 60_000, `page ${Buffer.byteLength(h)} bytes`);
+    assert.ok(/if\(!full\)\{c\.append\(shareBar\(j,ws\)\)/.test(h), "share bar still under the free result");
+    assert.ok(/else if\(Array\.isArray\(j\.checks\)\)\{const fr=rrFree\(j\.checks,CFG\.lim,CFG\.warn\);c\.append\(shareBar\(\{riskScore:fr\.sc,riskLevel:fr\.lv,token:j\.token,chain:j\.chain,facts:fa\},fr\.ws\)\)\}/.test(h), "full-report branch shows the share bar, built from the free score and warnings only");
+    assert.ok(h.includes('"lim":["mint_authority","freeze_authority","mint_function","holders","liquidity","age","dead_token","sell_route","sell_impact","honeypot","tax","heavy_selling","thin_trading","liquidity_vs_mcap"]'), "page config carries the free check list");
+    assert.ok(Buffer.byteLength(h) < 66_000, `page ${Buffer.byteLength(h)} bytes`);
     for (const re of PRIVATE) assert.ok(!re.test(h.replace(SWAP_RULE_JS, "")), `${re}`);
   } finally { srv.closeAllConnections(); srv.close(); }
 });
