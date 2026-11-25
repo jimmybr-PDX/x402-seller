@@ -53,9 +53,21 @@ test("MCP: initialize, tools/list, tools/call with credit key, and payment_requi
     assert.deepEqual(names, ["rug_check", "token_safety", "honeypot_check", "research_brief", "read_page", "news_search", "token_price"]);
     const listed = (await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" })).result.tools;
     const rug = listed.find((t: any) => t.name === "rug_check"), safe = listed.find((t: any) => t.name === "token_safety"), honey = listed.find((t: any) => t.name === "honeypot_check");
-    assert.ok(rug.description.includes("overall rug-pull") && rug.description.includes("honeypot_check") && !rug.description.includes("45+ data points"));
-    assert.ok(safe.description.includes("token-safety breakdown") && safe.description.includes("honeypot_check") && !safe.description.includes("45+ data points"));
-    assert.ok(honey.description.includes("can I sell") && honey.description.includes("rug_check") && !honey.description.includes("45+ data points"));
+    assert.ok(rug.description.includes("overall rug-pull") && rug.description.includes("instead of token_safety") && rug.description.includes("honeypot_check") && !rug.description.includes("45+ data points"));
+    assert.ok(safe.description.includes("token-safety breakdown") && safe.description.includes("instead of rug_check") && safe.description.includes("honeypot_check") && !safe.description.includes("45+ data points"));
+    assert.ok(honey.description.includes("can I sell") && honey.description.includes("rug_check") && honey.description.includes("token_safety") && !honey.description.includes("45+ data points"));
+    for (const t of listed) {
+      assert.ok(t.outputSchema && t.outputSchema.properties && t.outputSchema.properties.payWith, t.name);
+      assert.equal(t.annotations.readOnlyHint, true, t.name);
+      assert.equal(t.annotations.destructiveHint, false, t.name);
+      assert.equal(t.annotations.idempotentHint, true, t.name);
+      assert.match(t.description, /not charged/i);
+    }
+    assert.match(rug.description, /1 free check every day/);
+    assert.match(rug.inputSchema.properties.chain.description, /base for 0x addresses/);
+    assert.match(listed.find((t: any) => t.name === "read_page").inputSchema.properties.maxChars.description, /truncated=true/);
+    assert.match(listed.find((t: any) => t.name === "research_brief").inputSchema.properties.depth.description, /same/);
+    assert.match(listed.find((t: any) => t.name === "token_price").inputSchema.properties.chain.description, /more than one chain/);
     const brief = await rpc({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "research_brief", arguments: { q: "what is MCP" } } });
     assert.equal(brief.result.isError, true); assert.equal(brief.result.structuredContent.error, "payment_required");
     assert.match(String(brief.result.structuredContent.payWith.x402.url), /\/report\?q=/);
@@ -88,5 +100,24 @@ test("buy box: Phantom/Solflare packs live in #credits (one copy), SOL default, 
     assert.match(h, /https:\/\/phantom\.com\/ul\/browse\//); assert.match(h, /https:\/\/solflare\.com\/ul\/v1\/browse\//);
     assert.ok(!/<script[^>]+src=/i.test(h), "no external scripts");
     for (const m of h.matchAll(/<script>([\s\S]*?)<\/script>/g)) new Function(m[1]!); // page JS parses
+  } finally { srv.closeAllConnections(); srv.close(); }
+});
+
+test("MCP watch_token is listed with non-idempotent annotations, outputSchema, and hour prices", async () => {
+  const app = express(); app.use(express.json()); app.set("trust proxy", 1);
+  const keys = new Map([["rr_good", 2]]);
+  const srv = app.listen(0); const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+  registerRugradarWeb(app, { publicUrl: base, port: 0, priceUsd: "0.02", speed: null,
+    rugCheck: async (t) => ({ product: "RugRadar", chain: "solana", token: t, riskScore: 1, riskLevel: "low", buyerSummary: "x", reasons: [], checks: [], facts: {} }),
+    spend: async (k) => { const n = keys.get(k); if (!n) return null; keys.set(k, n - 1); return n - 1; }, refund: async () => {},
+    watch: { create: async () => ({ watchId: "w_test", hours: 24, status: "active" }), config: () => ({ priceUsd: "0.05" }) } });
+  try {
+    const listed = (await (await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) })).json()).result.tools;
+    const w = listed.find((t: any) => t.name === "watch_token");
+    assert.ok(w); assert.equal(w.annotations.readOnlyHint, false); assert.equal(w.annotations.idempotentHint, false); assert.equal(w.annotations.destructiveHint, false);
+    assert.ok(w.outputSchema.properties.watchId && w.outputSchema.properties.payWith);
+    assert.match(w.description, /hours=24 costs \$0\.05/); assert.match(w.description, /hours=48 costs \$0\.10/);
+    assert.match(w.inputSchema.properties.hours.description, /24 = \$0\.05/);
+    assert.match(w.description, /not charged/);
   } finally { srv.closeAllConnections(); srv.close(); }
 });
