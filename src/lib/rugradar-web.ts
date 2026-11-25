@@ -8,7 +8,7 @@ import { RugBusyError } from "./rug.js";
 import { LIVE_JS } from "./rugradar-live.js";
 import { CLEAN_JS } from "./token-name.js";
 import type { Recent } from "./rugradar-recent.js";
-import { shareData, primeShare, sharePng, cachedShare, shortAddr, noSafe } from "./rugradar-share.js";
+import { shareData, primeShare, sharePng, cachedShare, shortAddr, noSafe, marketFactLine } from "./rugradar-share.js";
 import { swapClientJs, type SwapCfg } from "./swap.js";
 import type { Express, Request, Response } from "express";
 import { randomBytes, createHash } from "node:crypto";
@@ -37,7 +37,7 @@ const FULL_FREE_UNTIL = Date.parse(process.env.RUGRADAR_FULL_FREE_UNTIL || "2026
 export const fullFreeActive = () => Date.now() < FULL_FREE_UNTIL;
 export const FREE_COPY_PROMO = "1 free full report every day per visitor for a limited time, then a basic free check plus credits for the full report.";
 export const FREE_COPY = "1 free limited check every day per visitor, then credits for the full report.";
-const LIMITED_CHECKS = new Set(["mint_authority", "freeze_authority", "mint_function", "holders", "liquidity", "age", "dead_token"]);
+const LIMITED_CHECKS = new Set(["mint_authority", "freeze_authority", "mint_function", "holders", "liquidity", "age", "dead_token", "sell_route", "sell_impact", "honeypot", "tax"]);
 export const LOCKED_SIGNALS = ["exact dev-sold %", "sniper share", "launch-bundle share", "can-you-sell quote with price impact", "creator's past launches", "organic/bot score", "full buyer summary"];
 export const UNLOCK_CREDITS = 10;
 /** Conversion offer shown after a free check (or when it is used up). Points only at the existing credits flow and x402 paths. */
@@ -52,7 +52,8 @@ export function unlockOffer(publicUrl: string, priceUsd: string) {
 export function limitedReport(full: any) {
   const f = full?.facts ?? {};
   const all = Array.isArray(full?.checks) ? full.checks : [];
-  const basic = all.filter((c: any) => LIMITED_CHECKS.has(c?.check) && c?.check !== "dead_token").map((c: any) => ({ check: c.check, points: Number(c.points) || 0, detail: c.detail }));
+  const PUBLIC = new Set(["sell_route", "sell_impact", "honeypot", "tax"]);
+  const basic = all.filter((c: any) => LIMITED_CHECKS.has(c?.check) && c?.check !== "dead_token").map((c: any) => ({ check: c.check, points: Number(c.points) || 0, detail: PUBLIC.has(c.check) && WARN[c.check] ? WARN[c.check][1] : c.detail }));
   const sum = basic.reduce((a: number, c: any) => a + c.points, 0);
   const dead = all.find((c: any) => c?.check === "dead_token");
   const checks = dead ? [{ check: "dead_token", points: Math.max(5, 60 - sum), detail: dead.detail }, ...basic] : basic;
@@ -61,14 +62,14 @@ export function limitedReport(full: any) {
   const pick = (k: string) => (f[k] === undefined ? null : f[k]);
   const links = full?.buyer?.socialLinks;
   return {
-    product: "RugRadar", report: "limited", chain: full?.chain ?? null, token: full?.token ?? null, riskScore: score, riskLevel: level, scoring: "basic score (mint/freeze authority, top holders, age, liquidity, dead token)",
+    product: "RugRadar", report: "limited", chain: full?.chain ?? null, token: full?.token ?? null, riskScore: score, riskLevel: level, scoring: "basic score (mint/freeze authority, top holders, age, liquidity, dead token, sell warnings)",
     verdict: level === "high" ? "Multiple high-risk patterns found." : level === "medium" ? "Some high-risk patterns found." : "No major high-risk patterns found in the basic checks.",
     reasons: checks.filter((c: any) => c.points > 0).map((c: any) => c.detail), checks,
     moreWarnings: Math.max(0, warningsOf(checks).length - 3) + all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length,
     lockedTeaser: lockedTeaser(Math.max(0, warningsOf(checks).length - 3) + all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length),
     hiddenWarnings: all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && Number(c.points) > 0 && WARN[c.check]).length,
     socialLinks: Array.isArray(links) ? links : null, freeFacts: freeFacts(full),
-    facts: { tokenName: pick("tokenName"), tokenSymbol: pick("tokenSymbol"), tokenImage: pick("tokenImage"), mintAuthority: pick("mintAuthority"), freezeAuthority: pick("freezeAuthority"), top1Pct: pick("top1Pct"), top10Pct: pick("top10Pct"), holderCount: pick("holderCount"), ageHours: pick("ageHours"), liquidityUsd: pick("liquidityUsd"), marketUnknown: pick("marketUnknown") },
+    facts: { tokenName: pick("tokenName"), tokenSymbol: pick("tokenSymbol"), tokenImage: pick("tokenImage"), mintAuthority: pick("mintAuthority"), freezeAuthority: pick("freezeAuthority"), top1Pct: pick("top1Pct"), top10Pct: pick("top10Pct"), holderCount: pick("holderCount"), ageHours: pick("ageHours"), liquidityUsd: pick("liquidityUsd"), marketUnknown: pick("marketUnknown"), volume24hUsd: pick("volume24hUsd"), buys24h: pick("buys24h"), sells24h: pick("sells24h"), priceChange24hPct: pick("priceChange24hPct") },
     lockedSignals: LOCKED_SIGNALS, unlock: "Credits unlock the full report (paste a credit key above, or send X-RugRadar-Key).",
     disclaimer: full?.disclaimer ?? DISCLAIMER, generatedAt: full?.generatedAt ?? new Date().toISOString(),
   };
@@ -77,11 +78,13 @@ export function limitedReport(full: any) {
 export const lockedTeaser = (n: number) => `${n > 0 ? `${n} more warning${n > 1 ? "s" : ""} in the full report` : "Full report"}, includes live chart and can-you-sell`;
 /** One plain line RugCheck users expect on a Solana free check: mint authority and main-pool LP burn (from data the check already has). */
 export function freeFacts(full: any): string[] {
-  if (full?.chain !== "solana") return [];
   const f = full?.facts ?? {}, out: string[] = [];
-  if ("mintAuthority" in f) out.push(`Mint authority: ${f.mintAuthority ? "still on" : "off"}`);
-  const lp = Array.isArray(full?.buyer?.lpBurnPct) ? full.buyer.lpBurnPct.filter((x: any) => x && typeof x.burnPct === "number" && isFinite(x.burnPct)) : [];
-  if (lp.length) { const top = lp.reduce((a: any, b: any) => (Number(b.tvlUsd) > Number(a.tvlUsd) ? b : a)); out.push(`Liquidity: ${Math.round(Math.max(0, Math.min(100, top.burnPct)))}% burned`); }
+  if (full?.chain === "solana") {
+    if ("mintAuthority" in f) out.push(`Mint authority: ${f.mintAuthority ? "still on" : "off"}`);
+    const lp = Array.isArray(full?.buyer?.lpBurnPct) ? full.buyer.lpBurnPct.filter((x: any) => x && typeof x.burnPct === "number" && isFinite(x.burnPct)) : [];
+    if (lp.length) { const top = lp.reduce((a: any, b: any) => (Number(b.tvlUsd) > Number(a.tvlUsd) ? b : a)); out.push(`Liquidity: ${Math.round(Math.max(0, Math.min(100, top.burnPct)))}% burned`); }
+  }
+  const m = marketFactLine(f); if (m) out.push(m);
   return out;
 }
 const FREE_DAILY_CAP = Number(process.env.RUGRADAR_FREE_DAILY_CAP ?? 500);
@@ -371,7 +374,7 @@ function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings
  const tok=el('div','tok'),info=el('div'),lt=(tk.s||tk.n||String(j.token||'?')).slice(0,2).toUpperCase(),av=el('div','av',lt);if(tk.img){const im=el('img');im.alt='';im.referrerPolicy='no-referrer';im.loading='lazy';im.onerror=()=>{im.remove();av.textContent=lt};im.src=tk.img;av.textContent='';av.append(im)}tok.append(av);
  info.append(el('b',null,tk.line||short(j.token)),el('div','addr',[tk.line?short(j.token):null,CFG.chains[j.chain]||j.chain,ageTxt(fa.ageHours)].filter(Boolean).join(' \u00b7 ')));tok.append(info);const sw=socials(j);if(sw)tok.append(sw);c.append(tok);
  c.append(verdictBox(j,ws));
- if(j.report==='limited'&&j.checks){c.append(el('div','unlockwhat','Full report also shows: can-you-sell result, dev activity, biggest buys/sells.'));c.append(lockedPanel('','Unlock for $'+CFG.p,'or buy credits to skip the wait'));c.append(el('div','buyline','Checks finish faster with credits · buy once, skip the payment wait'));c.append(el('div','tease',j.lockedTeaser||'Full report'))}
+ if(j.report==='limited'&&j.checks){c.append(el('div','unlockwhat','Full report also shows: live chart, dev activity, biggest buys/sells.'));c.append(lockedPanel('','Unlock for $'+CFG.p,'or buy credits to skip the wait'));c.append(el('div','buyline','Checks finish faster with credits · buy once, skip the payment wait'));c.append(el('div','tease',j.lockedTeaser||'Full report'))}
  if(Array.isArray(j.freeFacts)&&j.freeFacts.length)c.append(el('div','ffl',j.freeFacts.join(' \u00b7 ')));
  if(typeof SWAPHOOK==='function'&&j.token===t&&shownLevel(j,ws)==='low'){const sb=SWAPHOOK(j);if(sb)c.append(sb)}
  const wc=el('div','wcards');ws.slice(0,3).forEach((w,i)=>wc.append(card(w,j,DESK&&i===0)));if(ws.length)c.append(wc);
@@ -658,7 +661,7 @@ async function mcpCall(d: WebDeps, name: string, args: any, headerKey: string | 
       try {
         const full = await (d.paidCheck ?? d.rugCheck)(token, chain);
         primeFromLimited(limitedReport(full), token, chain);
-        return text({ ...full, paidWith: "credits", credits_remaining: left, shareUrl: `${d.publicUrl}/rugradar/c/${chain}/${encodeURIComponent(token)}` });
+        return text({ ...full, paidWith: "credits", credits_remaining: left, shareUrl: `${d.publicUrl}/rugradar/c/${chain}/${encodeURIComponent(token)}`, freeFacts: freeFacts(full) });
       }
       catch (e) { await d.refund(key); return text({ error: String((e as Error).message ?? e) + (e instanceof RugBusyError ? ". You weren't charged." : ""), refunded: true }, true); }
     }
@@ -761,7 +764,7 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     }
     useFree(ip, vid);
     if (fullFreeActive() && d.paidCheck) {
-      try { const full = await d.paidCheck(token, chain); primeFromLimited(limitedReport(full), token, chain); countRugradar("free"); res.json({ ...full, paidWith: "free_promo", free_checks_left: a.left }); }
+      try { const full = await d.paidCheck(token, chain); primeFromLimited(limitedReport(full), token, chain); countRugradar("free"); res.json({ ...full, paidWith: "free_promo", free_checks_left: a.left, freeFacts: freeFacts(full) }); }
       catch (e) { refundFree(ip, vid); countRugradarRejected("error"); if (e instanceof RugBusyError) { res.status(503).set("Retry-After", "5").json({ error: "busy", message: `${e.message}. You weren't charged and this did not use a free check.` }); return; } res.status(422).json({ error: "check_failed", message: `${String((e as Error).message ?? e)}. This did not use a free check.` }); }
       return;
     }

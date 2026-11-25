@@ -38,9 +38,12 @@ window.RRLive=function(j){var L=j&&j.liveReport;if(!L)return null;var box=el('di
  box.append(bs);if(bb||sl||(L.chart&&B58.test(String(L.chart.pool))))n++;
  var R=L.risk;if(R){var rk=blk('Risk checks'),g=el('div','rk');
   var add=function(k,v,cls){g.append(el('span',null,k),el('b',cls||'',v))};
-  add('Can you sell?',R.canSell==='yes'?'Yes'+(R.canSellVia?' ('+R.canSellVia+')':''):R.canSell==='no'?'No sell route found':'Unknown',R.canSell==='yes'?'ok':R.canSell==='no'?'bad':'');
-  if(R.sellImpactPct!=null)add('Selling ~$100 moves price',pc(R.sellImpactPct),R.sellImpactPct>20?'bad':'');
-  if(R.taxPct!=null)add('Buy/sell tax',R.taxPct>0?pc(R.taxPct):'None found',R.taxPct>=10?'bad':R.taxPct>0?'':'ok');
+  if(R.volume24hUsd!=null)add('24h volume',usd(R.volume24hUsd),'');
+  if(R.buys24h!=null||R.sells24h!=null)add('24h buys / sells',(R.buys24h!=null?R.buys24h:'?')+' / '+(R.sells24h!=null?R.sells24h:'?'),'');
+  if(R.priceChange24hPct!=null)add('24h price change',(R.priceChange24hPct>0?'+':'')+pc(R.priceChange24hPct),'');
+  if(R.canSell==='no')add('No sell route found','','bad');
+  if(R.sellImpactPct!=null&&R.sellImpactPct>20)add('Selling ~$100 moves price',pc(R.sellImpactPct),'bad');
+  if(R.taxPct!=null&&R.taxPct>=10)add('Buy/sell tax',pc(R.taxPct),'bad');
   add('Mint authority',R.mintAuthority==='off'?'Off':R.mintAuthority==='on'?'On':'Unknown',R.mintAuthority==='off'?'ok':R.mintAuthority==='on'?'bad':'');
   add('Freeze authority',R.freezeAuthority==='off'?'Off':R.freezeAuthority==='on'?'On':'Unknown',R.freezeAuthority==='off'?'ok':R.freezeAuthority==='on'?'bad':'');
   if(R.top10Pct!=null)add('Top 10 holders',pc(R.top10Pct),R.top10Pct>70?'bad':'');

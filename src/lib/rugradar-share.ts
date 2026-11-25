@@ -30,15 +30,33 @@ export const shortAddr = (t: string) => (t.length > 12 ? `${t.slice(0, 4)}\u2026
 const usdK = (n: number) => (n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}K` : `$${Math.round(n)}`);
 const ageTxt = (h: number) => (h < 1 ? `${Math.max(1, Math.round(h * 60))}m` : h < 48 ? `${Math.round(h)}h` : `${Math.round(h / 24)}d`);
 
+
+/** One compact 24h line for free facts and the share card, when the data is present. */
+export function marketFactLine(f: any): string | null {
+  if (!f) return null;
+  const bits: string[] = [];
+  const mk = (n: number) => (n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}K` : `$${Math.round(n)}`);
+  if (Number.isFinite(f.volume24hUsd)) bits.push(`24h ${mk(Number(f.volume24hUsd))}`);
+  if (Number.isFinite(f.buys24h) || Number.isFinite(f.sells24h)) bits.push(`${Number.isFinite(f.buys24h) ? f.buys24h : "?"} buys / ${Number.isFinite(f.sells24h) ? f.sells24h : "?"} sells`);
+  if (Number.isFinite(f.priceChange24hPct)) {
+    const n = Number(f.priceChange24hPct);
+    const t = Math.abs(n) < 10 ? n.toFixed(1).replace(/\.0$/, "") : String(Math.round(n));
+    bits.push(`${n > 0 ? "+" : ""}${t}%`);
+  }
+  return bits.length ? bits.join(" · ") : null;
+}
+
 /** Build card data from a limitedReport() result plus its warnings (warningsOf) and shown level. Free data only. */
 export function shareData(l: any, ws: { sev: "DANGER" | "CAUTION"; title: string }[], level: string, token: string, chain: string): ShareData {
   const f = l?.facts ?? {}, sym = cleanTokenText(f.tokenSymbol, 20), nm = cleanTokenText(f.tokenName, 32);
   const name = nm && sym && nm.toLowerCase() !== sym.toLowerCase() ? `${nm} \u00b7 $${sym}` : sym ? `$${sym}` : nm;
   const lv = (level === "high" || level === "medium" || level === "low" ? level : "medium") as ShareData["level"];
   const facts: string[] = [];
+  const market = marketFactLine(f);
+  if (market) facts.push(market);
   if (Number.isFinite(f.top10Pct)) facts.push(`Top 10 hold ${Math.round(f.top10Pct)}%`); else if (Number.isFinite(f.top1Pct)) facts.push(`Top holder ${Math.round(f.top1Pct)}%`);
   if (Number.isFinite(f.liquidityUsd)) facts.push(`Liquidity ${usdK(f.liquidityUsd)}`);
-  if (Number.isFinite(f.ageHours)) facts.push(`Age ${ageTxt(f.ageHours)}`);
+  if (facts.length < 3 && Number.isFinite(f.ageHours)) facts.push(`Age ${ageTxt(f.ageHours)}`);
   return { token, chain, name, score: Math.max(0, Math.min(100, Math.round(Number(l?.riskScore) || 0))), level: lv, label: LABEL[lv],
     warnings: ws.slice(0, 3).map((w) => ({ severity: w.sev, title: w.title })), more: Math.max(0, ws.length - 3) + (Number(l?.hiddenWarnings) || 0), facts };
 }

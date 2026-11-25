@@ -23,6 +23,7 @@ test("Solana free check adds one plain line: mint authority and LP burn", () => 
   const c = deadFull(); c.facts.mintAuthority = null as any; c.buyer.lpBurnPct = [{ dex: "a", tvlUsd: 5, burnPct: 3 }, { dex: "b", tvlUsd: 900, burnPct: 41.4 }];
   assert.deepEqual(freeFacts(c), ["Mint authority: off", "Liquidity: 41% burned"]);
   assert.deepEqual(freeFacts({ ...c, chain: "base" }), []);
+  assert.deepEqual(freeFacts({ chain: "base", facts: { volume24hUsd: 1234, buys24h: 8, sells24h: 12, priceChange24hPct: -6.4 } }), ["24h $1.2K · 8 buys / 12 sells · -6.4%"]);
   assert.deepEqual(limitedReport(c).freeFacts, ["Mint authority: off", "Liquidity: 41% burned"]);
 });
 test("warnings: one-line titles, worst first, creator history never shown", () => {
@@ -43,7 +44,7 @@ test("v5 page: paste box, Auto chip, free line, credits copy, folded agents with
     const { srv, base } = await start(() => deadFull(), sw);
     try {
       const h = await (await fetch(`${base}/rugradar`)).text();
-      for (const s of ['id="tok"', '<option value="auto">Auto', "Free \u00b7 no sign-up", "Prepaid credits finish checks ~2x faster", "Buy credits: results ~2x faster", "don't wait on a payment for each check (measured ~1.8x faster)", "Strong rug warning signs.", "No danger warnings found.", "No socials found", "more warning", 'id="agents"', 'id="developers"', "For developers", "#developers", "/rugradar/embed?token=", "/rugradar/embed.json?token=", "Danger warnings only \u00b7 based on public on-chain data", "Full report also shows: can-you-sell result, dev activity, biggest buys/sells.", "or buy credits to skip the wait", "Checks finish faster with credits \u00b7 buy once, skip the payment wait"]) assert.ok(h.includes(s), s);
+      for (const s of ['id="tok"', '<option value="auto">Auto', "Free \u00b7 no sign-up", "Prepaid credits finish checks ~2x faster", "Buy credits: results ~2x faster", "don't wait on a payment for each check (measured ~1.8x faster)", "Strong rug warning signs.", "No danger warnings found.", "No socials found", "more warning", 'id="agents"', 'id="developers"', "For developers", "#developers", "/rugradar/embed?token=", "/rugradar/embed.json?token=", "Danger warnings only \u00b7 based on public on-chain data", "Full report also shows: live chart, dev activity, biggest buys/sells.", "or buy credits to skip the wait", "Checks finish faster with credits \u00b7 buy once, skip the payment wait"]) assert.ok(h.includes(s), s);
       assert.ok(!/guarantee/i.test(h), "page has no guarantee wording");
       assert.equal((h.match(/<select id="chain"/g) ?? []).length, 1, "a single chain chip");
       assert.ok(!/id="watch"|More tools|Watch this token/.test(h), "no Watch feature or paid tool list in this release");
@@ -92,7 +93,7 @@ test("dead-token rule: accepts an age lower bound when the full history can't be
 });
 test("market fallback: GeckoTerminal 404 = no pool (market known), pools summed, errors = unknown", async () => {
   const mk = (status: number, body: unknown) => (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
-  assert.deepEqual(await geckoMarket("M", mk(404, {})), { liquidityUsd: null, priceUsd: null, createdAt: null });
+  assert.deepEqual(await geckoMarket("M", mk(404, {})), { liquidityUsd: null, priceUsd: null, createdAt: null, volume24hUsd: null, buys24h: null, sells24h: null, priceChange24hPct: null });
   const g = await geckoMarket("M", mk(200, { data: [{ attributes: { reserve_in_usd: "40.5", pool_created_at: "2026-01-01T00:00:00Z", base_token_price_usd: "0.001" } }, { attributes: { reserve_in_usd: "9.5", pool_created_at: "2025-12-01T00:00:00Z" } }] }));
   assert.equal(g!.liquidityUsd, 50); assert.equal(g!.createdAt, Date.parse("2025-12-01T00:00:00Z"));
   assert.equal(await geckoMarket("M", mk(429, {})), null);
@@ -135,7 +136,7 @@ test("page ships the share buttons for free AND full results, free-only auto-run
     assert.ok(h.includes("el('div','tease',j.lockedTeaser||'Full report')"), "N more warnings teaser kept");
     assert.ok(/if\(j\.report==='limited'&&j\.checks\)\{c\.append\(shareBar\(j,ws\)\)\}/.test(h), "share bar still under the free result");
     assert.ok(/else\{if\(ws\.length>3\)[\s\S]*?if\(Array\.isArray\(j\.checks\)\)\{const fr=rrFree\(j\.checks,CFG\.lim,CFG\.warn\);c\.append\(shareBar\(\{riskScore:fr\.sc,riskLevel:fr\.lv,token:j\.token,chain:j\.chain,facts:fa\},fr\.ws\)\)\}\}/.test(h), "full-report branch shows the share bar, built from the free score and warnings only");
-    assert.ok(h.includes('"lim":["mint_authority","freeze_authority","mint_function","holders","liquidity","age","dead_token"]'), "page config carries the free check list");
+    assert.ok(h.includes('"lim":["mint_authority","freeze_authority","mint_function","holders","liquidity","age","dead_token","sell_route","sell_impact","honeypot","tax"]'), "page config carries the free check list");
     assert.ok(Buffer.byteLength(h) < 60_000, `page ${Buffer.byteLength(h)} bytes`);
     for (const re of PRIVATE) assert.ok(!re.test(h.replace(SWAP_RULE_JS, "")), `${re}`);
   } finally { srv.closeAllConnections(); srv.close(); }

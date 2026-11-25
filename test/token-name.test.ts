@@ -80,14 +80,15 @@ const fullReport = () => ({ product: "RugRadar", chain: "solana", token: ADDR, r
   facts: { tokenName: "Pepe Coin", tokenSymbol: "PEPE", ageHours: 24 * 60 } });
 test("full report share data is the FREE score/label/warnings only (matches the free result), never paid details", () => {
   const full = fullReport(), lim = limitedReport(full), lw = warningsOf(lim.checks);
-  const fr = js.rrFree!(full.checks, ["mint_authority", "freeze_authority", "mint_function", "holders", "liquidity", "age", "dead_token"], WARN);
+  const fr = js.rrFree!(full.checks, ["mint_authority", "freeze_authority", "mint_function", "holders", "liquidity", "age", "dead_token", "sell_route", "sell_impact", "honeypot", "tax"], WARN);
   assert.equal(fr.sc, lim.riskScore); assert.equal(fr.lv, lim.riskLevel); assert.deepEqual(fr.ws.map((w: any) => w.t), lw.map((w) => w.title));
   assert.notEqual(fr.sc, full.riskScore, "free score differs from the full score");
   const label = ({ high: "HIGH RISK", medium: "CAUTION", low: "LOW RISK" } as any)[shownLevel(fr.lv, fr.ws.map((w: any) => ({ sev: w.d ? "DANGER" : "CAUTION" })))];
   const txt = js.rrShareText!(fr.sc, label, fr.ws.map((w: any) => w.t), ADDR, "solana", O, "0.01", js.rrTok!(full.facts).share);
   assert.ok(txt.startsWith(`Checked $PEPE on RugRadar \u2014 ${lim.riskScore} ${label}.`), txt);
   assert.ok(txt.includes("Creator can mint more"), txt);
-  for (const re of [/dev/i, /sniper/i, /sell/i, /secret/i, /95/, /safe/i, /wrong/i, /chart/i]) assert.ok(!re.test(txt.replace(/https:\/\/\S+/, "")), `${re} in ${txt}`);
+  assert.ok(txt.includes("You may not be able to sell"), txt);
+  for (const re of [/dev sold/i, /sniper/i, /secret/i, /95/, /safe/i, /wrong/i, /chart/i]) assert.ok(!re.test(txt.replace(/https:\/\/\S+/, "")), `${re} in ${txt}`);
   const dead = js.rrFree!([{ check: "dead_token", points: 15 }, { check: "mint_authority", points: 25 }, { check: "dev_sold", points: 30 }], ["mint_authority", "dead_token"], WARN);
   assert.equal(dead.sc, 60); assert.deepEqual([...dead.ws.map((w: any) => w.t)], ["Dead token: no way to sell", "Creator can mint more"]);
   assert.equal(JSON.stringify(js.rrFree!(undefined, [], WARN)), JSON.stringify({ sc: 0, lv: "low", ws: [] }));

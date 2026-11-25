@@ -139,11 +139,11 @@ export async function solanaExtra(mint: string, o: { jup: any; jupFailed?: boole
   s.sellableOnPumpCurve = curve ? curve.active : null;
   s.canSell = quote?.outAmount ? "yes (Jupiter route)" : curve?.active ? "yes (pump.fun curve)" : curve == null && !quote ? "unknown" : "no route found";
   if (!quote?.outAmount && curve?.active) { s.sellRoute = "pump.fun curve only"; }
-  else if (!quote?.outAmount && isPump && curve && !curve.active && /ROUTE|NOT_TRADABLE/i.test(String(quote?.errorCode ?? quote?.error ?? ""))) { s.sellRoute = false; add("sell_route", 30, "Cannot be sold: no Jupiter route and the pump.fun curve is closed (honeypot / dead-coin high-risk pattern)."); }
+  else if (!quote?.outAmount && isPump && curve && !curve.active && /ROUTE|NOT_TRADABLE/i.test(String(quote?.errorCode ?? quote?.error ?? ""))) { s.sellRoute = false; add("sell_route", 30, "No way to sell this token was found."); }
   else if (quote?.outAmount) { s.sellRoute = true; s.sellPriceImpactPct = r2(Number(quote.priceImpactPct) * 100, 2); s.sellTestUsd = price > 0 ? 100 : null; s.sellVia = [...new Set((quote.routePlan ?? []).map((x: any) => x.swapInfo?.label).filter(Boolean))].slice(0, 3); }
-  else if (/ROUTE|NOT_TRADABLE/i.test(String(quote?.errorCode ?? quote?.error ?? "")) && (liquidityUsd ?? 0) > 1000) { s.sellRoute = false; add("sell_route", 30, "No sell route found despite listed liquidity (honeypot high-risk pattern)."); }
+  else if (/ROUTE|NOT_TRADABLE/i.test(String(quote?.errorCode ?? quote?.error ?? "")) && (liquidityUsd ?? 0) > 1000) { s.sellRoute = false; add("sell_route", 30, "No way to sell this token was found."); }
   else unknown.push("sell route");
-  if (Number(s.sellPriceImpactPct) > 20) add("sell_impact", 10, `Selling ~$100 moves the price ${s.sellPriceImpactPct}%: very thin exit.`);
+  if (Number(s.sellPriceImpactPct) > 20) add("sell_impact", 10, "A ~$100 sale moves the price over 20%.");
   // Token-2022 extensions that let the issuer take or block funds
   const ext = new Map<string, any>((o.mintInfo?.extensions ?? []).map((e: any) => [e.extension, e.state]));
   const fee = ext.get("transferFeeConfig"); const feeBps = fee ? Number(fee.newerTransferFee?.transferFeeBasisPoints ?? fee.olderTransferFee?.transferFeeBasisPoints ?? 0) : 0;

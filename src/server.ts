@@ -53,7 +53,7 @@ import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
 import { paidRugCheck } from "./lib/rug-paid.js";
 import { rugCheck, RugBusyError, flaggedWallets, DISCLAIMER as RUG_DISCLAIMER } from "./lib/rug.js";
-import { registerRugradarWeb, primeFromLimited, limitedReport } from "./lib/rugradar-web.js";
+import { registerRugradarWeb, primeFromLimited, limitedReport, freeFacts } from "./lib/rugradar-web.js";
 import { createRecent } from "./lib/rugradar-recent.js";
 import { createWatcher, WATCH_PLANS, planOf, type Watch } from "./lib/watch.js";
 import { registerWatchRoutes, watchKeyMiddleware, watchPaidHandler, createWithCredits, watchConfig, type WatchRouteDeps } from "./lib/watch-routes.js";
@@ -356,7 +356,7 @@ async function main() {
       const out = await paidRugCheck(token, String(req.query.chain ?? "").trim() || (token.startsWith("0x") ? "base" : "solana"), { noCache: req.query.nocache === "1" });
       countRugradar(isOwnerKey(key) ? "owner" : "paid");
       void recent.save(key, out); // full report unlocked with a credit key (this path spent the credit); never throws
-      res.set("X-RugRadar-Credits", String(left)).json({ ...out, paidWith: "credits", credits_remaining: left });
+      res.set("X-RugRadar-Credits", String(left)).json({ ...out, paidWith: "credits", credits_remaining: left, freeFacts: freeFacts(out) });
     } catch (err) {
       await refund(key);
       const msg = err instanceof Error ? err.message : String(err);
@@ -2075,7 +2075,7 @@ async function main() {
         const token = qs(req.query.token) || qs(req.query.mint);
         if (!token) throw new SolanaInputError("token is required (Solana mint address, or Base 0x contract with chain=base)");
         const chain = qs(req.query.chain) || (token.startsWith("0x") ? "base" : "solana");
-        const out = { ...(await paidRugCheck(token, chain, { noCache: req.query.nocache === "1" })), tip: creditTip() };
+        const raw = await paidRugCheck(token, chain, { noCache: req.query.nocache === "1" }); const out = { ...raw, tip: creditTip(), freeFacts: freeFacts(raw) };
         if (!out.error) primeFromLimited(limitedReport(out), token, chain);
         return out;
       },

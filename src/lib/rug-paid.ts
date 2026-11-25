@@ -111,8 +111,10 @@ function topFills(fills: Fill[], side: "buy" | "sell") {
 export function riskBlock(full: any) {
   const f = full?.facts ?? {}, b = full?.buyer ?? {};
   const cs = String(b.canSell ?? ""), sell = cs.startsWith("yes") ? "yes" : cs === "no route found" ? "no" : "unknown";
+  const num = (o: any, k: string) => (typeof o?.[k] === "number" && isFinite(o[k]) ? o[k] : null);
   return { canSell: sell, canSellVia: cs.startsWith("yes") ? cs.replace(/^yes \(|\)$/g, "") : null, sellImpactPct: typeof b.sellPriceImpactPct === "number" ? b.sellPriceImpactPct : null, taxPct: typeof b.transferFeePct === "number" ? b.transferFeePct : null,
-    mintAuthority: "mintAuthority" in f ? (f.mintAuthority ? "on" : "off") : "unknown", freezeAuthority: "freezeAuthority" in f ? (f.freezeAuthority ? "on" : "off") : "unknown", top10Pct: typeof f.top10Pct === "number" ? f.top10Pct : null };
+    mintAuthority: "mintAuthority" in f ? (f.mintAuthority ? "on" : "off") : "unknown", freezeAuthority: "freezeAuthority" in f ? (f.freezeAuthority ? "on" : "off") : "unknown", top10Pct: typeof f.top10Pct === "number" ? f.top10Pct : null,
+    volume24hUsd: num(f, "volume24hUsd") ?? num(b, "volume24hUsd"), buys24h: num(f, "buys24h") ?? num(b, "buys24h"), sells24h: num(f, "sells24h") ?? num(b, "sells24h"), priceChange24hPct: num(f, "priceChange24hPct") ?? num(b, "priceChange24hPct") };
 }
 export const chartUrl = (pool: string) => `https://www.geckoterminal.com/solana/pools/${pool}?embed=1&info=0&swaps=0&grayscale=0&light_chart=0&chart_type=price&resolution=1m`;
 
