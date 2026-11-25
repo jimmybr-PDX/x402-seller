@@ -250,7 +250,7 @@ export function socialLinks(jup: any, dsInfo: any): { type: string; url: string 
 
 export function evmExtra(g: any, ds: any[] | null) {
   const on = (k: string) => (g?.[k] === "1" ? true : g?.[k] === "0" ? false : null);
-  const p = ds?.[0]; const vol = ds?.reduce((a, x) => a + (x.volume?.h24 ?? 0), 0) ?? null; const liq = ds?.reduce((a, x) => a + (x.liquidity?.usd ?? 0), 0) ?? null;
+  const p = ds?.length ? [...ds].sort((a, b) => (Number(b?.liquidity?.usd) || 0) - (Number(a?.liquidity?.usd) || 0))[0] : undefined; const vol = ds?.reduce((a, x) => a + (x.volume?.h24 ?? 0), 0) ?? null; const liq = ds?.reduce((a, x) => a + (x.liquidity?.usd ?? 0), 0) ?? null;
   const tx = ds?.reduce((a, x) => ({ b: a.b + (x.txns?.h24?.buys ?? 0), s: a.s + (x.txns?.h24?.sells ?? 0) }), { b: 0, s: 0 });
   const info = ds?.find((x) => x.info)?.info ?? {};
   const lpLocked = (g?.lp_holders ?? []).reduce((a: number, h: any) => a + (h.is_locked === 1 || /^0x0+(dead)?$/i.test(h.address ?? "") ? Number(h.percent || 0) : 0), 0) * 100;
@@ -270,7 +270,7 @@ export function evmExtra(g: any, ds: any[] | null) {
 
 /** One plain-English line a buyer can act on. Never calls anyone a scammer. */
 export function buyerSummary(level: string, top: string[], confidence: string) {
-  const head = level === "high" ? "High risk: multiple high-risk patterns. Many buyers would avoid this." : level === "medium" ? "Caution: some high-risk patterns. Size small if you buy." : "No major high-risk patterns found. Still only buy what you can afford to lose.";
+  const head = level === "high" ? "High risk: multiple high-risk patterns." : level === "medium" ? "Caution: some high-risk patterns." : "No major high-risk patterns found.";
   return `${head}${top.length ? ` Top concerns: ${top.slice(0, 3).join(" ")}` : ""}${confidence !== "high" ? ` (confidence ${confidence}: some data was unavailable.)` : ""}`;
 }
 

@@ -7,6 +7,5 @@ export async function rugradar(tool: Tool, token: string, chain = "solana", apiK
   const r = await fetch(`${baseUrl}/${tool}?token=${encodeURIComponent(token)}&chain=${encodeURIComponent(chain)}`, { headers: { "X-RugRadar-Key": apiKey, accept: "application/json" }, signal: AbortSignal.timeout(20000) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`RugRadar ${r.status}: ${(j as any).error ?? "request failed"}`);
-  return j as { riskScore: number; riskLevel: string; reasons: string[]; disclaimer: string; [k: string]: unknown };
+  return j as { riskScore: number; riskLevel: string; reasons: string[]; [k: string]: unknown };
 }
-export const DISCLAIMER = "Automated heuristic, may be wrong. Not financial advice. Do your own research.";

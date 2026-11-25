@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { rugradar, DISCLAIMER } from "./client.js";
+import { rugradar } from "./client.js";
 // Solana Agent Kit v2 Action shape (name, similes, description, examples, schema, handler(agent, input)).
 const schema = z.object({ token: z.string().describe("Token mint (Solana) or 0x address (EVM)"), chain: z.enum(["solana", "base", "bsc", "ethereum", "arbitrum"]).default("solana") });
 const mk = (name: string, tool: "rug-check" | "token-safety" | "honeypot-check", similes: string[], description: string) => ({
-  name, similes, description: description + " " + DISCLAIMER, schema,
+  name, similes, description, schema,
   examples: [[{ input: { token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN" }, output: { status: "success", riskScore: 8, riskLevel: "low" }, explanation: "Low-risk result for JUP" }]],
   handler: async (agent: any, input: Record<string, any>) => {
     const { token, chain } = schema.parse(input);

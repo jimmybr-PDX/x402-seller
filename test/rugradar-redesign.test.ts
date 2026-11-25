@@ -72,7 +72,7 @@ test("embed card + JSON: ring, verdict, max 3 collapsed warnings, unlock link, c
     for (const re of PRIVATE) assert.ok(!re.test(h), `embed must not match ${re}`);
     const j = await (await fetch(`${base}/rugradar/embed.json?token=${DEAD}`)).json();
     assert.equal(j.riskLevel, "high"); assert.equal(j.riskScore, 60); assert.equal(j.warnings.length, 3); assert.equal(j.warnings[0].title, "Creator can mint more"); assert.match(j.reportUrl, /\/rugradar\?token=DDDv.*&chain=solana$/); assert.equal(j.moreWarnings, 1);
-    const low = await (await fetch(`${base}/rugradar/embed.json?token=${CLEAN}`)).json(); assert.equal(low.verdict, "No danger warnings found."); assert.equal(low.warnings.length, 0); assert.ok(!/guarantee/i.test(JSON.stringify(low))); assert.match(String(low.disclaimer), /Danger warnings only/);
+    const low = await (await fetch(`${base}/rugradar/embed.json?token=${CLEAN}`)).json(); assert.equal(low.verdict, "No danger warnings found."); assert.equal(low.warnings.length, 0); assert.ok(!/guarantee/i.test(JSON.stringify(low))); assert.equal("disclaimer" in low, false); assert.doesNotMatch(JSON.stringify(low), /Not financial advice|Do your own research|Automated heuristic/);
     const evm = await (await fetch(`${base}/rugradar/embed.json?token=0x${"a".repeat(40)}`)).json(); assert.equal(evm.chain, "bnb", "auto-detects the EVM chain");
     assert.equal((await fetch(`${base}/rugradar/embed?token=nope`)).status, 400); assert.equal((await fetch(`${base}/rugradar/embed.json`)).status, 400);
     assert.deepEqual(await (await fetch(`${base}/rugradar/api/chain?token=0x${"b".repeat(40)}`)).json(), { chain: "bnb" });

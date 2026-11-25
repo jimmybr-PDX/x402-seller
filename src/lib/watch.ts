@@ -135,7 +135,7 @@ export function createWatcher(d: WatchDeps) {
 
   function payload(w: Watch, event: string, extra: object) {
     return JSON.stringify({ product: "RugRadar", event, watchId: w.id, token: w.token, chain: w.chain, plan: `${WATCH_PLANS[w.plan].hours}h`, expiresAt: new Date(w.expiresAt).toISOString(),
-      chart: `https://dexscreener.com/solana/${w.token}`, ...extra, disclaimer: "Automated heuristic, may be wrong. Not financial advice." });
+      chart: `https://dexscreener.com/solana/${w.token}`, ...extra });
   }
   function enqueue(w: Watch, body: string) { w.outbox.push({ body, tries: 0, next: now() }); if (w.outbox.length > 20) w.outbox.shift(); }
   async function deliver(w: Watch) {

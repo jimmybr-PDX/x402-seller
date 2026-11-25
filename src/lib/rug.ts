@@ -2,7 +2,7 @@ import { solanaExtra, evmExtra, buyerSummary, type Extra } from "./rug-extra.js"
 import { applyEvmSellWarnings, evmDecimals, evmSellAmount, evmSellQuote } from "./evm-sell.js";
 /**
  * Solana rug check: heuristic 0-100 risk score for an SPL mint from free public data only
- * (public Solana RPC + keyless DexScreener API). Automated heuristic, may be wrong. Not financial advice.
+ * (public Solana RPC + keyless DexScreener API).
  */
 import fs from "node:fs";
 import { jupFetch } from "./jup-gate.js";
@@ -10,9 +10,11 @@ import { pickTokenMeta, type TokenMeta } from "./token-name.js";
 import path from "node:path";
 import { rpc, SolanaInputError } from "./solana.js";
 
-export const DISCLAIMER = "Automated heuristic, may be wrong. Not financial advice. Do your own research.";
 const B58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const DS = "https://api.dexscreener.com/tokens/v1/solana/";
+const DS_TOKENS = "https://api.dexscreener.com/tokens/v1/";
+const DS_PAIRS = "https://api.dexscreener.com/token-pairs/v1/";
+const DS_CHAIN: Record<string, string> = { solana: "solana", base: "base", bnb: "bsc", bsc: "bsc", ethereum: "ethereum", eth: "ethereum", arbitrum: "arbitrum" };
+const GECKO_NET: Record<string, string> = { solana: "solana", base: "base", bnb: "bsc", bsc: "bsc", ethereum: "eth", eth: "eth", arbitrum: "arbitrum" };
 const UA = { "user-agent": "Mozilla/5.0 (RugRadar)", accept: "application/json" };
 const KNOWN_PROGRAM_OWNERS = new Set(["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"]);
 
@@ -91,13 +93,17 @@ export function __clearRugCaches() { stable.clear(); cache.clear(); }
 
 const num = (v: unknown) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
 const r2 = (v: unknown, d = 2) => { const x = num(v); return x == null ? null : +x.toFixed(d); };
-/** 24h volume, buy/sell counts and price change already present on DexScreener pairs (no extra call). */
+/** Deepest-liquidity DexScreener pair, if any. */
+export function topPair(pairs: any[] | null | undefined) {
+  if (!Array.isArray(pairs) || !pairs.length) return undefined;
+  return [...pairs].sort((a, b) => (Number(b?.liquidity?.usd) || 0) - (Number(a?.liquidity?.usd) || 0))[0];
+}
+/** 24h volume, buy/sell counts across every pair; price change from the deepest pair (no extra call). */
 export function dsStats(pairs: any[] | null | undefined): { volume24hUsd: number | null; buys24h: number | null; sells24h: number | null; priceChange24hPct: number | null } {
   if (!Array.isArray(pairs) || !pairs.length) return { volume24hUsd: null, buys24h: null, sells24h: null, priceChange24hPct: null };
   const volume24hUsd = r2(pairs.reduce((a, p) => a + (Number(p?.volume?.h24) || 0), 0), 0);
   const tx = pairs.reduce((a, p) => ({ b: a.b + (Number(p?.txns?.h24?.buys) || 0), s: a.s + (Number(p?.txns?.h24?.sells) || 0) }), { b: 0, s: 0 });
-  const best = [...pairs].sort((a, b) => (Number(b?.liquidity?.usd) || 0) - (Number(a?.liquidity?.usd) || 0))[0];
-  return { volume24hUsd, buys24h: tx.b, sells24h: tx.s, priceChange24hPct: r2(best?.priceChange?.h24) };
+  return { volume24hUsd, buys24h: tx.b, sells24h: tx.s, priceChange24hPct: r2(topPair(pairs)?.priceChange?.h24) };
 }
 /** Prefer already-copied market facts; fill gaps from a secondary source (e.g. Jupiter 24h stats). */
 export function fillMarketFacts(facts: Record<string, any> | null | undefined, fallback?: Record<string, any> | null) {
@@ -105,20 +111,25 @@ export function fillMarketFacts(facts: Record<string, any> | null | undefined, f
   return { volume24hUsd: pick("volume24hUsd") != null ? r2(pick("volume24hUsd"), 0) : null, buys24h: pick("buys24h"), sells24h: pick("sells24h"), priceChange24hPct: pick("priceChange24hPct") != null ? r2(pick("priceChange24hPct")) : null };
 }
 
-/** DexScreener pairs, or null when the source failed (so "no pool" and "source down" are not confused). */
-async function dsOnce(mints: string[]): Promise<any[] | null> {
-  try { const r = await fetch(DS + mints.join(","), { headers: UA, signal: AbortSignal.timeout(4000) }); return r.ok ? ((await r.json()) as any[]) : null; } catch { return null; }
+function sameToken(p: any, addr: string, evm: boolean) {
+  const eq = (x: unknown) => typeof x === "string" && (evm ? x.toLowerCase() === addr.toLowerCase() : x === addr);
+  return eq(p?.baseToken?.address) || eq(p?.quoteToken?.address);
 }
+/** tokens/v1 is a short list (often one pair). Used for batch liquidity presence checks and as a fallback. */
+async function dsTokensOnce(chain: string, addrs: string[]): Promise<any[] | null> {
+  try { const r = await fetch(DS_TOKENS + chain + "/" + addrs.join(","), { headers: UA, signal: AbortSignal.timeout(4000) }); return r.ok ? ((await r.json()) as any[]) : null; } catch { return null; }
+}
+/** token-pairs/v1 returns every pair on that chain in one call. */
+async function dsPairsOnce(chain: string, addr: string): Promise<any[] | null> {
+  try { const r = await fetch(DS_PAIRS + chain + "/" + addr, { headers: UA, signal: AbortSignal.timeout(4000) }); const j = r.ok ? await r.json() : null; return Array.isArray(j) ? j : null; } catch { return null; }
+}
+async function dsOnce(mints: string[]): Promise<any[] | null> { return dsTokensOnce("solana", mints); }
 const dsRaw = (mints: string[]) => retry(() => dsOnce(mints), (v) => v == null);
 async function ds(mints: string[]): Promise<any[]> { return (await dsRaw(mints)) ?? []; }
-/** Fallback market sources when the main DexScreener endpoint fails twice: DexScreener token-pairs, then GeckoTerminal pools. */
-async function dsPairsOnce(mint: string): Promise<any[] | null> {
-  try { const r = await fetch(`https://api.dexscreener.com/token-pairs/v1/solana/${mint}`, { headers: UA, signal: AbortSignal.timeout(3000) }); const j = r.ok ? await r.json() : null; return Array.isArray(j) ? j : null; } catch { return null; }
-}
-export async function geckoMarket(mint: string, f: typeof fetch = fetch): Promise<{ liquidityUsd: number | null; priceUsd: number | null; createdAt: number | null; volume24hUsd: number | null; buys24h: number | null; sells24h: number | null; priceChange24hPct: number | null } | null> {
+export async function geckoMarket(mint: string, f: typeof fetch = fetch, network = "solana"): Promise<{ liquidityUsd: number | null; priceUsd: number | null; createdAt: number | null; volume24hUsd: number | null; buys24h: number | null; sells24h: number | null; priceChange24hPct: number | null } | null> {
   const empty = { liquidityUsd: null, priceUsd: null, createdAt: null, volume24hUsd: null, buys24h: null, sells24h: null, priceChange24hPct: null };
   try {
-    const r = await f(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/pools?page=1`, { headers: UA, signal: AbortSignal.timeout(3000) });
+    const r = await f(`https://api.geckoterminal.com/api/v2/networks/${network}/tokens/${mint}/pools?page=1`, { headers: UA, signal: AbortSignal.timeout(3000) });
     if (r.status === 404) return empty; // GeckoTerminal answers 404 when no pool exists
     if (!r.ok) return null;
     const pools = ((await r.json()) as any)?.data; if (!Array.isArray(pools)) return null;
@@ -127,21 +138,24 @@ export async function geckoMarket(mint: string, f: typeof fetch = fetch): Promis
     const ts = pools.map((p: any) => Date.parse(p?.attributes?.pool_created_at ?? "")).filter((t: number) => isFinite(t));
     const vol = pools.reduce((a: number, p: any) => a + (Number(p?.attributes?.volume_usd?.h24) || 0), 0);
     const best = [...pools].sort((a, b) => (Number(b?.attributes?.reserve_in_usd) || 0) - (Number(a?.attributes?.reserve_in_usd) || 0))[0];
-    return { liquidityUsd: liq, priceUsd: Number(pools[0]?.attributes?.base_token_price_usd) || null, createdAt: ts.length ? Math.min(...ts) : null,
+    return { liquidityUsd: liq, priceUsd: Number(best?.attributes?.base_token_price_usd || pools[0]?.attributes?.base_token_price_usd) || null, createdAt: ts.length ? Math.min(...ts) : null,
       volume24hUsd: vol ? r2(vol, 0) : null, buys24h: null, sells24h: null, priceChange24hPct: r2(best?.attributes?.price_change_percentage?.h24) };
   } catch { return null; }
 }
-export async function marketOf(mint: string) {
-  let raw = await dsRaw([mint]);
-  if (raw == null) raw = await dsPairsOnce(mint);
+/** All DexScreener pairs on the chain (token-pairs first), then tokens/v1, then GeckoTerminal pools on the same chain. */
+export async function marketOf(mint: string, chain = "solana") {
+  const dsChain = DS_CHAIN[chain] ?? chain;
+  const evm = dsChain !== "solana";
+  let raw = await retry(() => dsPairsOnce(dsChain, mint), (v) => v == null);
+  if (raw == null) raw = await retry(() => dsTokensOnce(dsChain, [mint]), (v) => v == null);
   if (raw == null) {
-    const g = await geckoMarket(mint);
+    const g = await geckoMarket(mint, fetch, GECKO_NET[chain] ?? GECKO_NET[dsChain] ?? "solana");
     if (g) return { failed: false as const, pairs: [] as any[], liquidityUsd: g.liquidityUsd, priceUsd: g.priceUsd, createdAt: g.createdAt, volume24hUsd: g.volume24hUsd, buys24h: g.buys24h, sells24h: g.sells24h, priceChange24hPct: g.priceChange24hPct, source: "geckoterminal" };
     return { failed: true as const, pairs: [] as any[], liquidityUsd: null, priceUsd: null, createdAt: null, volume24hUsd: null, buys24h: null, sells24h: null, priceChange24hPct: null };
   }
-  const pairs = raw.filter((p) => p.baseToken?.address === mint || p.quoteToken?.address === mint);
+  const pairs = raw.filter((p) => sameToken(p, mint, evm));
   const liq = pairs.reduce((a, p) => a + (p.liquidity?.usd ?? 0), 0);
-  const best = pairs.sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
+  const best = topPair(pairs);
   return { failed: false as const, pairs, liquidityUsd: pairs.length ? liq : null, priceUsd: best?.priceUsd ? Number(best.priceUsd) : null, createdAt: pairs.length ? Math.min(...pairs.map((p) => p.pairCreatedAt ?? Infinity)) : null, ...dsStats(pairs) };
 }
 
@@ -314,7 +328,7 @@ const VAL_FILE = process.env.RUG_VALIDATION_FILE ?? path.join(process.cwd(), "da
 export function logValidation(mint: string, score: number, priceUsd: number | null, liquidityUsd: number | null, delayMs = 10 * 60_000, chain = "solana") {
   const at = new Date().toISOString();
   const t = setTimeout(async () => {
-    const m = EVM[chain] ? await fetch(`https://api.dexscreener.com/tokens/v1/${EVM[chain]!.ds}/${mint.split(":")[1]}`, { headers: UA }).then((r) => r.json()).then((p: any[]) => ({ priceUsd: p[0]?.priceUsd ? Number(p[0].priceUsd) : null, liquidityUsd: p.length ? p.reduce((a, x) => a + (x.liquidity?.usd ?? 0), 0) : null })).catch(() => null) : await marketOf(mint).catch(() => null);
+    const m = EVM[chain] ? await marketOf(mint.split(":")[1], chain).catch(() => null) : await marketOf(mint).catch(() => null);
     const row = { chain, mint, score, checkedAt: at, priceAtCheck: priceUsd, liquidityAtCheck: liquidityUsd, laterAt: new Date().toISOString(), priceLater: m?.priceUsd ?? null, liquidityLater: m?.liquidityUsd ?? null,
       liquidityDropPct: liquidityUsd && m?.liquidityUsd != null ? Math.round((1 - m.liquidityUsd / liquidityUsd) * 1000) / 10 : null };
     try { fs.mkdirSync(path.dirname(VAL_FILE), { recursive: true }); fs.appendFileSync(VAL_FILE, JSON.stringify(row) + "\n"); } catch {}
@@ -394,33 +408,33 @@ async function goplusFetch(addr: string, id: number): Promise<GpState> {
 }
 async function evmCheck(addr: string, chain: string) {
   const c = EVM[chain]!;
-  const dsP = retry(() => fetch(`https://api.dexscreener.com/tokens/v1/${c.ds}/${addr}`, { headers: UA, signal: AbortSignal.timeout(4000) }).then((r) => (r.ok ? r.json() : null)) as Promise<any[] | null>, (v) => v == null);
+  const marketP = marketOf(addr, chain);
   const decP = evmDecimals(chain, addr);
-  const quoteP = Promise.all([dsP, decP]).then(async ([ds, dec]) => {
-    const price = ds?.[0]?.priceUsd ? Number(ds[0].priceUsd) : null;
-    const amt = evmSellAmount(price, dec);
+  const quoteP = Promise.all([marketP, decP]).then(async ([m, dec]) => {
+    const amt = evmSellAmount(m.priceUsd, dec);
     return amt ? evmSellQuote(chain, addr, amt) : null;
   }).catch(() => null);
-  const [gp, dsr, quote] = await Promise.all([
+  const [gp, market, quote] = await Promise.all([
     cached(`goplus:${c.id}:${addr.toLowerCase()}`, () => goplusFetch(addr, c.id), (v) => v.state === "ok"),
-    dsP,
+    marketP,
     quoteP,
   ]);
-  const marketUnknown = dsr == null;
+  const dsr = market.pairs;
+  const marketUnknown = market.failed;
   if (gp.state === "busy") throw new RugBusyError("The data source is busy. Try again in a few seconds");
   const g = gp.g;
   if (!g) throw new SolanaInputError(`This doesn't look like a token on ${chain}`);
-  const liq = dsr?.length ? dsr.reduce((a, p) => a + (p.liquidity?.usd ?? 0), 0) : null;
-  const created = dsr?.length ? Math.min(...dsr.map((p) => p.pairCreatedAt ?? Infinity)) : null;
+  const liq = market.liquidityUsd;
+  const created = market.createdAt;
   const age = created && isFinite(created) ? (Date.now() - created) / 3.6e6 : null;
-  const price = dsr?.[0]?.priceUsd ? Number(dsr[0].priceUsd) : null;
+  const price = market.priceUsd;
   const meta = pickTokenMeta([{ name: g.token_name, symbol: g.token_symbol }, ...dsMeta(addr, dsr)]);
   const scored = scoreEvm(g, liq, age, marketUnknown);
   const reasons = applyEvmSellWarnings(scored.reasons, quote, liq);
   const score = Math.min(100, reasons.reduce((a, x) => a + x.points, 0));
   const level: "low" | "medium" | "high" = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
   const sell = quote?.noRoute ? { canSell: "no route found", sellRoute: false as const } : quote ? { sellPriceImpactPct: quote.impactPct, sellTestUsd: 100 } : {};
-  const st = dsStats(dsr);
+  const st = fillMarketFacts(dsStats(dsr), market);
   return { score, level, reasons, confidence: marketUnknown ? "medium" : "high", unknownSignals: marketUnknown ? ["liquidity", "age"] : [], facts: { buyer: { ...evmExtra(g, dsr), ...sell }, ...meta, token: meta.tokenSymbol, creator: g.creator_address || null, owner: g.owner_address || null, holderCount: Number(g.holder_count || 0), liquidityUsd: liq, priceUsd: price, ageHours: age && +age.toFixed(1), buyTax: g.buy_tax, sellTax: g.sell_tax, ...st }, price, liq };
 }
 export const CHAINS = ["solana", "base", "bnb", "ethereum", "arbitrum"] as const; // EVM chains: add to EVM map (GoPlus chain id + DexScreener slug)
@@ -449,7 +463,7 @@ async function rugCheckUncached(mintRaw: string, chainRaw = "solana") {
     const b = await evmCheck(a, chain);
     if (b.level === "low") logValidation(`${chain}:${a}`, b.score, b.price, b.liq, 10 * 60_000, chain);
     return { product: "RugRadar", chain, token: a, riskScore: b.score, riskLevel: b.level, confidence: b.confidence, unknownSignals: b.unknownSignals, verdict: verdictOf(b.level), buyerSummary: buyerSummary(b.level, b.reasons.filter((x) => x.points > 0).map((x) => x.detail), b.confidence), signalCount: countSignals(b.facts), reasons: b.reasons.map((x) => x.detail), checks: b.reasons, facts: b.facts,
-      disclaimer: DISCLAIMER, method: "keyless GoPlus token security (honeypot simulation, owner functions, holders, LP lock, creator's earlier honeypots) + keyless DexScreener (liquidity, age)", generatedAt: new Date().toISOString() };
+      generatedAt: new Date().toISOString() };
   }
   const mint = mintRaw.trim();
   if (!B58.test(mint)) throw new SolanaInputError("mint is required (a Solana SPL token mint address)");
@@ -488,7 +502,7 @@ async function rugCheckUncached(mintRaw: string, chainRaw = "solana") {
     buyerSummary: buyerSummary(level, reasons.filter((x) => x.points > 0).map((x) => x.detail), confidence), buyer: ex?.signals ?? null,
     reasons: reasons.filter((x) => x.points > 0).map((x) => x.detail), checks: reasons,
     facts: { ...factsOnly, top1Pct: f.top1Pct && +f.top1Pct.toFixed(2), top10Pct: f.top10Pct && +f.top10Pct.toFixed(2), ageHours: f.ageHours && +f.ageHours.toFixed(1), ...fillMarketFacts(factsOnly, sg) },
-    disclaimer: DISCLAIMER, method: "public Solana RPC (mint account; creator/funder transactions) + keyless Jupiter token API (holders, dev wallet, dev launches/graduations, age) + keyless DexScreener (pools, liquidity, socials) + Jupiter sell quote (can you sell?) + pump.fun public trades (dev sold, snipers, launch-block bundles) + token-2022 extensions; RPC fallbacks when Jupiter lacks data", generatedAt: new Date().toISOString(),
+    generatedAt: new Date().toISOString(),
   };
 }
 

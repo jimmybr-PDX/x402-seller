@@ -71,7 +71,7 @@ export function limitedReport(full: any) {
     socialLinks: Array.isArray(links) ? links : null, freeFacts: freeFacts(full),
     facts: { tokenName: pick("tokenName"), tokenSymbol: pick("tokenSymbol"), tokenImage: pick("tokenImage"), mintAuthority: pick("mintAuthority"), freezeAuthority: pick("freezeAuthority"), top1Pct: pick("top1Pct"), top10Pct: pick("top10Pct"), holderCount: pick("holderCount"), ageHours: pick("ageHours"), liquidityUsd: pick("liquidityUsd"), marketUnknown: pick("marketUnknown"), volume24hUsd: pick("volume24hUsd"), buys24h: pick("buys24h"), sells24h: pick("sells24h"), priceChange24hPct: pick("priceChange24hPct") },
     lockedSignals: LOCKED_SIGNALS, unlock: "Credits unlock the full report (paste a credit key above, or send X-RugRadar-Key).",
-    disclaimer: full?.disclaimer ?? DISCLAIMER, generatedAt: full?.generatedAt ?? new Date().toISOString(),
+    generatedAt: full?.generatedAt ?? new Date().toISOString(),
   };
 }
 /** Basic free result teaser: only the count of warnings left out, never their text. */
@@ -88,7 +88,6 @@ export function freeFacts(full: any): string[] {
   return out;
 }
 const FREE_DAILY_CAP = Number(process.env.RUGRADAR_FREE_DAILY_CAP ?? 500);
-const DISCLAIMER = "Automated heuristic, may be wrong. Not financial advice. Do your own research.";
 
 /**
  * Plain danger-warning copy per check: [one-line title, one short line]. Titles say what the danger is, never how it
@@ -383,7 +382,7 @@ function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings
   if(Array.isArray(j.checks)){const fr=rrFree(j.checks,CFG.lim,CFG.warn);c.append(shareBar({riskScore:fr.sc,riskLevel:fr.lv,token:j.token,chain:j.chain,facts:fa},fr.ws))}}
  if(j.liveReport){const h=el('div');c.append(h);liveLoad().then(()=>{const b=window.RRLive(j);if(b)h.append(b)}).catch(()=>{})}
  const mo=el('details','quiet');mo.id='more';mo.append(el('summary',null,'More'));const ws2=el('div','sub soon');ws2.append(el('span',null,'\u{1F514} Watch token: coming soon'));mo.append(ws2);c.append(mo);
- c.append(el('div','disc','Danger warnings only \u00b7 based on public on-chain data. Not financial advice.'));out.append(c)}
+ c.append(el('div','disc','Danger warnings only \u00b7 based on public on-chain data.'));out.append(c)}
 function waitCard(){out.textContent='';const c=el('div','card res'),v=el('div','verdict'),t=el('div');t.append(el('div','vt','Checking\u2026'),el('div','vl','Usually a few seconds.'));v.append(gauge('wait',0),t);v.querySelector('i').firstChild.textContent='\u2026';c.append(v);out.append(c)}
 function msgCard(text,lock,note){out.textContent='';const c=el('div','card res');c.append(el('p',null,text));if(lock)c.append(lockedPanel(note));out.append(c)}
 async function chainFor(t){const c=$('chain').value;if(c!=='auto')return c;if(!t.startsWith('0x'))return 'solana';try{const r=await fetch('/rugradar/api/chain?token='+encodeURIComponent(t));const j=await r.json();return j.chain||'base'}catch(e){return 'base'}}
@@ -418,7 +417,7 @@ function page(d: WebDeps, promo = false) {
     ["Is RugRadar free?", `People get ${FC} ${promo ? "The free full report includes the live chart, dev and sniper wallets, biggest buys and sells and the sell test." : "The free check gives a 0-100 risk score with plain danger warnings and basic checks only; the full report adds the live chart, dev and sniper wallets, biggest buys and sells and the sell test."} Prepaid credits cost $${p} per full report (buy 1 to 1,000). Agents pay $${p} per call via x402 or use a credit key.`],
     ["Which chains does the rug check support?", "Solana (including pump.fun tokens), BNB Chain (four.meme), Base, Ethereum and Arbitrum. Chain is detected from the address."],
     ["What does the full report add?", "More danger warnings that free checkers usually miss, in plain words, plus a can-you-sell result."],
-    ["What does a low score mean?", `No danger warnings were found in public on-chain data. Danger warnings only \u00b7 based on public on-chain data. ${DISCLAIMER}`],
+    ["What does a low score mean?", "No danger warnings were found in public on-chain data. Danger warnings only \u00b7 based on public on-chain data."],
   ];
   const ld = [
     { "@context": "https://schema.org", "@type": "SoftwareApplication", name: "RugRadar", applicationCategory: "FinanceApplication", operatingSystem: "Web", url: `${U}/rugradar`, image: `${U}/rugradar/rug-radar-512.png`,
@@ -459,7 +458,7 @@ ${CSS_PAGE}</style></head><body><div class="wrap">
 </div>
 ${devSection(U, p, d.researchPrices ?? RESEARCH_DEFAULTS)}
 <details class="fold"><summary>How RugRadar works</summary><p class="mut">We turn public on-chain and market data into a 0-100 risk score with plain danger warnings. Danger warnings only \u00b7 based on public on-chain data.</p>${faq.map(([q, a]) => `<h3 style="font-size:15px;margin:12px 0 2px">${q}</h3><p class="mut" style="margin:0">${a}</p>`).join("")}</details>
-<footer>RugRadar \u00b7 ${DISCLAIMER} Danger warnings only \u00b7 based on public on-chain data; it never labels people.</footer>
+<footer>RugRadar \u00b7 Danger warnings only \u00b7 based on public on-chain data; it never labels people.</footer>
 </div>
 <script>const CFG=${json(cfg)};
 ${PAGE_JS}${swapJs}
@@ -520,14 +519,14 @@ curl -s -H "X-RugRadar-Key: rr_YOURKEY" "${U}/rug-check?token=${DEV_MINT}"`;
 <p><b>Credit keys</b> skip the x402 round trip:</p>${pre(c.credits)}
 <p><b>Embed the RugRadar card</b> (about 360 px, free check data, danger warnings only). Paste on any page:</p>${pre(c.embed)}<p>Or fetch the same data as JSON (score, verdict, top 3 warning titles, report link):</p>${pre(c.embedJson)}
 <p><b>Webhook signature</b>: header <code>X-RugRadar-Signature: t=&lt;unix&gt;,v1=&lt;hex&gt;</code>, HMAC-SHA256 of <code>t + "." + rawBody</code> with your watch secret. Node:</p>${pre(c.node)}<p>Python:</p>${pre(c.python)}
-<p><small>Discovery: <a href="/.well-known/x402">/.well-known/x402</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a>. The full report costs $${p} per check with prepaid credits (header <code>X-RugRadar-Key</code>) or x402. Danger warnings only; heuristic, may be wrong, not financial advice.</small></p></div></details>`;
+<p><small>Discovery: <a href="/.well-known/x402">/.well-known/x402</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a>. The full report costs $${p} per check with prepaid credits (header <code>X-RugRadar-Key</code>) or x402. Danger warnings only.</small></p></div></details>`;
 }
 
 
 // ---------- embed card + JSON (free check data, danger warnings only) ----------
 const escA = (t: unknown) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const VERDICT: Record<string, [string, string]> = { high: ["HIGH RISK", "Strong rug warning signs."], medium: ["CAUTION", "Some rug warning signs."], low: ["LOW RISK", "No danger warnings found."] };
-export type EmbedData = { product: "RugRadar"; report: "free"; token: string; chain: string; riskScore: number; riskLevel: string; label: string; verdict: string; warnings: { severity: string; title: string; line: string }[]; moreWarnings: number; reportUrl: string; disclaimer: string; generatedAt: string };
+export type EmbedData = { product: "RugRadar"; report: "free"; token: string; chain: string; riskScore: number; riskLevel: string; label: string; verdict: string; warnings: { severity: string; title: string; line: string }[]; moreWarnings: number; reportUrl: string; generatedAt: string };
 const embedCache = new Map<string, { at: number; v: EmbedData }>();
 let embedBusy = 0;
 const embedHits = new Map<string, number[]>();
@@ -543,7 +542,7 @@ export async function embedData(d: WebDeps, token: string, chain: string): Promi
     const ws = warningsOf(l.checks), lv = shownLevel(l.riskLevel, ws), verdict = VERDICT[lv]![1];
     const v: EmbedData = { product: "RugRadar", report: "free", token, chain, riskScore: l.riskScore, riskLevel: lv, label: VERDICT[lv]![0], verdict,
       warnings: ws.slice(0, 3).map((w) => ({ severity: w.sev, title: w.title, line: w.line })), moreWarnings: Math.max(0, ws.length - 3) + (Number(l.hiddenWarnings) || 0),
-      reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, disclaimer: "Danger warnings only \u00b7 based on public on-chain data. Not financial advice.", generatedAt: new Date().toISOString() };
+      reportUrl: `${d.publicUrl}/rugradar?token=${encodeURIComponent(token)}&chain=${chain}`, generatedAt: new Date().toISOString() };
     if (!degraded) { embedCache.set(k, { at: Date.now(), v }); primeShare(shareData(l, ws, lv, token, chain)); } if (embedCache.size > 300) embedCache.delete(embedCache.keys().next().value!);
     return v;
   } finally { embedBusy--; }
@@ -698,7 +697,7 @@ async function mcpCall(d: WebDeps, name: string, args: any, headerKey: string | 
   const url = `${d.publicUrl}${route}?token=${encodeURIComponent(token)}&chain=${chain}`;
   let requirement: unknown = null;
   try { const r = await fetch(url, { headers: { accept: "application/json", "user-agent": "rugradar-mcp-self (self)" }, signal: AbortSignal.timeout(5000) }); const h = r.headers.get("payment-required"); requirement = h ? JSON.parse(Buffer.from(h, "base64").toString()) : null; } catch {}
-  return text({ error: "payment_required", priceUsd: Number(d.priceUsd), payWith: { x402: { url, method: "GET", paymentRequired: requirement }, credits: { buy: `${d.publicUrl}/credits/buy?credits=100`, use: "send header X-RugRadar-Key or pass api_key" } }, disclaimer: DISCLAIMER }, true);
+  return text({ error: "payment_required", priceUsd: Number(d.priceUsd), payWith: { x402: { url, method: "GET", paymentRequired: requirement }, credits: { buy: `${d.publicUrl}/credits/buy?credits=100`, use: "send header X-RugRadar-Key or pass api_key" } } }, true);
 }
 
 
@@ -832,7 +831,7 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
     if (m.id === undefined) { res.status(202).end(); return; } // notifications
     const rp = d.researchPrices ?? RESEARCH_DEFAULTS;
     switch (m.method) {
-      case "initialize": return reply({ result: { protocolVersion: m.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "rugradar", title: "RugRadar", version: "1.0.0" }, instructions: `RugRadar danger checks (rug_check, token_safety, honeypot_check at $${d.priceUsd}; watch_token $0.05/24h) plus research tools on the same server: research_brief ${rp.report}, read_page ${rp.read}, news_search ${rp.news}, token_price ${rp.price}. RugRadar tools accept a credit key (header X-RugRadar-Key or api_key); otherwise each tool returns the x402 payment requirement for its HTTP route. ${DISCLAIMER}` } });
+      case "initialize": return reply({ result: { protocolVersion: m.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "rugradar", title: "RugRadar", version: "1.0.0" }, instructions: `RugRadar danger checks (rug_check, token_safety, honeypot_check at $${d.priceUsd}; watch_token $0.05/24h) plus research tools on the same server: research_brief ${rp.report}, read_page ${rp.read}, news_search ${rp.news}, token_price ${rp.price}. RugRadar tools accept a credit key (header X-RugRadar-Key or api_key); otherwise each tool returns the x402 payment requirement for its HTTP route.` } });
       case "ping": return reply({ result: {} });
       case "tools/list": return reply({ result: { tools: mcpTools(d) } });
       case "tools/call": return reply(await mcpCall(d, m.params?.name, m.params?.arguments, req.header("x-rugradar-key")));

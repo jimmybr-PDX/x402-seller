@@ -11,7 +11,7 @@ async function start() {
   app.get("/rug-check", (_q, r) => { r.set("payment-required", Buffer.from(JSON.stringify({ x402Version: 2, accepts: [{ amount: "10000" }] })).toString("base64")).status(402).json({}); });
   const srv = app.listen(0); base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
   registerRugradarWeb(app, { publicUrl: base, port: 0, priceUsd: "0.01", speed: { creditS: 2.3, paidS: 4, x: 1.8 },
-    rugCheck: async (t) => { if (t.endsWith("Fail1111111111111111111111111111111")) throw new Error("not an SPL token mint address"); return { product: "RugRadar", chain: "solana", token: t, riskScore: 48, riskLevel: "medium", buyerSummary: "FULL", buyer: { devSoldPctOfBought: 95, sniperSupplyPct10s: 30, organicLabel: "low" }, reasons: ["Dev sold 95%"], checks: [{ check: "mint_authority", points: 0, detail: "Mint authority is revoked: supply is fixed." }, { check: "age", points: 10, detail: "Very new" }, { check: "dev_sold", points: 10, detail: "Dev sold 95%" }, { check: "deployer_history", points: 20, detail: "Creator launched 5" }, { check: "snipers", points: 8, detail: "Snipers 30%" }], facts: { mintAuthority: null, freezeAuthority: null, top1Pct: 5, top10Pct: 20, ageHours: 0.2, liquidityUsd: 9000, priorLaunches: 5, priorDead: 4, extra: 1 }, disclaimer: "Automated heuristic, may be wrong. Not financial advice. Do your own research." }; },
+    rugCheck: async (t) => { if (t.endsWith("Fail1111111111111111111111111111111")) throw new Error("not an SPL token mint address"); return { product: "RugRadar", chain: "solana", token: t, riskScore: 48, riskLevel: "medium", buyerSummary: "FULL", buyer: { devSoldPctOfBought: 95, sniperSupplyPct10s: 30, organicLabel: "low" }, reasons: ["Dev sold 95%"], checks: [{ check: "mint_authority", points: 0, detail: "Mint authority is revoked: supply is fixed." }, { check: "age", points: 10, detail: "Very new" }, { check: "dev_sold", points: 10, detail: "Dev sold 95%" }, { check: "deployer_history", points: 20, detail: "Creator launched 5" }, { check: "snipers", points: 8, detail: "Snipers 30%" }], facts: { mintAuthority: null, freezeAuthority: null, top1Pct: 5, top10Pct: 20, ageHours: 0.2, liquidityUsd: 9000, priorLaunches: 5, priorDead: 4, extra: 1 } }; },
     spend: async (k) => { const n = keys.get(k); if (!n) return null; keys.set(k, n - 1); return n - 1; }, refund: async () => {} });
   return { srv, base };
 }
@@ -34,12 +34,12 @@ test("free web checks: 1 limited check per visitor, then 402; cookie and IP both
   } finally { srv.closeAllConnections(); srv.close(); }
 });
 
-test("page has SEO title, description, JSON-LD, disclaimer; sitemap lists /rugradar", async () => {
+test("page has SEO title, description, JSON-LD; sitemap lists /rugradar", async () => {
   const { srv, base } = await start();
   try {
     const h = await (await fetch(`${base}/rugradar`)).text();
     assert.match(h, /<title>RugRadar: Free Solana Rug Check & Honeypot Checker/); assert.match(h, /name="description"/); assert.match(h, /application\/ld\+json/); assert.match(h, /FAQPage/);
-    assert.match(h, /Do your own research/); assert.match(h, /1\.8x faster/); assert.match(h, /1 free (limited check|full report) every day per visitor/); assert.match(h, /function lockedPanel/); assert.match(h, /function walletPacks/); assert.match(h, /\/rugradar\/pay\/config/); assert.match(h, /j\.report==='limited'&&j\.checks/); assert.match(h, /Unlock full report \u2014 10 credits for \$0\.10/); assert.match(h, /credits\/buy\?credits=10/); assert.ok(!/scammer/i.test(h));
+    assert.match(h, /Danger warnings only/); assert.doesNotMatch(h, /Do your own research/); assert.doesNotMatch(h, /Not financial advice/); assert.match(h, /1\.8x faster/); assert.match(h, /1 free (limited check|full report) every day per visitor/); assert.match(h, /function lockedPanel/); assert.match(h, /function walletPacks/); assert.match(h, /\/rugradar\/pay\/config/); assert.match(h, /j\.report==='limited'&&j\.checks/); assert.match(h, /Unlock full report \u2014 10 credits for \$0\.10/); assert.match(h, /credits\/buy\?credits=10/); assert.ok(!/scammer/i.test(h));
     assert.match(await (await fetch(`${base}/sitemap.xml`)).text(), /\/rugradar<\/loc>/);
   } finally { srv.closeAllConnections(); srv.close(); }
 });

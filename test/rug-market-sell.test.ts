@@ -26,6 +26,9 @@ test("geckoMarket copies 24h volume and price change from the same pools respons
   const g = await geckoMarket("M", mk(200, { data: [{ attributes: { reserve_in_usd: "40", volume_usd: { h24: "12" }, price_change_percentage: { h24: "-1.5" } } }, { attributes: { reserve_in_usd: "10", volume_usd: { h24: "8" }, price_change_percentage: { h24: "9" } } }] }));
   assert.equal(g!.volume24hUsd, 20);
   assert.equal(g!.priceChange24hPct, -1.5);
+  let url = "";
+  await geckoMarket("0xabc", (async (u: string) => { url = String(u); return new Response(JSON.stringify({ data: [] }), { status: 200 }); }) as unknown as typeof fetch, "base");
+  assert.match(url, /networks\/base\/tokens\/0xabc\/pools/);
 });
 
 test("evmSellAmount is exact for 18-decimal tokens; quote maps no-route and impact; warnings only on failure", async () => {

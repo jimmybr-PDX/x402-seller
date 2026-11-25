@@ -9,9 +9,22 @@ test("evmExtra maps GoPlus + DexScreener into buyer fields", () => {
   assert.equal(e.liquidityToMcapPct, 5); assert.equal(e.buys24h, 10); assert.deepEqual(e.socials.sort(), ["twitter", "website"]);
 });
 
+test("evmExtra sums 24h volume and buys/sells across pools; price change from the deepest", () => {
+  const e = evmExtra({}, [
+    { liquidity: { usd: 100 }, volume: { h24: 20 }, txns: { h24: { buys: 1, sells: 2 } }, priceChange: { h24: 9 }, marketCap: 50 },
+    { liquidity: { usd: 900 }, volume: { h24: 80 }, txns: { h24: { buys: 7, sells: 3 } }, priceChange: { h24: -6.46 }, marketCap: 1000 },
+  ]);
+  assert.equal(e.volume24hUsd, 100);
+  assert.equal(e.buys24h, 8);
+  assert.equal(e.sells24h, 5);
+  assert.equal(e.priceChange24hPct, -6.46);
+  assert.equal(e.marketCapUsd, 1000);
+});
+
 test("buyer summary uses high-risk-pattern wording, never 'scammer'", () => {
-  for (const l of ["high", "medium", "low"]) { const s = buyerSummary(l, ["x."], "medium"); assert.ok(!/scam/i.test(s)); }
+  for (const l of ["high", "medium", "low"]) { const s = buyerSummary(l, ["x."], "medium"); assert.ok(!/scam/i.test(s)); assert.doesNotMatch(s, /afford to lose|Size small if you buy|Not financial advice|Many buyers would avoid/); }
   assert.match(buyerSummary("high", [], "high"), /high-risk patterns/);
+  assert.equal(buyerSummary("low", [], "high"), "No major high-risk patterns found.");
   assert.match(RUG_EDGE, /^\$0\.02 per check/);
 });
 

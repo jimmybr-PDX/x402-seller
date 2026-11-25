@@ -37,7 +37,7 @@ export function watchConfig(d: WatchRouteDeps) {
     alertsOn: ["dev sells", "liquidity drop 30%+ (and 60%+)", "mint authority appears", "freeze authority appears", "risk score +20 (and +40) vs. start", "can't sell (2 checks in a row)"],
     pay: { credits: `POST ${d.publicUrl}/rugradar/watch with header X-RugRadar-Key (24h = 5 credits, 48h = 10)`, x402: `GET ${d.publicUrl}/watch?token=<mint>&hours=24|48&webhook=<https url>` , wallet: `buy a credit pack with Phantom/Solflare at ${d.publicUrl}/rugradar, then use the key` },
     usage: { activeWatches: st.active, maxWatches: st.max, checks: st.checks, checkFails: st.checkFails, avgCheckMs: st.avgCheckMs, alerts: st.alerts, delivered: st.delivered, deliveryFails: st.deliveryFails, costPerCheck: st.costPerCheck },
-    signature: "X-RugRadar-Signature: t=<unix>,v1=hex(HMAC_SHA256(secret, `${t}.${rawBody}`)); the secret is returned once when the watch starts", disclaimer: "Automated heuristic, may be wrong. Not financial advice." };
+    signature: "X-RugRadar-Signature: t=<unix>,v1=hex(HMAC_SHA256(secret, `${t}.${rawBody}`)); the secret is returned once when the watch starts" };
 }
 
 /** Credit-key path for GET /watch; must run before the x402 payment middleware. */
@@ -80,7 +80,7 @@ export function registerWatchRoutes(app: Express, d: WatchRouteDeps) {
     if (limited("test:" + ipOf(req), 3, 10 * 60_000)) { res.status(429).json({ error: "slow_down", message: "3 test alerts per 10 minutes, please." }); return; }
     const url = s(req.body?.webhook) || s(req.query.webhook);
     const secret = "whsec_test_" + randomBytes(12).toString("base64url");
-    const body = JSON.stringify({ product: "RugRadar", event: "watch.test", watchId: "w_test", token: "So11111111111111111111111111111111111111112", chain: "solana", alerts: [{ kind: "test", message: "This is a test alert from RugRadar Watch." }], sentAt: new Date().toISOString(), disclaimer: "Automated heuristic, may be wrong. Not financial advice." });
+    const body = JSON.stringify({ product: "RugRadar", event: "watch.test", watchId: "w_test", token: "So11111111111111111111111111111111111111112", chain: "solana", alerts: [{ kind: "test", message: "This is a test alert from RugRadar Watch." }], sentAt: new Date().toISOString() });
     const r = await postWebhook(url, secret, body, "watch.test", d.allowPrivate);
     res.status(r.ok ? 200 : r.status == null && r.error ? 400 : 502).json({ delivered: r.ok, status: r.status, ...(r.error ? { error: r.error } : {}), testSecret: secret, note: "Test alerts are signed with this one-off secret; real watches use the secret returned when the watch starts." });
   });

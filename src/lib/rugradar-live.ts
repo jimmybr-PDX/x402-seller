@@ -47,6 +47,6 @@ window.RRLive=function(j){var L=j&&j.liveReport;if(!L)return null;var box=el('di
   add('Mint authority',R.mintAuthority==='off'?'Off':R.mintAuthority==='on'?'On':'Unknown',R.mintAuthority==='off'?'ok':R.mintAuthority==='on'?'bad':'');
   add('Freeze authority',R.freezeAuthority==='off'?'Off':R.freezeAuthority==='on'?'On':'Unknown',R.freezeAuthority==='off'?'ok':R.freezeAuthority==='on'?'bad':'');
   if(R.top10Pct!=null)add('Top 10 holders',pc(R.top10Pct),R.top10Pct>70?'bad':'');
-  rk.append(g,el('div','lnote','May include pool/curve accounts. Danger warnings only. Not financial advice.'));box.append(rk);n++}
+  rk.append(g,el('div','lnote','May include pool/curve accounts. Danger warnings only.'));box.append(rk);n++}
  if(!n)return null;var N=Array.isArray(j.checks)?j.checks.length:0;box.prepend(el('div','lhd','Full report \u00b7 unlocked'));box.append(el('div','lhd lend','End of report'+(N?' \u00b7 '+N+' checks run':'')));return box};
 })();`;

@@ -9,6 +9,8 @@ test("RugRadar icons exist and both RugRadar listings use the RugRadar icon", ()
     const i = src.indexOf(`serviceName: "${name}"`);
     assert.ok(i > 0 && src.slice(i, i + 400).includes("iconUrl: RUG_ICON_URL"), name);
   }
-  assert.match(src, /Automated heuristic, may be wrong\. Not financial advice\. Do your own research\./);
+  assert.doesNotMatch(src, /Automated heuristic, may be wrong\. Not financial advice\. Do your own research\./);
+  assert.doesNotMatch(src, /Not financial advice/);
+  assert.doesNotMatch(src, /afford to lose/);
 });
 test("RugRadar price is $0.02", () => { assert.match(src, /const RUG_PRICE = process\.env\.RUG_PRICE \?\? "\$0\.02";/); });

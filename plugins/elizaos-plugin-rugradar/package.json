@@ -1,7 +1,7 @@
 {
   "name": "elizaos-plugin-rugradar",
   "version": "0.1.0",
-  "description": "RugRadar rug-pull / token-safety / honeypot checks for ElizaOS. Automated heuristic, may be wrong. Not financial advice. Do your own research.",
+  "description": "RugRadar rug-pull / token-safety / honeypot checks for ElizaOS.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

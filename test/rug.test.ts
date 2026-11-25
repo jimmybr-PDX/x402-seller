@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scoreFacts, scoreEvm, isMarketUnknown, DISCLAIMER, rugCheck, type Facts } from "../src/lib/rug.js";
+import { scoreFacts, scoreEvm, isMarketUnknown, rugCheck, type Facts } from "../src/lib/rug.js";
 
 const base: Facts = { mint: "M", decimals: 6, supply: 1e9, mintAuthority: null, freezeAuthority: null, token2022: false, top1Pct: 5, top10Pct: 20, liquidityUsd: 500000, priceUsd: 1, pairs: 2, lpNote: null, ageHours: 2000, creator: "C", funder: null, priorLaunches: 0, priorDead: 0, creatorFlagged: false, funderFlagged: false, unknown: [] };
 
@@ -13,7 +13,6 @@ test("active authorities + concentration + serial dead launches score high", () 
 test("wording: high-risk pattern, never 'scammer'", () => {
   const all = scoreFacts({ ...base, mintAuthority: "X", freezeAuthority: "X", creatorFlagged: true, funderFlagged: true, priorLaunches: 4, priorDead: 4 }).reasons.map((x) => x.detail).join(" ");
   assert.ok(!/scam/i.test(all)); assert.match(all, /high-risk pattern/);
-  assert.equal(DISCLAIMER, "Automated heuristic, may be wrong. Not financial advice. Do your own research.");
 });
 test("base honeypot scores high", () => { const r = scoreEvm({ is_honeypot: "1", is_mintable: "1", sell_tax: "0.5" }, 2000, 3); assert.equal(r.level, "high"); });
 test("rejects bad input and unknown chain", async () => {

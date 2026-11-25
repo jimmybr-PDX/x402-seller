@@ -52,7 +52,7 @@ import { WalletInputError, walletBalances } from "./lib/wallet.js";
 import { TxInputError, txLookup } from "./lib/tx.js";
 import { GasInputError, gasNow } from "./lib/gas.js";
 import { paidRugCheck } from "./lib/rug-paid.js";
-import { rugCheck, RugBusyError, flaggedWallets, DISCLAIMER as RUG_DISCLAIMER } from "./lib/rug.js";
+import { rugCheck, RugBusyError, flaggedWallets } from "./lib/rug.js";
 import { registerRugradarWeb, primeFromLimited, limitedReport, freeFacts } from "./lib/rugradar-web.js";
 import { createRecent } from "./lib/rugradar-recent.js";
 import { createWatcher, WATCH_PLANS, planOf, type Watch } from "./lib/watch.js";
@@ -1005,7 +1005,7 @@ async function main() {
     "GET /rug-check": {
       accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
       description:
-        `${RUG_EDGE_SHORT} RugRadar: Solana rug check / rug pull checker for pump.fun memecoins, plus BNB (four.meme), Base, Ethereum, Arbitrum via chain=. 0-100 risk score, plain reasons and a buyer summary. Heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
+        `${RUG_EDGE_SHORT} RugRadar: Solana rug check / rug pull checker for pump.fun memecoins, plus BNB (four.meme), Base, Ethereum, Arbitrum via chain=. 0-100 risk score, plain reasons and a buyer summary. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "RugRadar: Solana Rug Check & Token Safety Score",
       tags: ["rug check", "rug pull checker", "solana token safety", "pump.fun rug check", "honeypot check"],
@@ -1026,11 +1026,10 @@ async function main() {
               product: "RugRadar", chain: "solana", token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
               riskScore: 5, riskLevel: "low", confidence: "high",
               verdict: "No major high-risk patterns found.",
-              buyerSummary: "No major high-risk patterns found. Still only buy what you can afford to lose.",
+              buyerSummary: "No major high-risk patterns found.",
               signalCount: 48,
               reasons: ["Mint authority is revoked: supply is fixed.", "Freeze authority is revoked."],
               buyer: { canSell: true, sellImpactPct: 0.4, devSoldPctOfBought: 0, sniperSupplyPct10s: 2.1, volumeToMcap: 0.08, organicScore: 92 },
-              disclaimer: "Automated heuristic, may be wrong. Not financial advice. Do your own research.",
             },
             schema: {
               properties: {
@@ -1039,9 +1038,9 @@ async function main() {
                 confidence: { type: "string" }, verdict: { type: "string" }, buyerSummary: { type: "string" },
                 signalCount: { type: "integer" }, reasons: { type: "array", items: { type: "string" } },
                 buyer: { type: ["object", "null"] }, checks: { type: "array", items: { type: "object" } },
-                facts: { type: "object" }, disclaimer: { type: "string" },
+                facts: { type: "object" },
               },
-              required: ["riskScore", "riskLevel", "reasons", "disclaimer", "buyerSummary"],
+              required: ["riskScore", "riskLevel", "reasons", "buyerSummary"],
             },
           },
         }),
@@ -1053,7 +1052,7 @@ async function main() {
         // Oct 18: agent-job-first wording for the "token safety" / "is this token safe" / "token risk score" searches, where this
         // route was missing from Bazaar's top 20 (rug-check already ranks #1 for rug queries). Oct 19: "Solana token safety" back
         // in the name/description/tags (dropping it lost that search, #7 -> out of top 20).
-        `Is this token safe to buy? Solana token safety check and token risk score for agents: call before buying, swapping or recommending a new token. Score 0-100, low/medium/high verdict and plain reasons: mint/freeze authority, liquidity, top holders, dev sold %, snipers, bundles, live sell test, creator rug history. Solana (pump.fun) default; Base/BNB/Ethereum/Arbitrum via chain=. RugRadar heuristic, may be wrong; not financial advice. ${perCall(RUG_PRICE)}`,
+        `Is this token safe to buy? Solana token safety check and token risk score for agents: call before buying, swapping or recommending a new token. Score 0-100, low/medium/high verdict and plain reasons: mint/freeze authority, liquidity, top holders, dev sold %, snipers, bundles, live sell test, creator rug history. Solana (pump.fun) default; Base/BNB/Ethereum/Arbitrum via chain=. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "Is This Token Safe? Solana Token Safety Score (RugRadar)",
       tags: ["token safety", "is this token safe", "solana token safety", "token risk score", "memecoin safety", "token security scan"],
@@ -1074,11 +1073,10 @@ async function main() {
               product: "RugRadar", chain: "solana", token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
               riskScore: 5, riskLevel: "low", confidence: "high",
               verdict: "No major high-risk patterns found.",
-              buyerSummary: "No major high-risk patterns found. Still only buy what you can afford to lose.",
+              buyerSummary: "No major high-risk patterns found.",
               signalCount: 48,
               reasons: ["Mint authority is revoked: supply is fixed.", "Freeze authority is revoked."],
               buyer: { canSell: true, sellImpactPct: 0.4, devSoldPctOfBought: 0, sniperSupplyPct10s: 2.1, volumeToMcap: 0.08, organicScore: 92 },
-              disclaimer: "Automated heuristic, may be wrong. Not financial advice. Do your own research.",
             },
             schema: {
               properties: {
@@ -1087,9 +1085,9 @@ async function main() {
                 confidence: { type: "string" }, verdict: { type: "string" }, buyerSummary: { type: "string" },
                 signalCount: { type: "integer" }, reasons: { type: "array", items: { type: "string" } },
                 buyer: { type: ["object", "null"] }, checks: { type: "array", items: { type: "object" } },
-                facts: { type: "object" }, disclaimer: { type: "string" },
+                facts: { type: "object" },
               },
-              required: ["riskScore", "riskLevel", "reasons", "disclaimer", "buyerSummary"],
+              required: ["riskScore", "riskLevel", "reasons", "buyerSummary"],
             },
           },
         }),
@@ -1098,7 +1096,7 @@ async function main() {
     "GET /honeypot-check": {
       accepts: accept(RUG_PRICE, RUG_PAY_TO_SVM, RUG_PAY_TO_EVM),
       description:
-        `${RUG_EDGE_SHORT} Honeypot check: can I sell this token? Simulated buy/sell and tax (GoPlus) on Base, BNB, Ethereum, Arbitrum; live sell quote plus freeze authority on Solana. 0-100 score. Heuristic, may be wrong. Not financial advice. ${perCall(RUG_PRICE)}`,
+        `${RUG_EDGE_SHORT} Honeypot check: can I sell this token? Simulated buy/sell and tax (GoPlus) on Base, BNB, Ethereum, Arbitrum; live sell quote plus freeze authority on Solana. 0-100 score. ${perCall(RUG_PRICE)}`,
       mimeType: "application/json",
       serviceName: "Honeypot Check (RugRadar)",
       tags: ["honeypot check", "honeypot", "can i sell this token", "bsc honeypot check", "honeypot detector"],
@@ -1119,11 +1117,10 @@ async function main() {
               product: "RugRadar", chain: "solana", token: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
               riskScore: 5, riskLevel: "low", confidence: "high",
               verdict: "No major high-risk patterns found.",
-              buyerSummary: "No major high-risk patterns found. Still only buy what you can afford to lose.",
+              buyerSummary: "No major high-risk patterns found.",
               signalCount: 48,
               reasons: ["Mint authority is revoked: supply is fixed.", "Freeze authority is revoked."],
               buyer: { canSell: true, sellImpactPct: 0.4, devSoldPctOfBought: 0, sniperSupplyPct10s: 2.1, volumeToMcap: 0.08, organicScore: 92 },
-              disclaimer: "Automated heuristic, may be wrong. Not financial advice. Do your own research.",
             },
             schema: {
               properties: {
@@ -1132,9 +1129,9 @@ async function main() {
                 confidence: { type: "string" }, verdict: { type: "string" }, buyerSummary: { type: "string" },
                 signalCount: { type: "integer" }, reasons: { type: "array", items: { type: "string" } },
                 buyer: { type: ["object", "null"] }, checks: { type: "array", items: { type: "object" } },
-                facts: { type: "object" }, disclaimer: { type: "string" },
+                facts: { type: "object" },
               },
-              required: ["riskScore", "riskLevel", "reasons", "disclaimer", "buyerSummary"],
+              required: ["riskScore", "riskLevel", "reasons", "buyerSummary"],
             },
           },
         }),
@@ -1148,7 +1145,7 @@ async function main() {
         payTo: NETWORK_INFO[network]!.family === "svm" ? RUG_PAY_TO_SVM : RUG_PAY_TO_EVM,
         maxTimeoutSeconds: 300,
       })),
-      description: `RugRadar Watch + Alert: watch one Solana token (pump.fun incl.) for 24h ($0.05) or 48h ($0.10). Re-checked about every 10 min; signed webhook alert when the dev sells, liquidity drops 30%+, mint/freeze authority appears, risk score jumps 20+ points, or it can't be sold. Heuristic, may be wrong. Not financial advice.`,
+      description: `RugRadar Watch + Alert: watch one Solana token (pump.fun incl.) for 24h ($0.05) or 48h ($0.10). Re-checked about every 10 min; signed webhook alert when the dev sells, liquidity drops 30%+, mint/freeze authority appears, risk score jumps 20+ points, or it can't be sold.`,
       mimeType: "application/json",
       serviceName: "RugRadar Watch + Alert (token rug alerts)",
       tags: ["rug alert", "token watch", "pump.fun alert", "dev sell alert", "liquidity alert"],

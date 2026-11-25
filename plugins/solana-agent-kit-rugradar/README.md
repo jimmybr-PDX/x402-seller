@@ -5,7 +5,7 @@ Adds three actions/tools: **rug check**, **token safety** and **honeypot check**
 
 Each call costs $0.02 and is paid from a prepaid RugRadar credit key (sent as `X-RugRadar-Key`).
 
-> Automated heuristic, may be wrong. Not financial advice. Do your own research. Results describe high-risk patterns, not people.
+> Danger warnings only. Results describe high-risk patterns, not people.
 
 ## Install
 
