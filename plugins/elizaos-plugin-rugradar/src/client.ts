@@ -1,5 +1,5 @@
 // Minimal RugRadar HTTP client. Pays with a prepaid credit key (X-RugRadar-Key).
-// Buy credits: https://x402-seller-pmlm.onrender.com/credits/buy?credits=100 (x402, $0.01 per check).
+// Buy credits: https://x402-seller-pmlm.onrender.com/credits/buy?credits=100 (x402, $0.02 per check).
 export const RUGRADAR_URL = "https://x402-seller-pmlm.onrender.com";
 export type Tool = "rug-check" | "token-safety" | "honeypot-check";
 export async function rugradar(tool: Tool, token: string, chain = "solana", apiKey = process.env.RUGRADAR_API_KEY ?? "", baseUrl = process.env.RUGRADAR_URL ?? RUGRADAR_URL) {

@@ -90,11 +90,11 @@ const TX_PRICE = process.env.TX_PRICE ?? "$0.003";
 const GAS_PRICE = process.env.GAS_PRICE ?? "$0.001";
 const TOKEN_META_PRICE = process.env.TOKEN_META_PRICE ?? "$0.001";
 const SEARCH_PRICE = process.env.SEARCH_PRICE ?? "$0.01";
-const RUG_PRICE = process.env.RUG_PRICE ?? "$0.01";
+const RUG_PRICE = process.env.RUG_PRICE ?? "$0.02";
 // Measured end-to-end gap between a paid x402 RugRadar call and a credit-key call (seconds); null until measured.
 const CREDIT_GAP_S: number | null = 1.7; // measured 2026-10-13 (scripts/rugradar-speedtest.mjs, 6 cache-free pairs, 3 tokens x 2 rounds): credit key avg 2.28 s vs paid x402 avg 4.03 s (1.77x; credits faster in 5 of 6)
 const CREDIT_SPEED = { creditS: 2.3, paidS: 4.0, x: 1.8 };
-const creditTip = () => (CREDIT_GAP_S ? `Tip: buy RugRadar credits (${PUBLIC_URL}/credits/buy?credits=N, $0.01 each) to skip the ~${CREDIT_GAP_S}s payment wait.` : `Tip: buy RugRadar credits (${PUBLIC_URL}/credits/buy?credits=N, $0.01 each) and send X-RugRadar-Key to skip payment on each check.`);
+const creditTip = () => (CREDIT_GAP_S ? `Tip: buy RugRadar credits (${PUBLIC_URL}/credits/buy?credits=N, ${RUG_PRICE} each) to skip the ~${CREDIT_GAP_S}s payment wait.` : `Tip: buy RugRadar credits (${PUBLIC_URL}/credits/buy?credits=N, ${RUG_PRICE} each) and send X-RugRadar-Key to skip payment on each check.`);
 const RUG_PATHS = new Set(["/rug-check", "/token-safety", "/honeypot-check"]);
 const SERVICE_NAME = "Agent Research Tools"; // <= 32 printable ASCII (Bazaar rule)
 // PNG: the Bazaar re-hosts PNG/JPEG icons; our SVG icon never showed up in listings

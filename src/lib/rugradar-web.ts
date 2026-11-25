@@ -560,13 +560,14 @@ const EMBED_CSS = `body{margin:0;padding:8px;background:transparent;color:var(--
 .emb .vt{font-size:20px}.emb .vl{font-size:14px;margin-top:3px}
 .emb .wcards{gap:6px;margin:8px 0}.emb .wc summary{gap:8px;padding:8px 10px;font-size:14px}.emb .wc p{padding:0 10px 8px;font-size:13px;white-space:normal}.emb .sev{font-size:10px;padding:2px 6px}
 .efoot{flex-wrap:wrap;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;color:var(--mut)}.efoot a{font-weight:700;font-size:13px;white-space:nowrap}.credit{font-size:11px;color:#6f7990}.emsg{font-size:14px;margin:6px 0}`;
-function embedHtml(U: string, v: EmbedData | null, msg?: string) {
+function embedHtml(U: string, v: EmbedData | null, msg?: string, priceUsd = "0.02") {
+  const price = priceUsd.startsWith("$") ? priceUsd : `$${priceUsd}`;
   const body = v
     ? `<div class="etok"><b>${escA(v.token.slice(0, 4))}\u2026${escA(v.token.slice(-6))}</b> \u00b7 ${escA(CHAIN_NAME[v.chain] ?? v.chain)} \u00b7 free check</div>
 <div class="verdict v-${v.riskLevel}"><div class="gauge g-${v.riskLevel}" style="--p:${v.riskLevel === "low" ? 100 : Math.max(4, Math.min(100, v.riskScore))}"><i>${v.riskScore}<small>/100</small></i></div><div><div class="vt ${v.riskLevel}">${v.label}</div><div class="vl">${escA(v.verdict)}</div></div><div class="vfree">Free check: basic warnings only. Full report unlocks more.</div></div>
 ${v.warnings.length ? `<div class="wcards">${v.warnings.map((w) => `<details class="wc ${w.severity === "DANGER" ? "d" : "c"}"><summary><span class="sev ${w.severity === "DANGER" ? "s3" : "s2"}">${w.severity}</span><span class="tt">${escA(w.title)}</span><span class="ch"></span></summary><p>${escA(w.line)}</p></details>`).join("")}</div>` : ""}
 ${v.moreWarnings > 0 ? `<div class="emsg"><b>+${v.moreWarnings} more warning${v.moreWarnings > 1 ? "s" : ""} in the full report</b></div>` : ""}
-<div class="efoot"><a href="${escA(v.reportUrl)}" target="_blank" rel="noopener">Unlock live chart + full report - $0.01 \u203a</a><span class="credit">Danger warnings only \u00b7 based on public on-chain data \u00b7 <b>RugRadar</b></span></div>`
+<div class="efoot"><a href="${escA(v.reportUrl)}" target="_blank" rel="noopener">Unlock live chart + full report - ${price} \u203a</a><span class="credit">Danger warnings only \u00b7 based on public on-chain data \u00b7 <b>RugRadar</b></span></div>`
     : `<p class="emsg">${escA(msg ?? "Add ?token=<address> to show a RugRadar card.")}</p><div class="efoot"><a href="${U}/rugradar" target="_blank" rel="noopener">Check a token \u203a</a><span class="credit">Danger warnings only \u00b7 based on public on-chain data \u00b7 <b>RugRadar</b></span></div>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>RugRadar token risk card</title>
 <style>${CSS_BASE}
@@ -737,7 +738,7 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
   app.get("/rugradar/live.js", (_req, res) => { res.set("Cache-Control", "public, max-age=86400").type("application/javascript").send(LIVE_JS); });
   app.get("/rugradar/embed", async (req: Request, res: Response) => {
     const r = await embedFor(d, req);
-    res.status(r.status).set({ "Cache-Control": r.status === 200 ? "public, max-age=300" : "no-store", "Content-Security-Policy": "frame-ancestors *" }).type("html").send(embedHtml(d.publicUrl, r.v, r.msg));
+    res.status(r.status).set({ "Cache-Control": r.status === 200 ? "public, max-age=300" : "no-store", "Content-Security-Policy": "frame-ancestors *" }).type("html").send(embedHtml(d.publicUrl, r.v, r.msg, d.priceUsd));
   });
   app.get("/rugradar/embed.json", async (req: Request, res: Response) => {
     const r = await embedFor(d, req);

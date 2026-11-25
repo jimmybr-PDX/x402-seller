@@ -12,7 +12,7 @@ test("evmExtra maps GoPlus + DexScreener into buyer fields", () => {
 test("buyer summary uses high-risk-pattern wording, never 'scammer'", () => {
   for (const l of ["high", "medium", "low"]) { const s = buyerSummary(l, ["x."], "medium"); assert.ok(!/scam/i.test(s)); }
   assert.match(buyerSummary("high", [], "high"), /high-risk patterns/);
-  assert.match(RUG_EDGE, /^\$0\.01 per check/);
+  assert.match(RUG_EDGE, /^\$0\.02 per check/);
 });
 
 test("solanaExtra flags permanent delegate and missing sell route; unknowns when sources fail", async () => {

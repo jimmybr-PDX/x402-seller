@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Credit-key-only RugRadar timing. BUY=N buys N credits once (N x $0.01 from .buyer.json) and saves the key to
+/** Credit-key-only RugRadar timing. BUY=N buys N credits once (N x $0.02 from .buyer.json) and saves the key to
  *  /tmp/rugradar-test-key (0600, never printed); later runs reuse it. TOKENS=comma list. */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";

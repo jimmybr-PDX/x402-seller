@@ -1,5 +1,5 @@
 /**
- * RugRadar paid-report extras ($0.01 full report, Solana only): live chart pool, dev wallet and sniper/bundle wallet
+ * RugRadar paid-report extras ($0.02 full report, Solana only): live chart pool, dev wallet and sniper/bundle wallet
  * status, biggest buys/sells and a risk summary. Built from data the check already fetched (pump.fun frontend-api-v3 trades kept
  * in a small per-mint stash) plus at most: 1 market lookup (DexScreener, fallback GeckoTerminal), 1 GeckoTerminal trades
  * call for non-pump coins, and 1 getMultipleAccounts RPC call for balances. Cached 10 min per mint, concurrency capped.
