@@ -83,7 +83,7 @@ export function applyEvmSellWarnings<T extends { check: string; points: number; 
   const hasHp = reasons.some((x) => x.check === "honeypot" && x.points > 0);
   const r = reasons.filter((x) => x.check !== "sell_route" && x.check !== "sell_impact") as T[];
   if (quote.noRoute && (liquidityUsd ?? 0) > 1000 && !hasHp) {
-    r.push({ check: "sell_route", points: 30, detail: "No way to sell this token was found." } as T);
+    r.push({ check: "sell_route", points: 60, detail: "No way to sell this token was found." } as T);
   }
   if (!quote.noRoute && quote.impactPct != null && quote.impactPct > 20) {
     r.push({ check: "sell_impact", points: 10, detail: "A ~$100 sale moves the price over 20%." } as T);

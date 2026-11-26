@@ -13,7 +13,7 @@ const deadFull = () => ({ product: "RugRadar", chain: "solana", token: DEAD, ris
 
 test("free check counts the dead-token rule: the dead coin rates high, not medium", () => {
   const l = limitedReport(deadFull());
-  assert.equal(l.riskLevel, "high"); assert.equal(l.riskScore, 60); assert.equal(l.checks[0]!.check, "dead_token");
+  assert.equal(l.riskLevel, "high"); assert.equal(l.riskScore, 50); assert.equal(l.checks[0]!.check, "dead_token");
   const noDead = deadFull(); noDead.checks.shift(); assert.equal(limitedReport(noDead).riskLevel, "medium", "without the rule it was medium (40)");
   assert.equal(l.hiddenWarnings, 1, "no_socials is full-report only; creator history is never counted or shown");
   assert.ok(!JSON.stringify({ ...l, lockedSignals: null }).includes("graduat"));
@@ -54,7 +54,7 @@ test("v5 page: paste box, Auto chip, free line, credits copy, folded agents with
       for (const re of PRIVATE) assert.ok(!re.test(visible), `page must not match ${re}`);
       for (const k of ["deployer_history", "known_pattern", "shared_funder"]) assert.ok(!new RegExp(`"${k}":\\[`).test(h), `${k} has no copy on the page`);
       assert.equal(h.includes("Opens swap in your wallet"), sw.enabled, "swap line only ships when the swap is on");
-      assert.ok(Buffer.byteLength(h) < 66_000, `page ${Buffer.byteLength(h)} bytes`);
+      assert.ok(Buffer.byteLength(h) < 67_000, `page ${Buffer.byteLength(h)} bytes`);
       for (const m of h.matchAll(/<script>([\s\S]*?)<\/script>/g)) new Function(m[1]!);
     } finally { srv.closeAllConnections(); srv.close(); }
   }
@@ -71,7 +71,7 @@ test("embed card + JSON: ring, verdict, max 3 collapsed warnings, unlock link, c
     assert.ok(!/<script/i.test(h), "no scripts in the embed"); assert.ok(!/Buy this token|swap/i.test(h));
     for (const re of PRIVATE) assert.ok(!re.test(h), `embed must not match ${re}`);
     const j = await (await fetch(`${base}/rugradar/embed.json?token=${DEAD}`)).json();
-    assert.equal(j.riskLevel, "high"); assert.equal(j.riskScore, 60); assert.equal(j.warnings.length, 3); assert.equal(j.warnings[0].title, "Creator can mint more"); assert.match(j.reportUrl, /\/rugradar\?token=DDDv.*&chain=solana$/); assert.equal(j.moreWarnings, 1);
+    assert.equal(j.riskLevel, "high"); assert.equal(j.riskScore, 50); assert.equal(j.warnings.length, 3); assert.equal(j.warnings[0].title, "Creator can mint more"); assert.match(j.reportUrl, /\/rugradar\?token=DDDv.*&chain=solana$/); assert.equal(j.moreWarnings, 1);
     const low = await (await fetch(`${base}/rugradar/embed.json?token=${CLEAN}`)).json(); assert.equal(low.verdict, "No danger warnings found."); assert.equal(low.warnings.length, 0); assert.ok(!/guarantee/i.test(JSON.stringify(low))); assert.equal("disclaimer" in low, false); assert.doesNotMatch(JSON.stringify(low), /Not financial advice|Do your own research|Automated heuristic/);
     const evm = await (await fetch(`${base}/rugradar/embed.json?token=0x${"a".repeat(40)}`)).json(); assert.equal(evm.chain, "bnb", "auto-detects the EVM chain");
     assert.equal((await fetch(`${base}/rugradar/embed?token=nope`)).status, 400); assert.equal((await fetch(`${base}/rugradar/embed.json`)).status, 400);
@@ -136,8 +136,8 @@ test("page ships the share buttons for free AND full results, free-only auto-run
     assert.ok(h.includes("el('div','tease',j.lockedTeaser||'Full report')"), "N more warnings teaser kept");
     assert.ok(/if\(!full\)\{c\.append\(shareBar\(j,ws\)\)/.test(h), "share bar still under the free result");
     assert.ok(/else if\(Array\.isArray\(j\.checks\)\)\{const fr=rrFree\(j\.checks,CFG\.lim,CFG\.warn\);c\.append\(shareBar\(\{riskScore:fr\.sc,riskLevel:fr\.lv,token:j\.token,chain:j\.chain,facts:fa\},fr\.ws\)\)\}/.test(h), "full-report branch shows the share bar, built from the free score and warnings only");
-    assert.ok(h.includes('"lim":["mint_authority","freeze_authority","mint_function","holders","liquidity","age","dead_token","sell_route","sell_impact","honeypot","tax","heavy_selling","thin_trading","liquidity_vs_mcap"]'), "page config carries the free check list");
-    assert.ok(Buffer.byteLength(h) < 66_000, `page ${Buffer.byteLength(h)} bytes`);
+    assert.ok(h.includes('"lim":["mint_authority","freeze_authority","mint_function","holders","liquidity","age","dead_token","sell_route","sell_impact","honeypot","tax","heavy_selling","thin_trading","liquidity_vs_mcap","permanent_delegate","balance_mutable","owner_change_balance","transfer_control","fake_token","transfer_fee","owner_control","only_buys","selfdestruct","airdrop_scam","cannot_buy"]'), "page config carries the free check list");
+    assert.ok(Buffer.byteLength(h) < 67_000, `page ${Buffer.byteLength(h)} bytes`);
     for (const re of PRIVATE) assert.ok(!re.test(h.replace(SWAP_RULE_JS, "")), `${re}`);
   } finally { srv.closeAllConnections(); srv.close(); }
 });

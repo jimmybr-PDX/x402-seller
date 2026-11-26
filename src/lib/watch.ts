@@ -16,8 +16,9 @@ export type Plan = keyof typeof WATCH_PLANS;
 export const planOf = (h: unknown): Plan | null => (String(h ?? "24") === "48" ? "48" : String(h ?? "24") === "24" ? "24" : null);
 const B58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
+import { SCORE_VERSION } from "./rug-score.js";
 export type Snap = { at: number; score: number; level: string; mintAuthority: boolean; freezeAuthority: boolean; liquidityUsd: number | null; canSell: string | null;
-  devSells: number | null; devSoldPct: number | null; devHoldingPct: number | null; priceUsd: number | null; partial?: boolean; young?: boolean };
+  devSells: number | null; devSoldPct: number | null; devHoldingPct: number | null; priceUsd: number | null; partial?: boolean; young?: boolean; sv?: number };
 export type Dest = { type: "webhook"; url: string } | { type: "telegram"; chatId: string };
 export type Alert = { kind: string; key: string; message: string; at: number };
 export type Watch = { id: string; token: string; chain: "solana"; plan: Plan; createdAt: number; expiresAt: number; dest: Dest; secret: string; paidWith: string; owner?: string;
@@ -31,7 +32,7 @@ export function snapOf(r: any, at = Date.now()): Snap {
   const sellable = b.canSell != null && /^yes/i.test(String(b.canSell));
   const liq = f.marketUnknown || (n(f.liquidityUsd) === 0 && sellable) ? null : n(f.liquidityUsd);
   return { at, score: Number(r?.riskScore ?? 0), level: String(r?.riskLevel ?? "?"), mintAuthority: !!f.mintAuthority, freezeAuthority: !!f.freezeAuthority, liquidityUsd: liq,
-    canSell: b.canSell == null ? null : String(b.canSell), devSells: n(b.devSells), devSoldPct: n(b.devSoldPctOfBought), devHoldingPct: n(b.devHoldingPct), priceUsd: n(f.priceUsd), ...(r?.buyer ? {} : { partial: true }), ...(r?.scoring ? { young: true } : {}) };
+    canSell: b.canSell == null ? null : String(b.canSell), devSells: n(b.devSells), devSoldPct: n(b.devSoldPctOfBought), devHoldingPct: n(b.devHoldingPct), priceUsd: n(f.priceUsd), ...(r?.buyer ? {} : { partial: true }), ...(r?.scoring ? { young: true } : {}), sv: SCORE_VERSION };
 }
 
 /** Pure trigger logic. Returns new alerts (deduped by key against w.sent) and the updated per-watch counters. */
@@ -42,7 +43,8 @@ export function evaluate(w: Pick<Watch, "base" | "peakLiq" | "noSell" | "sent"> 
   const full = !s.partial && !b.partial, rebase = !!b.partial && !s.partial;
   // New-coin scoring (under 10 min) weights some checks down; when a coin leaves it the score jumps by design, so the
   // first normal-scored check becomes the score baseline instead of counting as a worsening.
-  const rescore = !rebase && !!b.young && !s.young;
+  // Same when the scoring weights change between checks (scoring version): re-baseline instead of alerting.
+  const rescore = !rebase && ((!!b.young && !s.young) || (b.sv ?? 1) !== (s.sv ?? 1));
   const add = (kind: string, key: string, message: string) => { if (!sent.has(key)) { sent.add(key); out.push({ kind, key, message, at: s.at }); } };
   // dev sells: more dev sells than at the start, or the dev wallet's share fell by 2+ points
   const devSoldMore = (s.devSells ?? 0) > (b.devSells ?? 0) || (s.devSoldPct != null && s.devSoldPct >= (b.devSoldPct ?? 0) + 10);
@@ -156,7 +158,7 @@ export function createWatcher(d: WatchDeps) {
     try {
       const s = snapOf(await d.rugCheck(w.token), now());
       stat.checks++; w.checks++; stat.avgCheckMs = Math.round(stat.avgCheckMs * 0.9 + (now() - t0) * 0.1);
-      const e = evaluate(w, s); w.peakLiq = e.peakLiq; w.noSell = e.noSell; w.lowLiq = e.lowLiq; w.last = s; if (e.rebase) w.base = s; else if (e.rescore) w.base = { ...w.base, score: s.score, level: s.level, young: false };
+      const e = evaluate(w, s); w.peakLiq = e.peakLiq; w.noSell = e.noSell; w.lowLiq = e.lowLiq; w.last = s; if (e.rebase) w.base = s; else if (e.rescore) w.base = { ...w.base, score: s.score, level: s.level, young: !!s.young, sv: s.sv };
       if (e.alerts.length) { w.sent.push(...e.alerts.map((a) => a.key)); w.alerts.push(...e.alerts); stat.alerts += e.alerts.length; enqueue(w, payload(w, "watch.alert", { alerts: e.alerts.map(({ kind, message }) => ({ kind, message })), now: pub(s), atStart: pub(w.base) })); persistSoon("watch alert"); }
     } catch (err) { w.fails++; stat.checkFails++; stat.lastError = String((err as Error).message ?? err).slice(0, 100); }
     w.lastCheckAt = now();

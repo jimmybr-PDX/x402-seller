@@ -25,10 +25,10 @@ export function goplusSol(mint: string): Promise<GoPlusSol | null> {
 /** Danger checks from GoPlus data (warnings only). LP check only for pools that issue LP tokens (not concentrated/CLMM, not pump.fun). */
 export function goplusChecks(g: GoPlusSol): { check: string; points: number; detail: string }[] {
   const out: { check: string; points: number; detail: string }[] = [];
-  if (g.balanceMutable) out.push({ check: "balance_mutable", points: 30, detail: "An authority can change holders' balances directly (can take or burn anyone's tokens)." });
+  if (g.balanceMutable) out.push({ check: "balance_mutable", points: 60, detail: "An authority can change holders' balances directly (can take or burn anyone's tokens)." });
   if (g.closable) out.push({ check: "closable", points: 10, detail: "Mint can be closed by an authority (token can be shut down)." });
   if (g.metadataMutable) out.push({ check: "metadata_mutable", points: 3, detail: "Token name/image metadata can still be changed by its update authority." });
   const lp = g.pools.filter((p) => p.lpBurnPct != null && !/concentrated|clmm|dlmm/i.test(p.type) && !/pump/i.test(p.dex)).sort((a, b) => b.tvlUsd - a.tvlUsd)[0];
-  if (lp && lp.lpBurnPct! < 50 && lp.tvlUsd >= 1000) out.push({ check: "lp_unlocked", points: lp.lpBurnPct! < 10 ? 15 : 8, detail: `Main ${lp.dex} pool: only ${lp.lpBurnPct!.toFixed(1)}% of LP burned (rest can be pulled).` });
+  if (lp && lp.lpBurnPct! < 50 && lp.tvlUsd >= 1000) out.push({ check: "lp_unlocked", points: lp.lpBurnPct! < 10 ? 25 : 12, detail: `Main ${lp.dex} pool: only ${lp.lpBurnPct!.toFixed(1)}% of LP burned (rest can be pulled).` });
   return out;
 }

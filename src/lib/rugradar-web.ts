@@ -11,6 +11,7 @@ import type { Recent } from "./rugradar-recent.js";
 import { challenge, verifyChallenge, sessionWallet, isEvmAddr, isSolAddr, type WalletHistory } from "./wallet-history.js";
 import { shareData, primeShare, sharePng, cachedShare, shortAddr, noSafe, marketFactLine } from "./rugradar-share.js";
 import { tensionFor } from "./tension.js";
+import { totalScore, levelOf, deadTokenPoints, SOFT_CHECKS, SOFT_CAP, DEAD_FLOOR } from "./rug-score.js";
 import { swapClientJs, type SwapCfg } from "./swap.js";
 import type { Express, Request, Response } from "express";
 import { randomBytes, createHash } from "node:crypto";
@@ -41,7 +42,9 @@ const FULL_FREE_UNTIL = Date.parse(process.env.RUGRADAR_FULL_FREE_UNTIL || "2026
 export const fullFreeActive = () => Date.now() < FULL_FREE_UNTIL;
 export const FREE_COPY_PROMO = "1 free full report every day per visitor for a limited time, then a basic free check plus credits for the full report.";
 export const FREE_COPY = "1 free limited check every day per visitor, then credits for the full report.";
-const LIMITED_CHECKS = new Set(["mint_authority", "freeze_authority", "mint_function", "holders", "liquidity", "age", "dead_token", "sell_route", "sell_impact", "honeypot", "tax", "heavy_selling", "thin_trading", "liquidity_vs_mcap"]);
+// Free check: basic market/authority checks plus every hard stop and contract trap, so a can't-sell or take-your-tokens coin never shows Low.
+const LIMITED_CHECKS = new Set(["mint_authority", "freeze_authority", "mint_function", "holders", "liquidity", "age", "dead_token", "sell_route", "sell_impact", "honeypot", "tax", "heavy_selling", "thin_trading", "liquidity_vs_mcap",
+  "permanent_delegate", "balance_mutable", "owner_change_balance", "transfer_control", "fake_token", "transfer_fee", "owner_control", "only_buys", "selfdestruct", "airdrop_scam", "cannot_buy"]);
 export const LOCKED_SIGNALS = ["exact dev-sold %", "sniper share", "launch-bundle share", "can-you-sell quote with price impact", "creator's past launches", "organic/bot score", "full buyer summary"];
 export const UNLOCK_CREDITS = 10;
 /** Conversion offer shown after a free check (or when it is used up). Points only at the existing credits flow and x402 paths. */
@@ -50,26 +53,27 @@ export function unlockOffer(publicUrl: string, priceUsd: string) {
   return { credits: UNLOCK_CREDITS, priceUsd: usd, label: `Unlock full report \u2014 ${UNLOCK_CREDITS} credits for $${usd}`, buy: `${publicUrl}/credits/buy?credits=${UNLOCK_CREDITS}`, useKey: "Paste the key in the Credit key box (or send header X-RugRadar-Key) and check again.", agents: `Agents: pay $${priceUsd} per call via x402 at ${publicUrl}/rug-check, or send X-RugRadar-Key.` };
 }
 /**
- * Free web check: basic score from mint/freeze authority, top-holder concentration, age, liquidity and the dead-token
- * rule (no liquidity, no way to sell, 7d+ old -> high, as in the full report). Paid paths never call this.
+ * Free web check: basic score from mint/freeze authority, top-holder concentration, age, liquidity, sell warnings, every
+ * hard stop and contract trap, and the dead-token rule (no liquidity, no way to sell, 7d+ old -> floor 50, as in the full
+ * report). Same totals as the full report (soft-flag cap, steal-power dedupe). Paid paths never call this.
  */
 export function limitedReport(full: any) {
   const f = full?.facts ?? {};
   const all = Array.isArray(full?.checks) ? full.checks : [];
   const PUBLIC = new Set(["sell_route", "sell_impact", "honeypot", "tax"]);
   const basic = all.filter((c: any) => LIMITED_CHECKS.has(c?.check) && c?.check !== "dead_token").map((c: any) => ({ check: c.check, points: Number(c.points) || 0, detail: PUBLIC.has(c.check) && WARN[c.check] ? WARN[c.check][1] : c.detail }));
-  const sum = basic.reduce((a: number, c: any) => a + c.points, 0);
+  const sum = totalScore(basic);
   const dead = all.find((c: any) => c?.check === "dead_token");
-  const scored = dead ? [{ check: "dead_token", points: Math.max(5, 60 - sum), detail: dead.detail }, ...basic] : basic;
-  const score = Math.min(100, scored.reduce((a: number, c: any) => a + c.points, 0));
+  const scored = dead ? [{ check: "dead_token", points: deadTokenPoints(sum), detail: dead.detail }, ...basic] : basic;
+  const score = totalScore(scored);
   // Shown on the free result but not counted in the basic score: a creator's earlier honeypot tokens (EVM chains).
   const showOnly = full?.chain !== "solana" ? all.filter((c: any) => c?.check === "deployer_history" && Number(c.points) > 0).map((c: any) => ({ check: c.check, points: Number(c.points) || 0, detail: "Creator deployed earlier honeypot tokens.", shownOnly: true })) : [];
   const checks = [...scored, ...showOnly];
-  const level = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
+  const level = levelOf(score);
   const pick = (k: string) => (f[k] === undefined ? null : f[k]);
   const links = full?.buyer?.socialLinks;
   return {
-    product: "RugRadar", report: "limited", chain: full?.chain ?? null, token: full?.token ?? null, riskScore: score, riskLevel: level, scoring: "basic score (mint/freeze authority, top holders, age, liquidity, dead token, sell warnings)",
+    product: "RugRadar", report: "limited", chain: full?.chain ?? null, token: full?.token ?? null, riskScore: score, riskLevel: level, scoring: "basic score (mint/freeze authority, top holders, age, liquidity, dead token, sell warnings, contract traps)",
     verdict: level === "high" ? "Multiple high-risk patterns found." : level === "medium" ? "Some high-risk patterns found." : "No major high-risk patterns found in the basic checks.",
     reasons: checks.filter((c: any) => c.points > 0).map((c: any) => c.detail), checks,
     moreWarnings: Math.max(0, warningsOf(checks).length - 3) + all.filter((c: any) => c && !LIMITED_CHECKS.has(c.check) && !(c.check === "deployer_history" && full?.chain !== "solana") && Number(c.points) > 0 && WARN[c.check]).length,
@@ -100,6 +104,8 @@ const FREE_DAILY_CAP = Number(process.env.RUGRADAR_FREE_DAILY_CAP ?? 500);
  * Plain danger-warning copy per check: [one-line title, one short line]. Titles say what the danger is, never how it
  * was found. Only checks listed here are ever shown; others (e.g. creator history) still count in the score but never appear.
  */
+/** Banner/card title when a confirmed honeypot fires (score 100, full-red ring). Warning wording only. */
+export const HONEYPOT_BANNER = "Cannot sell \u2014 honeypot detected";
 export const WARN: Record<string, [string, string]> = {
   dead_token: ["Dead token: no way to sell", "No liquidity left and no sell route."],
   mint_authority: ["Creator can mint more", "More tokens can appear anytime, diluting holders."],
@@ -110,7 +116,7 @@ export const WARN: Record<string, [string, string]> = {
   age: ["Very new token", "Many rugs happen in the first days."],
   sell_route: ["You may not be able to sell", "No way to sell this token was found."],
   sell_impact: ["Selling moves the price a lot", "A ~$100 sale moves the price over 20%."],
-  honeypot: ["Holders can't sell (honeypot)", "Selling looks blocked for holders."],
+  honeypot: [HONEYPOT_BANNER, "Selling looks blocked for holders."],
   tax: ["High buy/sell tax", "A big cut is taken on each trade."],
   owner_control: ["Owner can pause or blacklist", "The owner can block or change trading."],
   unverified: ["Contract code not verified", "Nobody can read what the contract does."],
@@ -138,6 +144,19 @@ export const WARN: Record<string, [string, string]> = {
   no_socials: ["No website or socials", "The creator listed no links."],
   heavy_selling: ["Heavy selling", "Far more sells than buys in 24 hours."],
   thin_trading: ["Thin trading", "24-hour volume is thin relative to the token's size."],
+  owner_change_balance: ["Owner can change balances", "The owner can take or burn your tokens."],
+  fake_token: ["Fake copy of a known token", "Looks like an impostor of a real token."],
+  only_buys: ["Only buys, no sells", "No sells in 24 h; selling may be blocked."],
+  personal_tax: ["Owner can tax single wallets", "Chosen wallets can get a huge tax."],
+  selfdestruct: ["Contract can self-destruct", "The contract can be destroyed."],
+  airdrop_scam: ["Airdrop scam token", "Flagged as an airdrop scam."],
+  cannot_buy: ["Buying is blocked", "Regular wallets can't buy."],
+  whitelist: ["Only whitelisted wallets trade", "Others may be unable to sell."],
+  anti_whale: ["Trade limits can change", "Max trade size can be cut."],
+  lp_short_lock: ["Liquidity lock ends soon", "Most locked liquidity unlocks in 30 days."],
+  external_call: ["Contract calls outside code", "Outside code can change its behavior."],
+  trading_cooldown: ["Trading cooldown", "Wallets must wait between trades."],
+  jupiter_sus: ["Flagged as suspicious", "A major token list flags it."],
 };
 /** Short noun phrases for the result headline ("Thin liquidity, heavy selling, and ..."). Falls back to the card title. */
 export const HEAD: Record<string, string> = {
@@ -304,11 +323,12 @@ footer{color:var(--mut);font-size:12px;padding:8px 0 40px}
 
 
 /** Pure share-text helpers (also unit-tested). Only the free score, label, warning titles and address ever go in. */
-export const SHARE_JS = CLEAN_JS + String.raw`function rrLink(o,a,c){c=c||(/^0x/i.test(a)?'base':'solana');return o+'/rugradar/c/'+encodeURIComponent(c)+'/'+encodeURIComponent(a)}
+export const SHARE_JS = CLEAN_JS + `const RR_SOFT=${JSON.stringify(SOFT_CHECKS)},RR_SOFT_CAP=${SOFT_CAP},RR_DEAD=${DEAD_FLOOR};\n` + String.raw`function rrLink(o,a,c){c=c||(/^0x/i.test(a)?'base':'solana');return o+'/rugradar/c/'+encodeURIComponent(c)+'/'+encodeURIComponent(a)}
 function rrNm(n){n=String(n||'');const d=n.charAt(0)==='$',x=rrClean(n,33);return d&&x&&!/\s/.test(x)?'$'+x:x}
 function rrShareText(sc,lb,ws,a,c,o,p,n){n=rrNm(n);const L=rrLink(o,a,c),h='Checked '+(n||'this token')+' on RugRadar \u2014 '+sc+' '+lb+'.',t=' Full report $'+p+'. '+L,room=270-h.length-t.length-2;let w=ws.slice(0,2).join(' + ');if(w.length>room)w=ws[0]||'';if(w.length>room)w=room>9?w.slice(0,room-1).trim()+'\u2026':'';return h+(w?' '+w+'.':'')+t}
 function rrReportText(sc,lb,ws,a,c,o,n){n=rrNm(n);return 'RugRadar \u2014 '+(n?n+' \u2014 ':'')+sc+' '+lb+'\n'+ws.slice(0,3).map(x=>'\u2022 '+x).join('\n')+(ws.length?'\n':'')+a+'\n'+rrLink(o,a,c)}
-function rrFree(ch,L,W){ch=Array.isArray(ch)?ch:[];const b=ch.filter(c=>c&&L.indexOf(c.check)>=0&&c.check!=='dead_token').map(c=>({check:c.check,points:Number(c.points)||0})),sm=b.reduce((a,c)=>a+c.points,0),d=ch.find(c=>c&&c.check==='dead_token'),xs=d?[{check:'dead_token',points:Math.max(5,60-sm)}].concat(b):b,sc=Math.min(100,xs.reduce((a,c)=>a+c.points,0)),seen={},ws=[];
+function rrTot(x){let m=0,o=0,t=0;x.forEach(c=>{const p=+c.points||0,k=c.check;if(p<=0||c.shownOnly)return;if(k=='permanent_delegate'||k=='balance_mutable')t=Math.max(t,p);else if(RR_SOFT.includes(k))o+=p;else m+=p});return Math.min(100,Math.round(m+t+Math.min(RR_SOFT_CAP,o)))}
+function rrFree(ch,L,W){ch=Array.isArray(ch)?ch:[];const b=ch.filter(c=>c&&L.indexOf(c.check)>=0&&c.check!=='dead_token').map(c=>({check:c.check,points:Number(c.points)||0})),sm=rrTot(b),d=ch.find(c=>c&&c.check==='dead_token'),xs=d?[{check:'dead_token',points:Math.max(5,RR_DEAD-sm)}].concat(b):b,sc=rrTot(xs),seen={},ws=[];
 xs.filter(c=>c.points>0&&W[c.check]).sort((a,c)=>c.points-a.points).forEach(c=>{const w=W[c.check];if(seen[w[0]])return;seen[w[0]]=1;ws.push({d:c.points>=15,t:w[0],l:w[1]})});return {sc:sc,lv:sc>=50?'high':sc>=25?'medium':'low',ws:ws}}
 `;
 
@@ -385,8 +405,8 @@ function socials(j){const raw=Array.isArray(j.socialLinks)?j.socialLinks:(j.buye
 function gauge(lv,score){const g=el('div','gauge g-'+lv);g.style.setProperty('--p',Math.max(4,Math.min(100,score)));const i=el('i',null,String(score));i.append(el('small',null,'/100'));g.append(i);return g}
 const VT={high:['HIGH RISK','Strong rug warning signs.'],medium:['CAUTION','Some rug warning signs.'],low:['NO WARNINGS','No danger warnings found.']};
 function shownLevel(j,ws){const l=VT[j.riskLevel]?j.riskLevel:'medium';if(l!=='low'||!ws.length)return l;return ws.some(w=>w.d)?'high':'medium'}
-function verdictBox(j,ws){const lv=shownLevel(j,ws),s=Number(j.riskScore)||0,v=el('div','verdict v-'+lv),t=el('div','vtx');
- if(!ws.length){t.append(el('div','vt low','No danger warnings found.'),el('div','vl','Open details for market and contract figures.'))}
+function verdictBox(j,ws){const hp=(j.checks||[]).some(c=>c&&c.check=='honeypot'&&c.points>=100),lv=hp?'high':shownLevel(j,ws),s=hp?100:(Number(j.riskScore)||0),v=el('div','verdict v-'+lv),t=el('div','vtx');
+ if(hp)t.append(el('div','vt high',CFG.warn.honeypot[0])); else if(!ws.length){t.append(el('div','vt low','No danger warnings found.'),el('div','vl','Open details for market and contract figures.'))}
  else{t.append(el('div','vt '+lv,headline(ws)));if(j.tensionLine)t.append(el('div','vtl',j.tensionLine));else t.append(el('div','vl','Top danger warnings. More figures are in details.'))}
  v.append(gauge(lv,s),t);return v}
 function lockedPanel(note,cta,sec){const b=el('div','lock');b.id='unlock';if(note!=='')b.append(el('span',null,'\u{1F512} '+(note||'Full report: live chart, dev and sniper wallets, biggest buys and sells, sell test.')));const a=el('button','btn pri',cta||CFG.cta);a.type='button';a.addEventListener('click',()=>openBuy(true));b.append(a);if(sec){const s=el('button','linkbtn credsec',sec);s.type='button';s.addEventListener('click',()=>openBuy(true));b.append(s)}return b}

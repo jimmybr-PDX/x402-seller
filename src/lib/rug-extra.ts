@@ -139,9 +139,9 @@ export async function solanaExtra(mint: string, o: { jup: any; jupFailed?: boole
   s.sellableOnPumpCurve = curve ? curve.active : null;
   s.canSell = quote?.outAmount ? "yes (Jupiter route)" : curve?.active ? "yes (pump.fun curve)" : curve == null && !quote ? "unknown" : "no route found";
   if (!quote?.outAmount && curve?.active) { s.sellRoute = "pump.fun curve only"; }
-  else if (!quote?.outAmount && isPump && curve && !curve.active && /ROUTE|NOT_TRADABLE/i.test(String(quote?.errorCode ?? quote?.error ?? ""))) { s.sellRoute = false; add("sell_route", 30, "No way to sell this token was found."); }
+  else if (!quote?.outAmount && isPump && curve && !curve.active && /ROUTE|NOT_TRADABLE/i.test(String(quote?.errorCode ?? quote?.error ?? ""))) { s.sellRoute = false; add("sell_route", 60, "No way to sell this token was found."); }
   else if (quote?.outAmount) { s.sellRoute = true; s.sellPriceImpactPct = r2(Number(quote.priceImpactPct) * 100, 2); s.sellTestUsd = price > 0 ? 100 : null; s.sellVia = [...new Set((quote.routePlan ?? []).map((x: any) => x.swapInfo?.label).filter(Boolean))].slice(0, 3); }
-  else if (/ROUTE|NOT_TRADABLE/i.test(String(quote?.errorCode ?? quote?.error ?? "")) && (liquidityUsd ?? 0) > 1000) { s.sellRoute = false; add("sell_route", 30, "No way to sell this token was found."); }
+  else if (/ROUTE|NOT_TRADABLE/i.test(String(quote?.errorCode ?? quote?.error ?? "")) && (liquidityUsd ?? 0) > 1000) { s.sellRoute = false; add("sell_route", 60, "No way to sell this token was found."); }
   else unknown.push("sell route");
   if (Number(s.sellPriceImpactPct) > 20) add("sell_impact", 10, "A ~$100 sale moves the price over 20%.");
   // Token-2022 extensions that let the issuer take or block funds
@@ -150,16 +150,18 @@ export async function solanaExtra(mint: string, o: { jup: any; jupFailed?: boole
   s.token2022Extensions = [...ext.keys()]; s.transferFeePct = feeBps / 100;
   s.permanentDelegate = ext.get("permanentDelegate")?.delegate ?? null; s.transferHook = ext.get("transferHook")?.programId ?? null;
   s.defaultFrozen = ext.get("defaultAccountState")?.accountState === "frozen"; s.pausable = ext.has("pausableConfig"); s.nonTransferable = ext.has("nonTransferable");
-  if (s.permanentDelegate) add("permanent_delegate", 30, "Permanent delegate set: an outside wallet can move or burn anyone's tokens.");
-  if (feeBps >= 1000) add("transfer_fee", 15, `Transfer fee of ${feeBps / 100}% on every transfer.`); else if (feeBps > 0) add("transfer_fee", 3, `Transfer fee of ${feeBps / 100}%.`);
-  if (s.transferHook) add("transfer_hook", 10, "Transfer hook program can run custom code on every transfer (can block sells).");
-  if (s.defaultFrozen || s.pausable || s.nonTransferable) add("transfer_control", 20, "Token can start frozen, be paused, or is non-transferable.");
+  if (s.permanentDelegate) add("permanent_delegate", 60, "Permanent delegate set: an outside wallet can move or burn anyone's tokens.");
+  if (feeBps >= 5000) add("transfer_fee", 80, `Transfer fee of ${feeBps / 100}% on every transfer: most of each transfer is taken (works like a honeypot).`);
+  else if (feeBps >= 1000) add("transfer_fee", 25, `Transfer fee of ${feeBps / 100}% on every transfer.`); else if (feeBps > 0) add("transfer_fee", 5, `Transfer fee of ${feeBps / 100}%.`);
+  if (s.transferHook) add("transfer_hook", 15, "Transfer hook program can run custom code on every transfer (can block sells).");
+  if (s.defaultFrozen || s.pausable || s.nonTransferable) add("transfer_control", 50, "Token can start frozen, be paused, or is non-transferable.");
   const meta = ext.get("tokenMetadata"); if (meta) s.metadataMutable = !!(meta.updateAuthority && meta.updateAuthority !== "11111111111111111111111111111111");
   // Dev wallet, insiders, organic trading, market (Jupiter)
   const a = jup?.audit ?? {};
   s.devHoldingPct = r2(a.devBalancePercentage); s.devLaunches = a.devMints ?? null; s.devGraduated = a.devMigrations ?? null;
   s.botHoldersPct = r2(a.botHoldersPercentage); s.isSus = a.isSus ?? null;
-  if (s.devHoldingPct != null && Number(s.devHoldingPct) >= 20) add("dev_holding", 15, `Dev wallet still holds ${s.devHoldingPct}% of supply.`);
+  if (a.isSus === true) add("jupiter_sus", 20, "A major token list flags this token as suspicious.");
+  if (s.devHoldingPct != null && Number(s.devHoldingPct) >= 20) add("dev_holding", 25, `Dev wallet still holds ${s.devHoldingPct}% of supply.`);
   s.organicScore = r2(jup?.organicScore, 1); s.organicLabel = jup?.organicScoreLabel ?? null; s.jupiterVerified = jup?.isVerified ?? null;
   const st = jup?.stats24h ?? {}, h1 = jup?.stats1h ?? {};
   Object.assign(s, { marketCapUsd: r2(jup?.mcap, 0), fdvUsd: r2(jup?.fdv, 0), liquidityToMcapPct: jup?.mcap > 0 && liquidityUsd != null ? r2((liquidityUsd / jup.mcap) * 100, 2) : null,
@@ -167,8 +169,8 @@ export async function solanaExtra(mint: string, o: { jup: any; jupFailed?: boole
     priceChange1hPct: r2(h1.priceChange), priceChange24hPct: r2(st.priceChange), holderChange24hPct: r2(st.holderChange), liquidityChange24hPct: r2(st.liquidityChange) });
   if (jup?.stats24h == null) unknown.push("24h trading stats");
   if (s.liquidityToMcapPct != null && Number(s.liquidityToMcapPct) < 2 && Number(s.marketCapUsd) > 50_000 && Number(s.marketCapUsd) < 50_000_000) add("liquidity_vs_mcap", 8, `Liquidity is only ${s.liquidityToMcapPct}% of market cap: price can collapse on modest selling.`);
-  if (Number(st.liquidityChange) <= -50) add("liquidity_drop", 15, `Liquidity fell ${Math.abs(Number(st.liquidityChange)).toFixed(0)}% in 24h (liquidity-pull high-risk pattern).`);
-  if (s.organicLabel === "low" && Number(s.volume24hUsd) > 10_000) add("inorganic_volume", 5, "Jupiter rates trading as low-organic (bot-like volume).");
+  if (Number(st.liquidityChange) <= -50) add("liquidity_drop", 25, `Liquidity fell ${Math.abs(Number(st.liquidityChange)).toFixed(0)}% in 24h (liquidity-pull high-risk pattern).`);
+  if (s.organicLabel === "low" && Number(s.volume24hUsd) > 10_000) add("inorganic_volume", 3, "Jupiter rates trading as low-organic (bot-like volume).");
   // Socials (Jupiter + DexScreener info)
   // If Jupiter has no links and DexScreener had no info, ask GeckoTerminal. Never call a coin link-less just because sources were down.
   let dsInfo = dsPairs.find((p) => p.info)?.info ?? null;
@@ -183,7 +185,7 @@ export async function solanaExtra(mint: string, o: { jup: any; jupFailed?: boole
   const socialsKnown = links.length > 0 || socials.size > 0 || (o.jupFailed !== true && jup != null) || mkt.dsAnswered === true || gtAnswered;
   s.socialLinks = socialsKnown ? links : null;
   if (!socialsKnown) unknown.push("socials (link sources not available)");
-  else if (!socials.size) add("no_socials", 5, "No website or social links listed.");
+  else if (!socials.size) add("no_socials", 3, "No website or social links listed.");
   // LP status: pump.fun bonding curve has no LP to pull; PumpSwap graduation burns LP by protocol design.
   const dexes = [...new Set(dsPairs.map((p) => p.dexId))];
   s.lpStatus = dexes.includes("pumpfun") && !dexes.includes("pumpswap") ? "pump.fun bonding curve (no LP tokens to pull)" : dexes.includes("pumpswap") ? "PumpSwap pool (pump.fun burns graduation LP by design)" : dexes.length ? "not verified" : null;
@@ -199,17 +201,17 @@ export async function solanaExtra(mint: string, o: { jup: any; jupFailed?: boole
   if (pump) {
     Object.assign(s, { devSoldPctOfBought: pump.devSoldPctOfBought, devSells: pump.devSells, sniperSupplyPct10s: pump.sniperSupplyPct10s ?? null, sniperWallets10s: pump.sniperWallets10s ?? null,
       bundledSupplyPctLaunchSlot: pump.bundledSupplyPctLaunchSlot ?? null, bundledWalletsLaunchSlot: pump.bundledWalletsLaunchSlot ?? null });
-    if (Number(pump.devSoldPctOfBought) >= 90 && Number(pump.devSells) > 0) add("dev_sold", 10, `Dev sold ${pump.devSoldPctOfBought}% of what they bought.`);
-    if (Number(pump.sniperSupplyPct10s) >= 25) add("snipers", 10, `Snipers bought ${pump.sniperSupplyPct10s}% of supply in the first 10 seconds.`);
-    if (Number(pump.bundledSupplyPctLaunchSlot) >= 15) add("bundled", 12, `${pump.bundledWalletsLaunchSlot} wallets bought ${pump.bundledSupplyPctLaunchSlot}% in the launch block (bundle high-risk pattern).`);
+    if (Number(pump.devSoldPctOfBought) >= 90 && Number(pump.devSells) > 0) add("dev_sold", 20, `Dev sold ${pump.devSoldPctOfBought}% of what they bought.`);
+    if (Number(pump.sniperSupplyPct10s) >= 25) add("snipers", 12, `Snipers bought ${pump.sniperSupplyPct10s}% of supply in the first 10 seconds.`);
+    if (Number(pump.bundledSupplyPctLaunchSlot) >= 15) add("bundled", 15, `${pump.bundledWalletsLaunchSlot} wallets bought ${pump.bundledSupplyPctLaunchSlot}% in the launch block (bundle high-risk pattern).`);
     if (!pump.historyComplete) unknown.push("sniper/bundle share (too many trades to reach launch)");
     Object.assign(s, { firstMinute: pump.firstMinute ?? null, creatorFirstSellAfterSec: pump.creatorFirstSellAfterSec ?? null, sniperStillHoldPct: pump.sniperStillHoldPct ?? null, knownSnipersEarly: pump.knownSnipersEarly ?? null });
     const fm: any = pump.firstMinute;
-    if (pump.creatorFirstSellAfterSec != null && Number(pump.creatorFirstSellAfterSec) <= 60) add("creator_fast_sell", 12, `Creator started selling ${pump.creatorFirstSellAfterSec} seconds after launch.`);
+    if (pump.creatorFirstSellAfterSec != null && Number(pump.creatorFirstSellAfterSec) <= 60) add("creator_fast_sell", 15, `Creator started selling ${pump.creatorFirstSellAfterSec} seconds after launch.`);
     if (fm && fm.sellSol > fm.buySol && fm.trades >= 5) add("first_minute_selling", 6, `More selling than buying in the first minute (${fm.sellSol} vs ${fm.buySol} SOL).`);
-    if (fm && fm.buyers < 5 && fm.trades > 0) add("first_minute_thin", 4, `Only ${fm.buyers} buyers in the first minute.`);
-    if (Number(pump.sniperStillHoldPct) >= 20) add("snipers_holding", 8, `Early snipers still hold ${pump.sniperStillHoldPct}% of supply (likely to sell into buyers).`);
-    if (Number(pump.knownSnipersEarly) >= 3) add("known_snipers", 5, `${pump.knownSnipersEarly} repeat sniper wallets bought in the first minute.`);
+    if (fm && fm.buyers < 5 && fm.trades > 0) add("first_minute_thin", 3, `Only ${fm.buyers} buyers in the first minute.`);
+    if (Number(pump.sniperStillHoldPct) >= 20) add("snipers_holding", 10, `Early snipers still hold ${pump.sniperStillHoldPct}% of supply (likely to sell into buyers).`);
+    if (Number(pump.knownSnipersEarly) >= 3) add("known_snipers", 3, `${pump.knownSnipersEarly} repeat sniper wallets bought in the first minute.`);
   } else if (isPump) unknown.push("pump.fun trade history"); else s.launchAnalysis = "not a pump.fun launch";
   return { signals: s, checks, unknown, ms: Date.now() - t0 };
 }

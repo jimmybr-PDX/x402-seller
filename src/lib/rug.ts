@@ -6,6 +6,7 @@ import { applyEvmSellWarnings, evmDecimals, evmSellAmount, evmSellQuote } from "
  */
 import fs from "node:fs";
 import { tensionFor } from "./tension.js";
+import { totalScore, levelOf, dedupeSteal, deadTokenPoints } from "./rug-score.js";
 import { jupFetch } from "./jup-gate.js";
 import { pickTokenMeta, type TokenMeta } from "./token-name.js";
 import path from "node:path";
@@ -46,35 +47,35 @@ export type Reason = { check: string; points: number; detail: string };
 export function scoreFacts(f: Facts): { score: number; level: "low" | "medium" | "high"; reasons: Reason[]; confidence: "high" | "medium" | "low"; unknownSignals: string[] } {
   const r: Reason[] = [];
   const add = (check: string, points: number, detail: string) => r.push({ check, points, detail });
-  if (f.mintAuthority) add("mint_authority", 25, "Mint authority is still active: more tokens can be created at any time (high-risk pattern).");
+  if (f.mintAuthority) add("mint_authority", 40, "Mint authority is still active: more tokens can be created at any time (high-risk pattern).");
   else add("mint_authority", 0, "Mint authority is revoked: supply is fixed.");
-  if (f.freezeAuthority) add("freeze_authority", 20, "Freeze authority is still active: holders' tokens can be frozen, a common honeypot pattern.");
+  if (f.freezeAuthority) add("freeze_authority", 35, "Freeze authority is still active: holders' tokens can be frozen, a common honeypot pattern.");
   else add("freeze_authority", 0, "Freeze authority is revoked.");
   if (f.top10Pct == null) add("holders", 0, "Top-holder concentration unknown (free sources did not answer); scored neutral.");
-  else if (f.top1Pct! > 30 || f.top10Pct > 70) add("holders", 20, `Top holders own ${f.top10Pct.toFixed(1)}%${f.top1Pct! > 30 ? ` (largest ~${f.top1Pct!.toFixed(1)}%)` : ""} (may include pool/curve accounts): heavy concentration.`);
-  else if (f.top10Pct > 40) add("holders", 10, `Top holders own ${f.top10Pct.toFixed(1)}% (may include pool/curve accounts).`);
+  else if (f.top1Pct! > 30 || f.top10Pct > 70) add("holders", 25, `Top holders own ${f.top10Pct.toFixed(1)}%${f.top1Pct! > 30 ? ` (largest ~${f.top1Pct!.toFixed(1)}%)` : ""} (may include pool/curve accounts): heavy concentration.`);
+  else if (f.top10Pct > 40) add("holders", 12, `Top holders own ${f.top10Pct.toFixed(1)}% (may include pool/curve accounts).`);
   else add("holders", 0, `Top holders own ${f.top10Pct.toFixed(1)}%: spread out.`);
   if (f.marketUnknown) add("liquidity", 0, "Liquidity unknown (market data source did not answer); scored neutral.");
-  else if (f.liquidityUsd == null) add("liquidity", 15, "No DEX pool found: cannot sell easily (or not launched yet).");
-  else if (f.liquidityUsd < 5000) add("liquidity", 15, `Very thin liquidity ($${Math.round(f.liquidityUsd)}).`);
-  else if (f.liquidityUsd < 50000) add("liquidity", 7, `Modest liquidity ($${Math.round(f.liquidityUsd)}).`);
+  else if (f.liquidityUsd == null) add("liquidity", 20, "No DEX pool found: cannot sell easily (or not launched yet).");
+  else if (f.liquidityUsd < 5000) add("liquidity", 20, `Very thin liquidity ($${Math.round(f.liquidityUsd)}).`);
+  else if (f.liquidityUsd < 50000) add("liquidity", 10, `Modest liquidity ($${Math.round(f.liquidityUsd)}).`);
   else add("liquidity", 0, `Liquidity $${Math.round(f.liquidityUsd).toLocaleString("en-US")} across ${f.pairs} pool(s).`);
   if (f.ageHours == null) add("age", 0, "Token age unknown; scored neutral.");
-  else if (f.ageHours < 24) add("age", 10, `Very new: ${f.ageHours.toFixed(1)} hours old.`);
-  else if (f.ageHours < 24 * 7) add("age", 5, `New: ${(f.ageHours / 24).toFixed(1)} days old.`);
+  else if (f.ageHours < 24) add("age", 8, `Very new: ${f.ageHours.toFixed(1)} hours old.`);
+  else if (f.ageHours < 24 * 7) add("age", 4, `New: ${(f.ageHours / 24).toFixed(1)} days old.`);
   else add("age", 0, `${Math.round(f.ageHours / 24)} days old.`);
   if (f.priorLaunches != null && f.priorLaunches > 0) {
     const share = (f.priorDead ?? 0) / f.priorLaunches;
-    if ((f.priorDead ?? 0) >= 3 && share >= 0.5) add("deployer_history", 20, `Creator wallet launched ${f.priorLaunches} other token(s); ${f.priorDead} never graduated or have no liquidity left (serial-launch high-risk pattern).`);
-    else if ((f.priorDead ?? 0) >= 1) add("deployer_history", 8, `Creator wallet launched ${f.priorLaunches} other token(s); ${f.priorDead} never graduated or have no liquidity left.`);
+    if ((f.priorDead ?? 0) >= 3 && share >= 0.5) add("deployer_history", 25, `Creator wallet launched ${f.priorLaunches} other token(s); ${f.priorDead} never graduated or have no liquidity left (serial-launch high-risk pattern).`);
+    else if ((f.priorDead ?? 0) >= 1) add("deployer_history", 12, `Creator wallet launched ${f.priorLaunches} other token(s); ${f.priorDead} never graduated or have no liquidity left.`);
     else add("deployer_history", 0, `Creator wallet launched ${f.priorLaunches} other token(s), all still with liquidity.`);
   } else if (f.creator) add("deployer_history", 0, "No other recent launches found from the creator wallet.");
-  if (f.creatorFlagged) add("known_pattern", 25, "Creator wallet is on our list of deployers behind earlier high-risk patterns.");
-  if (f.funderFlagged) add("shared_funder", 20, "Creator was funded by a wallet on our list of deployers behind earlier high-risk patterns.");
-  const score = Math.min(100, r.reduce((a, x) => a + x.points, 0));
+  if (f.creatorFlagged) add("known_pattern", 35, "Creator wallet is on our list of deployers behind earlier high-risk patterns.");
+  if (f.funderFlagged) add("shared_funder", 30, "Creator was funded by a wallet on our list of deployers behind earlier high-risk patterns.");
+  const score = totalScore(r);
   const unknownSignals = [f.top10Pct == null && "holders", f.marketUnknown && "liquidity", f.ageHours == null && "age", !f.creator && "deployer_history"].filter(Boolean) as string[];
   const confidence: "high" | "medium" | "low" = unknownSignals.length === 0 ? "high" : unknownSignals.length <= 2 ? "medium" : "low";
-  return { score, level: score >= 50 ? "high" : score >= 25 ? "medium" : "low", reasons: r.sort((a, b) => b.points - a.points), confidence, unknownSignals };
+  return { score, level: levelOf(score), reasons: r.sort((a, b) => b.points - a.points), confidence, unknownSignals };
 }
 
 // ---------- stable-fact cache (mint account, Jupiter token data, funder): 20 min; failures are never cached ----------
@@ -344,37 +345,101 @@ export function validationSummary() {
   } catch { return { lowRiskChecked: 0, liquidityCollapsedWithin10m: 0 }; }
 }
 
+const ZERO_OR_DEAD = /^0x0{40}$|^0x0+dead$|^0x000000000000000000000000000000000000dead$/i;
+/** GoPlus lock end time: unix seconds, unix ms, numeric string or ISO date. null when unreadable. */
+export function lockEndMs(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  if (Number.isFinite(n) && n > 0) return n > 1e12 ? n : n * 1000;
+  const t = Date.parse(String(v));
+  return Number.isFinite(t) ? t : null;
+}
+/** Share of locked (non-burn) LP that unlocks within `days` (0..1), plus that locked share of all LP (0..100). */
+export function lpShortLock(lpHolders: any[] | null | undefined, now = Date.now(), days = 30): { lockedPct: number; shortShare: number } | null {
+  const hs = (Array.isArray(lpHolders) ? lpHolders : []).filter((h) => h && h.is_locked === 1 && !ZERO_OR_DEAD.test(String(h.address ?? "")));
+  let locked = 0, short = 0, any = false;
+  for (const h of hs) {
+    const pct = Number(h.percent || 0); if (!(pct > 0)) continue;
+    const det = (Array.isArray(h.locked_detail) ? h.locked_detail : []).map((d: any) => ({ amt: Number(d?.amount) || 0, end: lockEndMs(d?.end_time) })).filter((d: any) => d.end != null);
+    locked += pct;
+    if (!det.length) continue;
+    any = true;
+    const tot = det.reduce((a: number, d: any) => a + (d.amt > 0 ? d.amt : 0), 0);
+    const soon = det.filter((d: any) => d.end! <= now + days * 864e5);
+    const frac = tot > 0 ? soon.reduce((a: number, d: any) => a + (d.amt > 0 ? d.amt : 0), 0) / tot : soon.length / det.length;
+    short += pct * frac;
+  }
+  if (!any || locked <= 0) return null;
+  return { lockedPct: locked * 100, shortShare: short / locked };
+}
 // ---------- Base (EVM) via keyless GoPlus token security + DexScreener ----------
 export function scoreEvm(g: any, liquidityUsd: number | null, ageHours: number | null, marketUnknown = false): { score: number; level: "low" | "medium" | "high"; reasons: Reason[] } {
   const r: Reason[] = []; const on = (k: string) => g?.[k] === "1";
   const add = (check: string, points: number, detail: string) => r.push({ check, points, detail });
-  if (on("is_honeypot") || on("cannot_sell_all")) add("honeypot", 40, "Selling looks blocked for holders.");
-  const tax = Math.max(Number(g?.buy_tax || 0), Number(g?.sell_tax || 0));
-  if (tax >= 0.1) add("tax", 15, `Buy/sell tax up to ${(tax * 100).toFixed(0)}%.`);
-  if (on("is_mintable")) add("mint_function", 20, "Owner can mint more tokens.");
-  if (on("hidden_owner") || on("can_take_back_ownership")) add("owner_control", 15, "Hidden owner or ownership can be taken back.");
-  if (on("transfer_pausable") || on("is_blacklisted") || on("slippage_modifiable")) add("owner_control", 15, "Owner can pause transfers, blacklist wallets or change tax.");
-  if (g?.is_open_source === "0") add("unverified", 10, "Contract source is not verified.");
-  if (on("is_proxy")) add("proxy", 5, "Upgradeable proxy: code can change.");
-  if (Number(g?.honeypot_with_same_creator || 0) > 0) add("deployer_history", 25, `Creator deployed ${g.honeypot_with_same_creator} earlier honeypot token(s).`);
+  // Hard stops
+  if (on("is_honeypot") || on("cannot_sell_all")) add("honeypot", 100, "Cannot sell: selling looks blocked for holders (honeypot detected).");
+  const buyTax = Number(g?.buy_tax || 0) || 0, sellTax = Number(g?.sell_tax || 0) || 0, tax = Math.max(buyTax, sellTax);
+  if (tax >= 0.5) add("tax", 80, `${sellTax >= buyTax ? "Sell" : "Buy"} tax of ${(tax * 100).toFixed(0)}%: most of each trade is taken (works like a honeypot).`);
+  else if (tax >= 0.1) add("tax", 25, `Buy/sell tax up to ${(tax * 100).toFixed(0)}%.`);
+  if (on("owner_change_balance")) add("owner_change_balance", 60, "Owner can change holders' balances directly (can take or burn anyone's tokens).");
+  if (g?.is_true_token === "0") add("fake_token", 50, "Flagged as a fake copy of a known token.");
+  // High danger
+  if (on("is_mintable")) add("mint_function", 40, "Owner can mint more tokens.");
+  if (on("personal_slippage_modifiable")) add("personal_tax", 40, "Owner can set a custom tax for specific wallets.");
+  if (on("selfdestruct")) add("selfdestruct", 40, "Contract can self-destruct.");
+  if (on("is_airdrop_scam")) add("airdrop_scam", 40, "Flagged as an airdrop scam token.");
+  if (Number(g?.honeypot_with_same_creator || 0) > 0) add("deployer_history", 35, `Creator deployed ${g.honeypot_with_same_creator} earlier honeypot token(s).`);
+  if (on("hidden_owner") || on("can_take_back_ownership")) add("owner_control", 30, "Hidden owner or ownership can be taken back.");
+  if (on("transfer_pausable") || on("is_blacklisted") || on("slippage_modifiable")) add("owner_control", 30, "Owner can pause transfers, blacklist wallets or change tax.");
+  if (on("cannot_buy")) add("cannot_buy", 30, "Buying is blocked for regular wallets.");
+  const holdOf = (pct: unknown, addr: unknown) => (addr && ZERO_OR_DEAD.test(String(addr)) ? 0 : Number(pct || 0) || 0);
+  const devPct = Math.max(holdOf(g?.creator_percent, g?.creator_address), holdOf(g?.owner_percent, g?.owner_address)) * 100;
+  if (devPct >= 20) add("dev_holding", 25, `Creator or owner wallet holds ${devPct.toFixed(1)}% of supply.`);
+  if (on("is_whitelisted")) add("whitelist", 25, "Only whitelisted wallets may be able to trade.");
   const top10 = (g?.holders ?? []).filter((h: any) => h.is_contract !== 1 && h.is_locked !== 1).slice(0, 10).reduce((a: number, h: any) => a + Number(h.percent || 0), 0) * 100;
-  if (top10 > 50) add("holders", 15, `Top non-contract holders own ${top10.toFixed(1)}%.`);
+  if (top10 > 50) add("holders", 20, `Top non-contract holders own ${top10.toFixed(1)}%.`);
   const lpLocked = (g?.lp_holders ?? []).reduce((a: number, h: any) => a + (h.is_locked === 1 || /^0x0+(dead)?$/i.test(h.address ?? "") ? Number(h.percent || 0) : 0), 0) * 100;
-  if ((g?.lp_holders ?? []).length && lpLocked < 50) add("lp_unlocked", 10, `Only ${lpLocked.toFixed(0)}% of LP tokens are locked or burned.`);
+  if ((g?.lp_holders ?? []).length && lpLocked < 50) add("lp_unlocked", 15, `Only ${lpLocked.toFixed(0)}% of LP tokens are locked or burned.`);
+  const sl = lpShortLock(g?.lp_holders);
+  if (sl && sl.shortShare > 0.5 && sl.lockedPct >= 5) add("lp_short_lock", 15, `Most locked liquidity unlocks within 30 days (${Math.round(sl.shortShare * 100)}% of locked LP).`);
+  if (on("anti_whale_modifiable")) add("anti_whale", 15, "Owner can change the max trade / max wallet limit.");
+  if (on("external_call")) add("external_call", 15, "Contract calls outside contracts that can change how it behaves.");
   if (marketUnknown) add("liquidity", 0, "Liquidity and age unknown (market data source did not answer); scored neutral.");
-  else if (liquidityUsd == null || liquidityUsd < 5000) add("liquidity", 15, liquidityUsd == null ? "No DEX pool found." : `Very thin liquidity ($${Math.round(liquidityUsd)}).`);
-  if (ageHours != null && ageHours < 24) add("age", 10, `Very new: ${ageHours.toFixed(1)} hours old.`);
+  else if (liquidityUsd == null || liquidityUsd < 5000) add("liquidity", 20, liquidityUsd == null ? "No DEX pool found." : `Very thin liquidity ($${Math.round(liquidityUsd)}).`);
+  // Medium standalone
+  if (g?.is_open_source === "0") add("unverified", 10, "Contract source is not verified.");
+  // Soft / noise (group-capped)
+  if (on("trading_cooldown")) add("trading_cooldown", 10, "Trading cooldown: wallets must wait between trades.");
+  if (on("is_proxy")) add("proxy", 8, "Upgradeable proxy: code can change.");
+  if (ageHours != null && ageHours < 24) add("age", 8, `Very new: ${ageHours.toFixed(1)} hours old.`);
   // Established tokens (CEX-listed, 100k+ holders, or $1M+ liquidity and 90+ days old): owner powers and past creator
-  // honeypot counts stay in the reasons at low weight. Admin mint/pause/proxy is common for legit tokens; a creator's
-  // earlier honeypots should not push a widely held token to medium on their own. New tokens keep the full 25 points.
+  // honeypot counts stay in the reasons at low weight (1/4). Admin mint/pause/proxy/balance control is common for issuer
+  // tokens (e.g. USDT); never for honeypots, fake copies or airdrop scams (which can reach huge holder counts).
   const cex = g?.is_in_cex === "1" || g?.is_in_cex?.listed === "1";
-  const established = !on("is_honeypot") && (cex || Number(g?.holder_count || 0) >= 100000 || ((liquidityUsd ?? 0) >= 1e6 && (ageHours ?? 0) >= 90 * 24));
+  const established = !on("is_honeypot") && !on("cannot_sell_all") && !on("is_airdrop_scam") && g?.is_true_token !== "0" && (cex || Number(g?.holder_count || 0) >= 100000 || ((liquidityUsd ?? 0) >= 1e6 && (ageHours ?? 0) >= 90 * 24));
   if (established) {
-    for (const x of r) if (["mint_function", "owner_control", "proxy", "lp_unlocked", "unverified", "deployer_history"].includes(x.check)) { x.points = Math.round(x.points / 4); x.detail += " (down-weighted: established token)"; }
+    for (const x of r) {
+      if (EVM_ESTABLISHED_QUARTER.has(x.check) && x.points > 0) { x.points = Math.round(x.points / 4); x.detail += " (down-weighted: established token)"; }
+      else if (x.check === "owner_change_balance" && x.points > 0) { x.points = 0; x.detail += " (not scored: established, issuer-controlled token)"; }
+    }
     r.push({ check: "established", points: 0, detail: cex ? `Listed on a centralized exchange${g?.is_in_cex?.cex_list?.length ? ` (${g.is_in_cex.cex_list.slice(0, 3).join(", ")})` : ""}.` : Number(g?.holder_count || 0) >= 100000 ? `${Number(g.holder_count).toLocaleString("en-US")} holders.` : `Established: $${Math.round(liquidityUsd!).toLocaleString("en-US")} liquidity and ${Math.round(ageHours! / 24)} days old.` });
   }
-  const score = Math.min(100, r.reduce((a, x) => a + x.points, 0));
-  return { score, level: score >= 50 ? "high" : score >= 25 ? "medium" : "low", reasons: r.sort((a, b) => b.points - a.points) };
+  const score = totalScore(r);
+  return { score, level: levelOf(score), reasons: r.sort((a, b) => b.points - a.points) };
+}
+/** EVM admin-style flags that count 1/4 on established tokens. */
+export const EVM_ESTABLISHED_QUARTER = new Set(["mint_function", "owner_control", "proxy", "lp_unlocked", "unverified", "deployer_history", "personal_tax", "whitelist", "dev_holding", "anti_whale", "lp_short_lock", "external_call", "trading_cooldown"]);
+/** EVM dead token (mirrors Solana): market answered, a pool exists but under $100 liquidity, under $100 24h volume,
+ *  7+ days old, and no live sell route. Never fires when market data is unknown. */
+export function isEvmDeadToken(o: { marketUnknown?: boolean; liquidityUsd: number | null; ageHours: number | null; volume24hUsd?: number | null; quote?: { noRoute: boolean } | null }): boolean {
+  return !o.marketUnknown && o.liquidityUsd != null && o.liquidityUsd < 100 && o.ageHours != null && o.ageHours >= 24 * 7 && !(Number(o.volume24hUsd) >= 100) && !(o.quote && !o.quote.noRoute);
+}
+/** Final EVM total: sell warnings already applied; adds the dead-token floor (50). */
+export function finishEvm(reasons: Reason[], o: { marketUnknown?: boolean; liquidityUsd: number | null; ageHours: number | null; volume24hUsd?: number | null; quote?: { noRoute: boolean } | null }): { score: number; level: "low" | "medium" | "high"; reasons: Reason[] } {
+  const rs = reasons.filter((x) => x.check !== "dead_token");
+  let score = totalScore(rs);
+  if (isEvmDeadToken(o)) { const pts = deadTokenPoints(score); rs.unshift({ check: "dead_token", points: pts, detail: "Dead token: no liquidity left and no way to sell, over a week old (rated high regardless of other checks)." }); score = totalScore(rs); }
+  return { score, level: levelOf(score), reasons: rs };
 }
 const EVM: Record<string, { id: number; ds: string }> = { base: { id: 8453, ds: "base" }, bnb: { id: 56, ds: "bsc" }, ethereum: { id: 1, ds: "ethereum" }, arbitrum: { id: 42161, ds: "arbitrum" } };
 const ALIAS: Record<string, string> = { bsc: "bnb", eth: "ethereum", arb: "arbitrum" };
@@ -431,9 +496,8 @@ async function evmCheck(addr: string, chain: string) {
   const price = market.priceUsd;
   const meta = pickTokenMeta([{ name: g.token_name, symbol: g.token_symbol }, ...dsMeta(addr, dsr)]);
   const scored = scoreEvm(g, liq, age, marketUnknown);
-  const reasons = applyEvmSellWarnings(scored.reasons, quote, liq);
-  const score = Math.min(100, reasons.reduce((a, x) => a + x.points, 0));
-  const level: "low" | "medium" | "high" = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
+  const st0 = fillMarketFacts(dsStats(dsr), market);
+  const { reasons, score, level } = finishEvm(applyEvmSellWarnings(scored.reasons, quote, liq), { marketUnknown, liquidityUsd: liq, ageHours: age, volume24hUsd: st0.volume24hUsd, quote });
   const sell = quote?.noRoute ? { canSell: "no route found", sellRoute: false as const } : quote ? { sellPriceImpactPct: quote.impactPct, sellTestUsd: 100 } : {};
   const st = fillMarketFacts(dsStats(dsr), market);
   return { score, level, reasons, confidence: marketUnknown ? "medium" : "high", unknownSignals: marketUnknown ? ["liquidity", "age"] : [], facts: { buyer: { ...evmExtra(g, dsr), ...sell }, ...meta, token: meta.tokenSymbol, creator: g.creator_address || null, owner: g.owner_address || null, holderCount: Number(g.holder_count || 0), liquidityUsd: liq, priceUsd: price, ageHours: age && +age.toFixed(1), buyTax: g.buy_tax, sellTax: g.sell_tax, ...st }, price, liq };
@@ -460,7 +524,7 @@ const kUsd = (n: number) => (n >= 1e6 ? `$${(n / 1e6).toFixed(1).replace(/\.0$/,
 /**
  * Market danger warnings from 24h facts the check already has (no extra calls):
  * heavy selling (>= 1.5 sells per buy, 20+ sells, >= $1k volume), thin trading (< 0.1% of market cap, or < $5k when the
- * cap is unknown or under $50k), thin liquidity (< 2% of market cap when the cap is $50k-$50M).
+ * cap is unknown or under $50k), thin liquidity (< 2% of market cap when the cap is $50k-$50M), only buys and no sells (guarded).
  */
 export function marketWarnings(out: any): Reason[] {
   const f = out?.facts ?? {}, b = (f.buyer && typeof f.buyer === "object" ? f.buyer : null) ?? (out?.buyer && typeof out.buyer === "object" ? out.buyer : {}) ?? {};
@@ -473,6 +537,11 @@ export function marketWarnings(out: any): Reason[] {
   if (sells != null && sells >= 20 && vol != null && vol >= 1000 && sells / Math.max(1, buys ?? 0) >= 1.5 && !have.has("heavy_selling")) {
     const x = sells / Math.max(1, buys ?? 0);
     r.push({ check: "heavy_selling", points: 5, detail: `Heavy selling: ${x >= 10 ? Math.round(x) : x.toFixed(1)} sells per buy in 24h (${sells} sells vs ${buys ?? 0} buys).` });
+  }
+  // Only buys, no sells at all (sell-blocking pattern). Guard: 15+ buys, exactly 0 sells, and 15+ minutes old or $1k+ volume,
+  // so a coin a couple of minutes old with a handful of buys never trips it. Unknown counts never fire.
+  if (buys != null && sells != null && buys >= 15 && sells === 0 && ((age != null && age >= 0.25) || (vol != null && vol >= 1000)) && !have.has("only_buys")) {
+    r.push({ check: "only_buys", points: 40, detail: `Only buys, no sells: ${buys} buys and 0 sells in 24h (selling may be blocked).` });
   }
   if (vol != null && vol > 0 && !(age != null && age < 1) && !have.has("thin_trading")) {
     const thin = mcap != null && mcap >= 50_000 ? vol < mcap * 0.001 : vol < 5000;
@@ -490,8 +559,8 @@ export function finalizeReport(v: any) {
   let out = v;
   if (add.length) {
     const checks = [...v.checks, ...add].sort((a: any, b: any) => b.points - a.points);
-    const score = Math.min(100, checks.reduce((a: number, x: any) => a + (Number(x.points) || 0), 0));
-    const level: "low" | "medium" | "high" = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
+    const score = totalScore(checks);
+    const level = levelOf(score);
     out = { ...v, riskScore: score, riskLevel: level, verdict: verdictOf(level), checks, reasons: [...(Array.isArray(v.reasons) ? v.reasons : []), ...add.map((x) => x.detail)],
       buyerSummary: buyerSummary(level, checks.filter((x: any) => x.points > 0).map((x: any) => x.detail), v.confidence) };
   }
@@ -511,8 +580,24 @@ async function rugCheckUncached(mintRaw: string, chainRaw = "solana") {
   const mint = mintRaw.trim();
   if (!B58.test(mint)) throw new SolanaInputError("mint is required (a Solana SPL token mint address)");
   const f = await gatherFacts(mint);
+  const { base, ex, reasons, young, sg, score, level } = scoreSolana(f);
+  const unknownSignals = [...base.unknownSignals, ...(ex ? ex.unknown : ["buyer signals"])]; const confidence = base.confidence;
+  const { extra: _x, ...factsOnly } = f;
+  if (level === "low") logValidation(mint, score, f.priceUsd, f.liquidityUsd);
+  return {
+    product: "RugRadar", chain, token: mint, ...(young ? { scoring: "new-coin scoring (under 10 minutes old)" } : {}), riskScore: score, riskLevel: level, confidence, unknownSignals, verdict: verdictOf(level),
+    buyerSummary: buyerSummary(level, reasons.filter((x) => x.points > 0).map((x) => x.detail), confidence), buyer: ex?.signals ?? null,
+    reasons: reasons.filter((x) => x.points > 0).map((x) => x.detail), checks: reasons,
+    facts: { ...factsOnly, top1Pct: f.top1Pct && +f.top1Pct.toFixed(2), top10Pct: f.top10Pct && +f.top10Pct.toFixed(2), ageHours: f.ageHours && +f.ageHours.toFixed(1), ...fillMarketFacts(factsOnly, sg) },
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+/** Solana total from gathered facts (pure): base checks + buyer checks, new-coin and established weighting, steal-power
+ *  dedupe, soft-flag cap and the dead-token floor (50). */
+export function scoreSolana(f: Facts) {
   const base = scoreFacts(f); const ex = f.extra;
-  const reasons = [...base.reasons, ...(ex?.checks ?? [])].sort((a, b) => b.points - a.points);
+  const reasons = dedupeSteal([...base.reasons, ...(ex?.checks ?? [])]).sort((a, b) => b.points - a.points);
   // Coins under 10 minutes old: warnings true of every new coin (age, thin liquidity, no socials yet) count far less;
   // fake volume and big creator holdings count more, since they separate bad launches from normal ones.
   const young = f.ageHours != null && f.ageHours < 10 / 60;
@@ -527,28 +612,16 @@ async function rugCheckUncached(mintRaw: string, chainRaw = "solana") {
   const sg = (ex?.signals ?? {}) as any;
   if (sg.jupiterVerified && Number(sg.organicScore) >= 90 && Number(sg.marketCapUsd) >= 1e9) {
     for (const x of reasons) if (["mint_authority", "freeze_authority"].includes(x.check) && x.points > 0) { x.points = Math.round(x.points / 4); x.detail += " (down-weighted: established, verified token)"; }
-
     reasons.push({ check: "established", points: 0, detail: `Established: Jupiter-verified, $${Math.round(sg.marketCapUsd / 1e6).toLocaleString("en-US")}M market cap, organic score ${sg.organicScore}.` });
   }
   // Established (Jupiter-verified, organic >= 60, $100M+ cap, 90+ days): creator history, LP burn and mutable metadata say nothing
   // about such a token (BONK/WIF deployers left dead test mints behind; JUP's old standard pool is not LP-burned).
   if (isEstablished(sg, f.ageHours)) for (const x of reasons) if (["deployer_history", "known_pattern", "shared_funder", "metadata_mutable", "lp_unlocked"].includes(x.check) && x.points > 0) { x.points = 0; x.detail += " (not scored: established, verified token)"; }
-  let score = Math.min(100, reasons.reduce((a, x) => a + x.points, 0));
-  // Dead token: market data answered, no pool/liquidity left, no live pump.fun curve, and over a week old -> always high.
-  if (isDeadToken(f, sg)) { const pts = Math.max(5, 60 - score); reasons.unshift({ check: "dead_token", points: pts, detail: "Dead token: no liquidity left and no way to sell, over a week old (rated high regardless of other checks)." }); score = Math.min(100, score + pts); }
-  const level: "low" | "medium" | "high" = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
-  const unknownSignals = [...base.unknownSignals, ...(ex ? ex.unknown : ["buyer signals"])]; const confidence = base.confidence;
-  const { extra: _x, ...factsOnly } = f;
-  if (level === "low") logValidation(mint, score, f.priceUsd, f.liquidityUsd);
-  return {
-    product: "RugRadar", chain, token: mint, ...(young ? { scoring: "new-coin scoring (under 10 minutes old)" } : {}), riskScore: score, riskLevel: level, confidence, unknownSignals, verdict: verdictOf(level),
-    buyerSummary: buyerSummary(level, reasons.filter((x) => x.points > 0).map((x) => x.detail), confidence), buyer: ex?.signals ?? null,
-    reasons: reasons.filter((x) => x.points > 0).map((x) => x.detail), checks: reasons,
-    facts: { ...factsOnly, top1Pct: f.top1Pct && +f.top1Pct.toFixed(2), top10Pct: f.top10Pct && +f.top10Pct.toFixed(2), ageHours: f.ageHours && +f.ageHours.toFixed(1), ...fillMarketFacts(factsOnly, sg) },
-    generatedAt: new Date().toISOString(),
-  };
+  let score = totalScore(reasons);
+  // Dead token: market data answered, no pool/liquidity left, no live pump.fun curve, and over a week old -> always high (floor 50).
+  if (isDeadToken(f, sg)) { const pts = deadTokenPoints(score); reasons.unshift({ check: "dead_token", points: pts, detail: "Dead token: no liquidity left and no way to sell, over a week old (rated high regardless of other checks)." }); score = totalScore(reasons); }
+  return { base, ex, reasons, young, sg, score, level: levelOf(score) };
 }
-
 export function isEstablished(sg: any, ageHours: number | null): boolean {
   return !!sg?.jupiterVerified && Number(sg.organicScore) >= 60 && Number(sg.marketCapUsd) >= 1e8 && ageHours != null && ageHours >= 90 * 24;
 }

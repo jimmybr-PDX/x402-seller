@@ -9,8 +9,8 @@ test("balance-changing authority, closable, mutable metadata flagged", () => {
 });
 test("LP burn: unburned standard pool flagged, CLMM/pump pools and burned pools not", () => {
   const p = (dex: string, type: string, tvl: string, burn: number | null) => ({ dex_name: dex, type, tvl, burn_percent: burn });
-  assert.equal(goplusChecks(parseGoPlusSol(raw({ dex: [p("raydium", "Standard", "50000", 2)] }))!)[0].points, 15);
-  assert.equal(goplusChecks(parseGoPlusSol(raw({ dex: [p("raydium", "Standard", "50000", 30)] }))!)[0].points, 8);
+  assert.equal(goplusChecks(parseGoPlusSol(raw({ dex: [p("raydium", "Standard", "50000", 2)] }))!)[0].points, 25);
+  assert.equal(goplusChecks(parseGoPlusSol(raw({ dex: [p("raydium", "Standard", "50000", 30)] }))!)[0].points, 12);
   assert.deepEqual(goplusChecks(parseGoPlusSol(raw({ dex: [p("raydium", "Standard", "50000", 99)] }))!), []);
   assert.deepEqual(goplusChecks(parseGoPlusSol(raw({ dex: [p("orca", "Concentrated", "50000", 0), p("pumpswap", "Standard", "9000", 0)] }))!), []);
 });

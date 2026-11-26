@@ -90,7 +90,7 @@ test("full report share data is the FREE score/label/warnings only (matches the 
   assert.ok(txt.includes("You may not be able to sell"), txt);
   for (const re of [/dev sold/i, /sniper/i, /secret/i, /95/, /safe/i, /wrong/i, /chart/i]) assert.ok(!re.test(txt.replace(/https:\/\/\S+/, "")), `${re} in ${txt}`);
   const dead = js.rrFree!([{ check: "dead_token", points: 15 }, { check: "mint_authority", points: 25 }, { check: "dev_sold", points: 30 }], ["mint_authority", "dead_token"], WARN);
-  assert.equal(dead.sc, 60); assert.deepEqual([...dead.ws.map((w: any) => w.t)], ["Dead token: no way to sell", "Creator can mint more"]);
+  assert.equal(dead.sc, 50); assert.deepEqual([...dead.ws.map((w: any) => w.t)], ["Dead token: no way to sell", "Creator can mint more"]);
   assert.equal(JSON.stringify(js.rrFree!(undefined, [], WARN)), JSON.stringify({ sc: 0, lv: "low", ws: [] }));
 });
 

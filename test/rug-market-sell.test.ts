@@ -42,7 +42,7 @@ test("evmSellAmount is exact for 18-decimal tokens; quote maps no-route and impa
   const none = await evmSellQuote("base", "0x" + "11".repeat(20), 1n, { fetch: (async () => { throw new Error("timeout"); }) as typeof fetch });
   assert.equal(none, null);
   const r = applyEvmSellWarnings([{ check: "liquidity", points: 3, detail: "ok" }], { noRoute: true, impactPct: null }, 5000);
-  assert.ok(r.some((x) => x.check === "sell_route" && x.points === 30));
+  assert.ok(r.some((x) => x.check === "sell_route" && x.points === 60));
   const skip = applyEvmSellWarnings([{ check: "honeypot", points: 40, detail: "blocked" }], { noRoute: true, impactPct: null }, 5000);
   assert.ok(!skip.some((x) => x.check === "sell_route"));
   assert.deepEqual(applyEvmSellWarnings([], null, 5000), []);

@@ -25,7 +25,7 @@ test("established EVM token with admin mint is not false-medium; honeypot stays 
   assert.equal(legit.level, "low");
   assert.ok(legit.reasons.some((x) => x.check === "established"));
   assert.equal(scoreEvm({ is_honeypot: "1", is_in_cex: "1", is_mintable: "1" }, 5e6, 1000 * 24).level, "high");
-  assert.equal(scoreEvm({ is_mintable: "1", lp_holders: [{ address: "0xabc", percent: "1", is_locked: 0 }] }, 20000, 48).level, "medium");
+  assert.equal(scoreEvm({ is_mintable: "1", lp_holders: [{ address: "0xabc", percent: "1", is_locked: 0 }] }, 20000, 48).level, "high", "mint (40) + unlocked LP (15) on a new token is high");
 });
 
 
@@ -42,7 +42,7 @@ test("thin Jupiter liquidity is scored, not treated as unknown", () => {
   const liq = 3497.5;
   const r = scoreFacts({ ...base, marketUnknown: isMarketUnknown(true, liq), liquidityUsd: liq, ageHours: 18.8 });
   const liqCheck = r.reasons.find((x) => x.check === "liquidity")!;
-  assert.equal(liqCheck.points, 15);
+  assert.equal(liqCheck.points, 20);
   assert.match(liqCheck.detail, /Very thin liquidity \(\$3498\)/);
   assert.ok(!r.unknownSignals.includes("liquidity"));
 });
@@ -51,12 +51,12 @@ test("established EVM token down-weights creator honeypot history; new tokens ke
   const gp = { honeypot_with_same_creator: "3", is_honeypot: "0", holder_count: "909999", lp_holders: [{ address: "0xabc", percent: "1", is_locked: 0 }] };
   const established = scoreEvm(gp, 488540, 10000);
   const hist = established.reasons.find((x) => x.check === "deployer_history")!;
-  assert.equal(hist.points, 6); // 25 / 4, rounded
+  assert.equal(hist.points, 9); // 35 / 4, rounded
   assert.match(hist.detail, /down-weighted: established token/);
   assert.ok(established.reasons.some((x) => x.check === "established"));
   assert.equal(established.level, "low");
   const fresh = scoreEvm({ honeypot_with_same_creator: "3", is_honeypot: "0", holder_count: "12" }, 2000, 3);
-  assert.equal(fresh.reasons.find((x) => x.check === "deployer_history")?.points, 25);
+  assert.equal(fresh.reasons.find((x) => x.check === "deployer_history")?.points, 35);
   assert.ok(fresh.score >= 25);
   assert.equal(fresh.reasons.some((x) => /down-weighted/.test(x.detail) && x.check === "deployer_history"), false);
 });

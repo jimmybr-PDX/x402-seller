@@ -41,6 +41,10 @@ test("leaving new-coin scoring re-bases the score instead of alerting", () => {
   const r = evaluate(st(snap({ score: 10, young: true })), snap({ score: 45 })); assert.deepEqual(keys(r), []); assert.equal(r.rescore, true);
   assert.deepEqual(keys(evaluate(st(snap({ score: 10, young: true })), snap({ score: 45, young: true }))), ["score_20"], "still young: a real jump alerts");
 });
+test("scoring recalibration (old start snapshot without a scoring version) re-bases instead of alerting", () => {
+  const r = evaluate(st(snap({ score: 10 })), snap({ score: 45, sv: 2 })); assert.deepEqual(keys(r), []); assert.equal(r.rescore, true);
+  assert.deepEqual(keys(evaluate(st(snap({ score: 10, sv: 2 })), snap({ score: 45, sv: 2 }))), ["score_20"], "same version: a real jump alerts");
+});
 test("dedupe: each trigger alerts once", () => {
   const w = st(); const r = evaluate(w, snap({ score: 35, devSells: 1 })); w.sent.push(...r.alerts.map((a) => a.key));
   assert.deepEqual(keys(evaluate(w, snap({ score: 36, devSells: 2 }))), []);
@@ -53,7 +57,7 @@ test("snapOf: liquidity 0 with a live sell route, or a failed market source, cou
 });
 test("snapOf reads the RugRadar report", () => {
   const s = snapOf({ riskScore: 42, riskLevel: "medium", facts: { mintAuthority: null, freezeAuthority: "F", liquidityUsd: 1234, priceUsd: 0.1 }, buyer: { canSell: "yes (pump.fun curve)", devSells: 2, devSoldPctOfBought: 50, devHoldingPct: 3 } }, 5);
-  assert.deepEqual(s, { at: 5, score: 42, level: "medium", mintAuthority: false, freezeAuthority: true, liquidityUsd: 1234, canSell: "yes (pump.fun curve)", devSells: 2, devSoldPct: 50, devHoldingPct: 3, priceUsd: 0.1 });
+  assert.deepEqual(s, { at: 5, score: 42, level: "medium", mintAuthority: false, freezeAuthority: true, liquidityUsd: 1234, canSell: "yes (pump.fun curve)", devSells: 2, devSoldPct: 50, devHoldingPct: 3, priceUsd: 0.1, sv: 2 });
 });
 test("webhook URL rules", () => {
   assert.equal(checkWebhookUrl("https://example.com/h"), null);
