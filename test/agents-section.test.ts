@@ -15,7 +15,8 @@ test("/rugradar has a compact 'For bots & agents' section: MCP, tools with price
   try {
     const h = await (await fetch(`${base}/rugradar`)).text();
     assert.ok(h.includes('id="agents"') && h.includes('href="#agents"'));
-    for (const x of ["rug_check", "token_safety", "honeypot_check", "watch_token", "research_brief", "read_page", "news_search", "token_price", `${base}/mcp`, "/watch?token=", "/credits/buy?credits=N", "$0.05 / 24h, $0.10 / 48h", "X-RugRadar-Key", "X-RugRadar-Signature", "timingSafeEqual", "compare_digest", "PAYMENT-SIGNATURE"]) assert.ok(h.includes(x) || h.includes(x.replace(/&/g, "&amp;")), x);
+    for (const x of ["rug_check", "honeypot_check", "token_price", "watch_token", "list_watches", "cancel_watch", `${base}/mcp`, "/watch?token=", "/credits/buy?credits=N", "/token-safety", "/report?q=", "/read?url=", "/news?q=", "$0.05 / 24h, $0.10 / 48h", "X-RugRadar-Key", "X-RugRadar-Signature", "timingSafeEqual", "compare_digest", "PAYMENT-SIGNATURE"]) assert.ok(h.includes(x) || h.includes(x.replace(/&/g, "&amp;")), x);
+    for (const gone of ["token_safety", "research_brief", "read_page", "news_search"]) assert.ok(!h.includes(gone), gone);
     assert.ok(Buffer.byteLength(h) < 67_000, `page stays small (${Buffer.byteLength(h)} bytes)`);
     for (const bad of ["inflow", "winner", "family", "named wallet", "known good"]) assert.ok(!h.toLowerCase().includes(bad), bad);
   } finally { srv.close(); }

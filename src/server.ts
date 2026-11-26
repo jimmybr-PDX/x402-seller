@@ -1567,7 +1567,7 @@ async function main() {
       `- GET ${PUBLIC_URL}/token-safety?token=<mint|0x>  (${RUG_PRICE}) — same RugRadar engine as /rug-check, listed for token safety / memecoin safety / honeypot search terms. Optional chain=.`,
       `- GET ${PUBLIC_URL}/honeypot-check?token=<mint|0x>  (${RUG_PRICE}) — honeypot check: can I sell this token? Simulated buy/sell + tax on EVM; live sell quote + freeze authority on Solana. Optional chain=.`,
       `- GET ${PUBLIC_URL}/watch?token=<solana mint>&hours=24|48&webhook=<https url>  ($0.05 for 24h, $0.10 for 48h) — RugRadar Watch + Alert: re-checked ~every 10 min; HMAC-signed webhook alert (X-RugRadar-Signature) when the dev sells, liquidity drops 30%+, mint/freeze authority appears, risk score jumps 20+, or it can't be sold. Credit keys: POST /rugradar/watch with X-RugRadar-Key (5 / 10 credits).`,
-      `- MCP (streamable HTTP): ${PUBLIC_URL}/mcp — tools rug_check, token_safety, honeypot_check (${RUG_PRICE} each), watch_token ($0.05/24h, $0.10/48h), research_brief (${REPORT_PRICE}), read_page (${READ_PRICE}), news_search (${NEWS_PRICE}), token_price (${TOKEN_PRICE}). Bots & agents guide: ${PUBLIC_URL}/rugradar#agents`,
+      `- MCP (streamable HTTP): ${PUBLIC_URL}/mcp — RugRadar tools rug_check, honeypot_check (${RUG_PRICE} each), token_price (${TOKEN_PRICE}), watch_token ($0.05/24h, $0.10/48h), list_watches and cancel_watch (free with a credit key). HTTP-only (not in MCP): /report, /read, /news, /token-safety. Bots & agents guide: ${PUBLIC_URL}/rugradar#agents`,
       `- GET ${PUBLIC_URL}/credits/buy?credits=N  (${RUG_PRICE} each) — RugRadar prepaid credits (1-1000): returns a secret key once; send X-RugRadar-Key to skip x402 (~1.8x faster). Balance: /credits/balance.`,
       "",
       "## How to pay",

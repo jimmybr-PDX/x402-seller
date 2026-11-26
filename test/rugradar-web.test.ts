@@ -50,12 +50,12 @@ test("MCP: initialize, tools/list, tools/call with credit key, and payment_requi
     const rpc = (body: object, h: Record<string, string> = {}) => fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...h }, body: JSON.stringify(body) }).then((r) => r.json() as any);
     assert.equal((await rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })).result.serverInfo.name, "rugradar");
     const names = (await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" })).result.tools.map((t: any) => t.name);
-    assert.deepEqual(names, ["rug_check", "token_safety", "honeypot_check", "research_brief", "read_page", "news_search", "token_price"]);
+    assert.deepEqual(names, ["rug_check", "honeypot_check", "token_price"]);
     const listed = (await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" })).result.tools;
-    const rug = listed.find((t: any) => t.name === "rug_check"), safe = listed.find((t: any) => t.name === "token_safety"), honey = listed.find((t: any) => t.name === "honeypot_check");
-    assert.ok(rug.description.includes("overall rug-pull") && rug.description.includes("instead of token_safety") && rug.description.includes("honeypot_check") && !rug.description.includes("45+ data points"));
-    assert.ok(safe.description.includes("token-safety breakdown") && safe.description.includes("instead of rug_check") && safe.description.includes("honeypot_check") && !safe.description.includes("45+ data points"));
-    assert.ok(honey.description.includes("can I sell") && honey.description.includes("rug_check") && honey.description.includes("token_safety") && !honey.description.includes("45+ data points"));
+    const rug = listed.find((t: any) => t.name === "rug_check"), honey = listed.find((t: any) => t.name === "honeypot_check"), price = listed.find((t: any) => t.name === "token_price");
+    assert.ok(rug.description.includes("full rug and safety report") && rug.description.includes("honeypot_check") && rug.description.includes("token_price") && !rug.description.includes("token_safety") && !rug.description.includes("45+ data points"));
+    assert.ok(honey.description.includes("can I sell") && honey.description.includes("rug_check") && honey.description.includes("token_price") && !honey.description.includes("token_safety") && !honey.description.includes("45+ data points"));
+    assert.ok(price.description.includes("USD price") && price.description.includes("rug_check") && price.description.includes("honeypot_check") && !price.description.includes("news_search"));
     for (const t of listed) {
       assert.ok(t.outputSchema && t.outputSchema.properties && t.outputSchema.properties.payWith, t.name);
       assert.equal(t.annotations.readOnlyHint, true, t.name);
@@ -65,13 +65,16 @@ test("MCP: initialize, tools/list, tools/call with credit key, and payment_requi
     }
     assert.match(rug.description, /1 free check every day/);
     assert.match(rug.inputSchema.properties.chain.description, /base for 0x addresses/);
-    assert.match(listed.find((t: any) => t.name === "read_page").inputSchema.properties.maxChars.description, /truncated=true/);
-    assert.match(listed.find((t: any) => t.name === "research_brief").inputSchema.properties.depth.description, /same/);
     assert.match(listed.find((t: any) => t.name === "token_price").inputSchema.properties.chain.description, /more than one chain/);
-    const brief = await rpc({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "research_brief", arguments: { q: "what is MCP" } } });
-    assert.equal(brief.result.isError, true); assert.equal(brief.result.structuredContent.error, "payment_required");
-    assert.match(String(brief.result.structuredContent.payWith.x402.url), /\/report\?q=/);
-    assert.equal(brief.result.structuredContent.priceUsd, "$0.01");
+    for (const gone of ["token_safety", "research_brief", "read_page", "news_search", "list_recent_reports"]) {
+      assert.ok(!names.includes(gone), gone);
+      const miss = await rpc({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: gone, arguments: { q: "what is MCP", token: MINT, url: "https://example.com" } } });
+      assert.equal(miss.error.code, -32602, gone);
+    }
+    const priced = await rpc({ jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "token_price", arguments: { token: "JUP" } } });
+    assert.equal(priced.result.isError, true); assert.equal(priced.result.structuredContent.error, "payment_required");
+    assert.match(String(priced.result.structuredContent.payWith.x402.url), /\/price\?token=/);
+    assert.equal(priced.result.structuredContent.priceUsd, "$0.001");
     const paid = await rpc({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "rug_check", arguments: { token: MINT } } }, { "x-rugradar-key": "rr_good" });
     assert.equal(paid.result.isError, false); assert.equal(paid.result.structuredContent.buyerSummary, "FULL"); assert.equal(paid.result.structuredContent.riskScore, 48); assert.equal(paid.result.structuredContent.credits_remaining, 1); assert.match(paid.result.structuredContent.shareUrl, /\/rugradar\/c\/solana\//);
     const unpaid = await rpc({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "honeypot_check", arguments: { token: MINT, api_key: "rr_bad" } } });
@@ -120,4 +123,13 @@ test("MCP watch_token is listed with non-idempotent annotations, outputSchema, a
     assert.match(w.inputSchema.properties.hours.description, /24 = \$0\.05/);
     assert.match(w.description, /not charged/);
   } finally { srv.closeAllConnections(); srv.close(); }
+});
+
+test("HTTP x402 routes for token-safety, report, read, and news stay registered (not only MCP)", async () => {
+  const fs = await import("node:fs");
+  const src = fs.readFileSync("src/server.ts", "utf8");
+  assert.match(src, /const RUG_PATHS = new Set\(\["\/rug-check", "\/token-safety", "\/honeypot-check"\]\)/);
+  for (const route of ['app.get("/report"', 'app.get("/read"', 'app.get("/news"', '"/token-safety": RUG_PRICE']) {
+    assert.ok(src.includes(route), route);
+  }
 });

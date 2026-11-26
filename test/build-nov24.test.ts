@@ -57,7 +57,7 @@ test("wallet history: signed challenge (Solana + EVM), session, own list only", 
   await wh.flush(); assert.equal(saved["wallet-checks.json"].rows.length, 2);
 });
 
-test("web: wallet history endpoints need a signed session; MCP lists 10 tools with titles; list/cancel watches scoped to the key", async () => {
+test("web: wallet history endpoints need a signed session; MCP lists 6 RugRadar tools with titles; list/cancel watches scoped to the key", async () => {
   const app = express(); app.use(express.json()); const srv = app.listen(0); const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
   const wh = createWalletHistory({ load: async () => null, save: async () => {} });
   const watches: Record<string, string[]> = { k1: ["w_aaaa1111"] };
@@ -69,15 +69,15 @@ test("web: wallet history endpoints need a signed session; MCP lists 10 tools wi
     assert.equal((await fetch(`${base}/rugradar/api/wallet/history`, { headers: { "X-RugRadar-Wallet": "abc.def" } })).status, 401);
     const mcp = (body: any, h: Record<string, string> = {}) => fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", ...h }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...body }) }).then((r) => r.json() as any);
     const tools = (await mcp({ method: "tools/list" })).result.tools;
-    assert.equal(tools.length, 10);
-    for (const t of tools) { assert.ok(t.title, t.name); assert.ok(t.outputSchema, t.name); assert.ok(t.annotations, t.name); }
     const names = tools.map((t: any) => t.name);
-    assert.ok(names.includes("list_watches") && names.includes("cancel_watch"));
+    assert.deepEqual(names, ["rug_check", "honeypot_check", "token_price", "watch_token", "list_watches", "cancel_watch"]);
+    for (const gone of ["token_safety", "research_brief", "read_page", "news_search", "list_recent_reports"]) assert.ok(!names.includes(gone), gone);
+    for (const t of tools) { assert.ok(t.title, t.name); assert.ok(t.outputSchema, t.name); assert.ok(t.annotations, t.name); }
     const cw = tools.find((t: any) => t.name === "cancel_watch");
     assert.equal(cw.annotations.destructiveHint, true); assert.match(cw.description, /No refund/);
     assert.ok(!/no list or cancel tool/.test(tools.find((t: any) => t.name === "watch_token").description));
     assert.deepEqual(tools.find((t: any) => t.name === "token_price").inputSchema.properties.chain.enum, ["ethereum", "base", "arbitrum", "polygon", "solana"]);
-    assert.equal(new Set(tools.map((t: any) => t.description)).size, 10, "descriptions distinct");
+    assert.equal(new Set(tools.map((t: any) => t.description)).size, 6, "descriptions distinct");
     const lw = await mcp({ method: "tools/call", params: { name: "list_watches", arguments: { api_key: "k1" } } });
     assert.equal(lw.result.structuredContent.count, 1);
     const other = await mcp({ method: "tools/call", params: { name: "cancel_watch", arguments: { api_key: "k2", watch_id: "w_aaaa1111" } } });
