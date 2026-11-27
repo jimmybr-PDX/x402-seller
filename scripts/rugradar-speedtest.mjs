@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Credits vs paid x402, cache bypassed (nocache=1). Each token measured ROUNDS times in each mode.
- *  Also times the free unpaid 402 round trip. Spend: tokens x ROUNDS x $0.02 (credits + paid). No secrets printed. */
+ *  Also times the free unpaid 402 round trip. Spend: tokens x ROUNDS x $0.01 (credits + paid). No secrets printed. */
 import { readFileSync } from "node:fs";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { ExactEvmScheme } from "@x402/evm/exact/client";

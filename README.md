@@ -58,7 +58,7 @@ npm ci && npm run dev  # http://localhost:8402
 | `X402_PAY_TO` | — | Your EVM receive address (else CDP provisions one; needs `CDP_WALLET_SECRET`) |
 | `REPORT_PRICE` / `READ_PRICE` / `CHECK_PRICE` / `NEWS_PRICE` / `TOKEN_PRICE` | `$0.01` / `$0.005` / `$0.005` / `$0.005` / `$0.002` | Per-call prices |
 | `SOL_PRICE` / `BALANCE_PRICE` / `TX_PRICE` / `GAS_PRICE` | `$0.002` / `$0.003` / `$0.003` / `$0.002` | Per-call prices for `/solana-price`, `/balance`, `/tx`, `/gas` |
-| `RUG_PRICE` | `$0.02` | Per-check price for `/rug-check`, `/token-safety`, `/honeypot-check`, and `/credits/buy` (per credit) |
+| `RUG_PRICE` | `$0.01` | Per-check price for `/rug-check`, `/token-safety`, `/honeypot-check`, and `/credits/buy` (per credit) |
 | `NEWS_GKG_HOURS` | `24` | Hours of the GDELT GKG 15-minute news index kept in memory (0 = off). ~2.5 MB download per 15 min, ~50k headlines/day, ~60 MB RAM |
 | `NEWS_GDELT_API` | off | `1` = also query the GDELT DOC API (rate-limited; adds latency) |
 | `TRAFFIC_FILE` | `./data/traffic.json` | Where `/stats` counts are saved (every 10 min + on shutdown). `off` = memory only. Render free has no persistent disk, so counts reset on each deploy unless you mount a disk here |
@@ -68,7 +68,7 @@ npm ci && npm run dev  # http://localhost:8402
 | `GROK_API_KEY` or `OPENAI_API_KEY` | — | Optional: LLM synthesis over the cited sources; without it `/report` is extractive |
 | `SERPER_API_KEY` | — | Optional: Serper (Google results API) as the first `/search` source (5 s timeout); on error/quota or if unset, falls back to Brave → DuckDuckGo → Bing → Bing RSS → Wikipedia, topping up short result lists |
 
-Free routes: `/health`, `/stats`, `/examples`, `/llms.txt`, `/openapi.json`, `/.well-known/x402`, `/robots.txt`, `/icon.png` (`/icon.svg`).
+Free routes: `/health`, `/stats`, `/examples`, `/llms.txt`, `/skill.md`, `/agents.md`, `/openapi.json`, `/.well-known/x402`, `/robots.txt`, `/icon.png` (`/icon.svg`).
 
 ## Answer permalinks (`/a/<id>`)
 

@@ -2,4 +2,4 @@
 Name: RugRadar
 URL: https://x402-seller-pmlm.onrender.com/mcp (streamable HTTP)
 Repo: https://github.com/jimmybr-PDX/x402-seller
-Description: Solana token danger warnings for agents. Tools: rug_check, honeypot_check ($0.02 each), token_price, watch_token ($0.05/24h, $0.10/48h), list_watches and cancel_watch. Pay per call via x402 (USDC) or a prepaid credit key.
+Description: Solana token danger warnings for agents. Tools: rug_check, honeypot_check ($0.01 each), token_price, watch_token ($0.05/24h, $0.10/48h), list_watches and cancel_watch. Pay per call via x402 (USDC) or a prepaid credit key.

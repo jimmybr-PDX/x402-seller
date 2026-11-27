@@ -13,6 +13,7 @@ import { shareData, primeShare, sharePng, cachedShare, shortAddr, noSafe, market
 import { tensionFor } from "./tension.js";
 import { totalScore, levelOf, deadTokenPoints, SOFT_CHECKS, SOFT_CAP, DEAD_FLOOR } from "./rug-score.js";
 import { swapClientJs, type SwapCfg } from "./swap.js";
+import { rugradarAgentGuide, SKILL_CONTENT_TYPE } from "./rugradar-skill.js";
 import type { Express, Request, Response } from "express";
 import { randomBytes, createHash } from "node:crypto";
 const LIVE_V = createHash("sha1").update(LIVE_JS).digest("hex").slice(0, 8); // cache-buster: the paid-report script reloads whenever it changes
@@ -596,7 +597,7 @@ curl -s -H "X-RugRadar-Key: rr_YOURKEY" "${U}/rug-check?token=${DEV_MINT}"`;
 <p><b>Credit keys</b> skip the x402 round trip:</p>${pre(c.credits)}
 <p><b>Embed the RugRadar card</b> (about 360 px, free check data, danger warnings only). Paste on any page:</p>${pre(c.embed)}<p>Or fetch the same data as JSON (score, verdict, top 3 warning titles, report link):</p>${pre(c.embedJson)}
 <p><b>Webhook signature</b>: header <code>X-RugRadar-Signature: t=&lt;unix&gt;,v1=&lt;hex&gt;</code>, HMAC-SHA256 of <code>t + "." + rawBody</code> with your watch secret. Node:</p>${pre(c.node)}<p>Python:</p>${pre(c.python)}
-<p><small>Discovery: <a href="/.well-known/x402">/.well-known/x402</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a>. The full report costs $${p} per check with prepaid credits (header <code>X-RugRadar-Key</code>) or x402. Danger warnings only.</small></p></div></details>`;
+<p><small>Discovery: <a href="/.well-known/x402">/.well-known/x402</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a> · <a href="/skill.md">/skill.md</a> · <a href="/agents.md">/agents.md</a>. The full report costs $${p} per check with prepaid credits (header <code>X-RugRadar-Key</code>) or x402. Danger warnings only.</small></p></div></details>`;
 }
 
 
@@ -636,7 +637,7 @@ const EMBED_CSS = `body{margin:0;padding:8px;background:transparent;color:var(--
 .emb .vt{font-size:20px}.emb .vl{font-size:14px;margin-top:3px}
 .emb .wcards{gap:6px;margin:8px 0}.emb .wc summary{gap:8px;padding:8px 10px;font-size:14px}.emb .wc p{padding:0 10px 8px;font-size:13px;white-space:normal}.emb .sev{font-size:10px;padding:2px 6px}
 .efoot{flex-wrap:wrap;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;color:var(--mut)}.efoot a{font-weight:700;font-size:13px;white-space:nowrap}.credit{font-size:11px;color:#6f7990}.emsg{font-size:14px;margin:6px 0}`;
-function embedHtml(U: string, v: EmbedData | null, msg?: string, priceUsd = "0.02") {
+function embedHtml(U: string, v: EmbedData | null, msg?: string, priceUsd = "0.01") {
   const price = priceUsd.startsWith("$") ? priceUsd : `$${priceUsd}`;
   const body = v
     ? `<div class="etok"><b>${escA(v.token.slice(0, 4))}\u2026${escA(v.token.slice(-6))}</b> \u00b7 ${escA(CHAIN_NAME[v.chain] ?? v.chain)} \u00b7 free check</div>
@@ -846,6 +847,10 @@ ${v.facts.length ? `<p class="facts">${escA(v.facts.slice(0, 3).join(" · "))}</
 <body><main>${body}</main></body></html>`;
 }
 export function registerRugradarWeb(app: Express, d: WebDeps) {
+  const skillMd = rugradarAgentGuide(d.publicUrl, d.priceUsd);
+  const sendSkill = (_req: Request, res: Response) => { res.set("Content-Type", SKILL_CONTENT_TYPE).send(skillMd); };
+  app.get("/skill.md", sendSkill);
+  app.get("/agents.md", sendSkill);
   const htmlBase = page(d), htmlPromo = page(d, true);
   app.get("/rugradar", (req, res) => {
     const html = fullFreeActive() ? htmlPromo : htmlBase, t = shareTarget(req);
@@ -956,7 +961,7 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
   });
   app.get("/sitemap.xml", (_req, res) => {
     const now = new Date().toISOString().slice(0, 10);
-    res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${["/rugradar", "/", "/examples"].map((p) => `<url><loc>${d.publicUrl}${p}</loc><lastmod>${now}</lastmod></url>`).join("\n")}\n</urlset>\n`);
+    res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${["/rugradar", "/", "/examples", "/skill.md", "/agents.md", "/llms.txt"].map((p) => `<url><loc>${d.publicUrl}${p}</loc><lastmod>${now}</lastmod></url>`).join("\n")}\n</urlset>\n`);
   });
   app.get("/mcp", (_req, res) => { res.status(405).set("Allow", "POST").json({ error: "use POST (MCP streamable HTTP, JSON responses)", tools: mcpTools(d).map((x) => x.name) }); });
   app.post("/mcp", async (req: Request, res: Response) => {

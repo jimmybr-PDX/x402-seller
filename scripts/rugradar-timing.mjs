@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Buys N RugRadar credits once, then times paid x402 checks vs credit-key checks of the same tokens.
- *  Spends (N + tokens) x $0.02 from .buyer.json on Base. Never prints the private key or the credit key. */
+ *  Spends (N + tokens) x $0.01 from .buyer.json on Base. Never prints the private key or the credit key. */
 import { readFileSync, writeFileSync } from "node:fs";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { ExactEvmScheme } from "@x402/evm/exact/client";

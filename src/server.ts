@@ -91,7 +91,7 @@ const TX_PRICE = process.env.TX_PRICE ?? "$0.003";
 const GAS_PRICE = process.env.GAS_PRICE ?? "$0.001";
 const TOKEN_META_PRICE = process.env.TOKEN_META_PRICE ?? "$0.001";
 const SEARCH_PRICE = process.env.SEARCH_PRICE ?? "$0.01";
-const RUG_PRICE = process.env.RUG_PRICE ?? "$0.02";
+const RUG_PRICE = process.env.RUG_PRICE ?? "$0.01";
 // Measured end-to-end gap between a paid x402 RugRadar call and a credit-key call (seconds); null until measured.
 const CREDIT_GAP_S: number | null = 1.7; // measured 2026-10-13 (scripts/rugradar-speedtest.mjs, 6 cache-free pairs, 3 tokens x 2 rounds): credit key avg 2.28 s vs paid x402 avg 4.03 s (1.77x; credits faster in 5 of 6)
 const CREDIT_SPEED = { creditS: 2.3, paidS: 4.0, x: 1.8 };
@@ -290,7 +290,7 @@ async function main() {
   app.use(express.json());
 
   // Interest tracker (counts only; visitor = salted hash of IP+UA, raw IPs never stored).
-  const FREE_LABELS = new Set(["/", "/health", "/stats", "/examples", "/llms.txt", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png", "/favicon.ico", "/rugradar", "/credits/balance", "/sitemap.xml", "/mcp", "/rugradar/api/check", "/rugradar/api/recent"]);
+  const FREE_LABELS = new Set(["/", "/health", "/stats", "/examples", "/llms.txt", "/skill.md", "/agents.md", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png", "/favicon.ico", "/rugradar", "/credits/balance", "/sitemap.xml", "/mcp", "/rugradar/api/check", "/rugradar/api/recent"]);
   app.use((req: Request, res: Response, next: NextFunction) => {
     const method = req.method;
     // HEAD on a paid route: answer like GET without payment (402 + PAYMENT-REQUIRED, no body) instead of
@@ -1567,7 +1567,7 @@ async function main() {
       `- GET ${PUBLIC_URL}/token-safety?token=<mint|0x>  (${RUG_PRICE}) — same RugRadar engine as /rug-check, listed for token safety / memecoin safety / honeypot search terms. Optional chain=.`,
       `- GET ${PUBLIC_URL}/honeypot-check?token=<mint|0x>  (${RUG_PRICE}) — honeypot check: can I sell this token? Simulated buy/sell + tax on EVM; live sell quote + freeze authority on Solana. Optional chain=.`,
       `- GET ${PUBLIC_URL}/watch?token=<solana mint>&hours=24|48&webhook=<https url>  ($0.05 for 24h, $0.10 for 48h) — RugRadar Watch + Alert: re-checked ~every 10 min; HMAC-signed webhook alert (X-RugRadar-Signature) when the dev sells, liquidity drops 30%+, mint/freeze authority appears, risk score jumps 20+, or it can't be sold. Credit keys: POST /rugradar/watch with X-RugRadar-Key (5 / 10 credits).`,
-      `- MCP (streamable HTTP): ${PUBLIC_URL}/mcp — RugRadar tools rug_check, honeypot_check (${RUG_PRICE} each), token_price (${TOKEN_PRICE}), watch_token ($0.05/24h, $0.10/48h), list_watches and cancel_watch (free with a credit key). HTTP-only (not in MCP): /report, /read, /news, /token-safety. Bots & agents guide: ${PUBLIC_URL}/rugradar#agents`,
+      `- MCP (streamable HTTP): ${PUBLIC_URL}/mcp — RugRadar tools rug_check, honeypot_check (${RUG_PRICE} each), token_price (${TOKEN_PRICE}), watch_token ($0.05/24h, $0.10/48h), list_watches and cancel_watch (free with a credit key). HTTP-only (not in MCP): /report, /read, /news, /token-safety. Agent guide: ${PUBLIC_URL}/skill.md and ${PUBLIC_URL}/agents.md; also ${PUBLIC_URL}/rugradar#agents`,
       `- GET ${PUBLIC_URL}/credits/buy?credits=N  (${RUG_PRICE} each) — RugRadar prepaid credits (1-1000): returns a secret key once; send X-RugRadar-Key to skip x402 (~1.8x faster). Balance: /credits/balance.`,
       "",
       "## How to pay",
@@ -1580,6 +1580,8 @@ async function main() {
       `- ${PUBLIC_URL}/stats — traffic: unpaid 402s, paid calls and unique visitors per route (bots and crawlers split out)`,
       `- ${PUBLIC_URL}/openapi.json — OpenAPI 3.1 with x-payment-info`,
       `- ${PUBLIC_URL}/.well-known/x402 — x402 discovery document`,
+      `- ${PUBLIC_URL}/llms.txt — agent-readable usage guide`,
+      `- ${PUBLIC_URL}/skill.md and ${PUBLIC_URL}/agents.md — RugRadar install guide for AI agents (same markdown at both paths)`,
       `- ${PUBLIC_URL}/health — status`,
       `- ${PUBLIC_URL}/rugradar — free RugRadar landing page (human UI + free checks); for bots & agents: ${PUBLIC_URL}/rugradar#agents; add the free card to your bot or site: ${PUBLIC_URL}/rugradar#developers`,
       "",
@@ -1638,7 +1640,7 @@ async function main() {
     payToSolana,
     openapi: `${PUBLIC_URL}/openapi.json`,
     llms: `${PUBLIC_URL}/llms.txt`,
-    free: ["/health", "/stats", "/examples", "/a/<id>", "/llms.txt", "/openapi.json", "/.well-known/x402", "/robots.txt", "/rugradar", "/credits/balance"],
+    free: ["/health", "/stats", "/examples", "/a/<id>", "/llms.txt", "/skill.md", "/agents.md", "/openapi.json", "/.well-known/x402", "/robots.txt", "/rugradar", "/credits/balance"],
   });
   // 402 Index domain verification (public SHA-256 hash of the claim token, not the token itself)
   app.get("/.well-known/402index-verify.txt", (_req, res) =>
@@ -1686,6 +1688,8 @@ async function main() {
       paths: {
         "/health": { get: { operationId: "health", summary: "Service status (free)", security: [], responses: { "200": { description: "Status JSON" } } } },
         "/llms.txt": { get: { operationId: "llmsTxt", summary: "Agent-readable usage guide (free)", security: [], responses: { "200": { description: "text/plain" } } } },
+        "/skill.md": { get: { operationId: "skillMd", summary: "RugRadar install guide for AI agents (free, text/markdown)", security: [], responses: { "200": { description: "text/markdown" } } } },
+        "/agents.md": { get: { operationId: "agentsMd", summary: "RugRadar install guide for AI agents (free, same as /skill.md)", security: [], responses: { "200": { description: "text/markdown" } } } },
         "/report": {
           get: {
             operationId: "researchBrief",

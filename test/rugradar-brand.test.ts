@@ -13,4 +13,4 @@ test("RugRadar icons exist and both RugRadar listings use the RugRadar icon", ()
   assert.doesNotMatch(src, /Not financial advice/);
   assert.doesNotMatch(src, /afford to lose/);
 });
-test("RugRadar price is $0.02", () => { assert.match(src, /const RUG_PRICE = process\.env\.RUG_PRICE \?\? "\$0\.02";/); });
+test("RugRadar price is $0.01", () => { assert.match(src, /const RUG_PRICE = process\.env\.RUG_PRICE \?\? "\$0\.01";/); });
