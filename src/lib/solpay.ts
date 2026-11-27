@@ -14,7 +14,7 @@ import type { Express, Request, Response } from "express";
 import { qrSvg } from "./qr.js";
 
 export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-export const PACKS: Record<string, { credits: number; usd: number }> = { "10": { credits: 10, usd: 0.1 }, "50": { credits: 50, usd: 0.4 }, "200": { credits: 200, usd: 1.5 } };
+export const PACKS: Record<string, { credits: number; usd: number }> = { "1": { credits: 1, usd: 0.01 }, "10": { credits: 10, usd: 0.1 }, "50": { credits: 50, usd: 0.4 }, "200": { credits: 200, usd: 1.5 } };
 export const SOL_TOLERANCE = 0.005; // accept up to 0.5% below the quoted lamports (rounding in wallets)
 export const ORDER_TTL_S = 20 * 60; // quote valid 20 min; a payment landing inside the window is honored at claim time later
 export type Currency = "usdc" | "sol";

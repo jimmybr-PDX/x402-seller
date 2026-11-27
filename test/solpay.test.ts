@@ -96,3 +96,14 @@ test("QR route: GET /rugradar/pay/qr.svg serves image/svg+xml for a valid order 
     const cfg = await (await fetch(`${base}/rugradar/pay/config`)).json() as any; assert.equal(cfg.recipient, TO);
   } finally { srv.closeAllConnections(); srv.close(); }
 });
+
+test("1-credit pack is $0.01 USDC and can be claimed once", async () => {
+  const txs: Record<string, any> = {}, byRef: Record<string, string[]> = {}; const d = deps(txs, byRef);
+  const o = await createOrder(d, "1", "usdc");
+  assert.equal(o.credits, 1); assert.equal(o.priceUsd, "0.01"); assert.equal(o.amount, "0.01"); assert.equal(o.pack, "1");
+  assert.match(o.solanaPayUrl, new RegExp(`^solana:${TO}\\?amount=0\\.01&spl-token=${USDC_MINT}&reference=${o.reference}`));
+  const s = sig(); txs[s] = usdcTx(o.reference, TO, "0", "10000"); byRef[o.reference] = [s];
+  const k = await claim(d, o.order); assert.equal(k.credits, 1); assert.equal(k.signature, s); assert.equal(d.issued(), 1);
+  assert.equal(await code(claim(d, o.order)), "already_redeemed");
+  const sol = await createOrder(d, "1", "sol"); assert.equal(sol.credits, 1); assert.equal(sol.amount, "0.00005"); // $0.01 / $200
+});

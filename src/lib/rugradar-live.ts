@@ -18,9 +18,9 @@ function ago(t){var s=Math.max(0,(Date.now()-Date.parse(t))/1000);if(!isFinite(s
 function usd(n){return n==null?'':n>=1000?'$'+(n/1000).toFixed(1).replace(/\.0$/,'')+'k':'$'+(n>=10?Math.round(n):n.toFixed(2))}
 function pc(n){return n==null?'?':(n<0.01&&n>0?'<0.01':n.toFixed(n<10?2:1).replace(/\.?0+$/,'')||'0')+'%'}
 function blk(title,sub){var b=el('div','lb'),h=el('h3',null,title);if(sub)h.append(el('small',null,sub));b.append(h);return b}
-function row(w,kind){if(!w||!B58.test(String(w.address)))return null;var unk=w.status==='unknown',sold=w.status==='sold',r=el('div','wr '+(sold?'s':unk?'u':'h')),a=el('a',null,sh(w.address));a.href='https://solscan.io/account/'+w.address;a.target='_blank';a.rel='noopener noreferrer nofollow';
+function row(w,kind){if(!w||!B58.test(String(w.address)))return null;var unk=w.status==='unknown',sold=w.status==='sold',gone=sold||w.holdingPct===0,r=el('div','wr '+(gone?'s':unk?'u':'h')),a=el('a',null,sh(w.address));a.href='https://solscan.io/account/'+w.address;a.target='_blank';a.rel='noopener noreferrer nofollow';
  var l=el('span');l.append(a);if(kind&&w.tags&&w.tags.length)l.append(el('span','kd',w.tags.join('/')));
- var r2=el('span',null,unk?'':sold?(w.holdingPct?pc(w.holdingPct)+' left':''):pc(w.holdingPct)+' of supply');r2.append(el('span','tg',sold?'Sold':unk?'Status unavailable':'Holding'));r.append(l,r2);return r}
+ var rem=(w.holdingPct?pc(w.holdingPct):'0%')+' remaining',r2=el('span',null,unk?'':gone?((kind?'Sold':'Dev sold')+' / '+rem):pc(w.holdingPct)+' of supply');r2.append(el('span','tg',gone?'Sold':unk?'Status unavailable':'Holding'));r.append(l,r2);return r}
 function fills(title,xs){if(!Array.isArray(xs)||!xs.length)return null;var b=blk(title);xs.forEach(function(f){var t=el('div','tr'),v=f.usd!=null?usd(f.usd):'',s=f.sol!=null?f.sol+' SOL':'';t.append(el('span',null,[s,v&&s?'('+v+')':v].filter(Boolean).join(' ')),el('i',null,ago(f.at)));b.append(t)});return b}
 window.RRLive=function(j){var L=j&&j.liveReport;if(!L)return null;var box=el('div','lv'),n=0;
  try{if(!document.getElementById('lvcss')){var s=el('style',null,${JSON.stringify(LIVE_CSS)});s.id='lvcss';document.head.append(s)}}catch(e){}

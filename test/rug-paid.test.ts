@@ -38,3 +38,10 @@ test("live.js: parses, no wallet names, advice-free", () => {
   new Function(LIVE_JS);
   assert.ok(!/\b(buy now|sell now|safe)\b/i.test(LIVE_JS));
 });
+
+test("paid report badge: 0% or sold reads Dev sold / 0% remaining, not Holding 0% of supply", () => {
+  assert.ok(LIVE_JS.includes("gone=sold||w.holdingPct===0"), "0% holding is treated as sold");
+  assert.ok(LIVE_JS.includes("(kind?'Sold':'Dev sold')+' / '+rem"), "dev row uses Dev sold / remaining wording; snipers say Sold");
+  assert.ok(LIVE_JS.includes("(w.holdingPct?pc(w.holdingPct):'0%')+' remaining'"), "zero remaining is shown as 0% remaining");
+  assert.ok(!LIVE_JS.includes("sold?(w.holdingPct?pc(w.holdingPct)+' left':''):pc(w.holdingPct)+' of supply'"), "old Holding 0% of supply label is gone");
+});
