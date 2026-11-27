@@ -68,6 +68,7 @@ test("GET /skill.md and /agents.md return the same markdown at $0.01", async () 
       const res = await fetch(`${base}${path}`);
       assert.equal(res.status, 200, path);
       assert.equal(res.headers.get("content-type"), SKILL_CONTENT_TYPE, path);
+      assert.equal(res.headers.get("cache-control"), "public, max-age=3600", path);
       const body = await res.text();
       assert.equal(body, want, path);
       assert.match(body, /\$0\.01/);

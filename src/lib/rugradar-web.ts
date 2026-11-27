@@ -848,7 +848,7 @@ ${v.facts.length ? `<p class="facts">${escA(v.facts.slice(0, 3).join(" · "))}</
 }
 export function registerRugradarWeb(app: Express, d: WebDeps) {
   const skillMd = rugradarAgentGuide(d.publicUrl, d.priceUsd);
-  const sendSkill = (_req: Request, res: Response) => { res.set("Content-Type", SKILL_CONTENT_TYPE).send(skillMd); };
+  const sendSkill = (_req: Request, res: Response) => { res.set("Content-Type", SKILL_CONTENT_TYPE).set("Cache-Control", "public, max-age=3600").send(skillMd); };
   app.get("/skill.md", sendSkill);
   app.get("/agents.md", sendSkill);
   const htmlBase = page(d), htmlPromo = page(d, true);
@@ -961,7 +961,7 @@ export function registerRugradarWeb(app: Express, d: WebDeps) {
   });
   app.get("/sitemap.xml", (_req, res) => {
     const now = new Date().toISOString().slice(0, 10);
-    res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${["/rugradar", "/", "/examples", "/skill.md", "/agents.md", "/llms.txt"].map((p) => `<url><loc>${d.publicUrl}${p}</loc><lastmod>${now}</lastmod></url>`).join("\n")}\n</urlset>\n`);
+    res.set("Cache-Control", "public, max-age=3600").type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${["/rugradar", "/", "/examples", "/skill.md", "/agents.md", "/llms.txt"].map((p) => `<url><loc>${d.publicUrl}${p}</loc><lastmod>${now}</lastmod></url>`).join("\n")}\n</urlset>\n`);
   });
   app.get("/mcp", (_req, res) => { res.status(405).set("Allow", "POST").json({ error: "use POST (MCP streamable HTTP, JSON responses)", tools: mcpTools(d).map((x) => x.name) }); });
   app.post("/mcp", async (req: Request, res: Response) => {

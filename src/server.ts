@@ -68,6 +68,9 @@ import { statsHtml } from "./lib/stats-page.js";
 import { mountTvWebhook, attachTvAlerts, holdTvAlerts } from "./lib/tv-webhook.js";
 import { answerHtml, deleteAnswer, getAnswer, newAnswerId, pinAnswer, saveAnswer } from "./lib/answers.js";
 import { POINTER_PATHS, SEE_ALSO_PATHS, pointerPaywallHtml, queryFromUnpaidContext, seeAlsoLine, tokenFromQuery, withSeeAlso } from "./lib/rugradar-pointer.js";
+import { gzipMiddleware } from "./lib/gzip.js";
+import { robotsTxt } from "./lib/robots.js";
+import { paymentsSnapshot } from "./lib/payments-snapshot.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -283,6 +286,8 @@ async function main() {
   // Render terminates TLS at the edge; trust proxy so 402 resource URLs become https://.
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
+  // Gzip text/JSON/HTML when the client asks (including unpaid 402s; Cloudflare only compresses 2xx).
+  app.use(gzipMiddleware);
   // Oct 15: answer the keep-awake probe before any other middleware, so it never waits on body parsing, tracking or payments.
   startLagWatch(); // Oct 18: warn in the log when the event loop is blocked over 1 s (Render health checks time out at 5 s)
   app.get("/health", (_req, res) => { res.set("Cache-Control", "no-store").type("application/json").end('{"ok":true}'); }); // Oct 15: answered before all other middleware (keep-awake probe); Oct 18: no JSON work at all
@@ -290,7 +295,7 @@ async function main() {
   app.use(express.json());
 
   // Interest tracker (counts only; visitor = salted hash of IP+UA, raw IPs never stored).
-  const FREE_LABELS = new Set(["/", "/health", "/stats", "/examples", "/llms.txt", "/skill.md", "/agents.md", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png", "/favicon.ico", "/rugradar", "/credits/balance", "/sitemap.xml", "/mcp", "/rugradar/api/check", "/rugradar/api/recent"]);
+  const FREE_LABELS = new Set(["/", "/health", "/stats", "/stats/payments", "/examples", "/llms.txt", "/skill.md", "/agents.md", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png", "/favicon.ico", "/rugradar", "/credits/balance", "/sitemap.xml", "/mcp", "/rugradar/api/check", "/rugradar/api/recent"]);
   app.use((req: Request, res: Response, next: NextFunction) => {
     const method = req.method;
     // HEAD on a paid route: answer like GET without payment (402 + PAYMENT-REQUIRED, no body) instead of
@@ -1534,8 +1539,13 @@ async function main() {
     if (wantsHtml) res.type("html").send(statsHtml(data as Parameters<typeof statsHtml>[0], Object.keys(PAID)));
     else res.json(data);
   });
+  // Slim paid-counter feed for the box health monitor (avoids downloading the full /stats dump every 5 min).
+  app.get("/stats/payments", (_req, res) => {
+    res.set("Cache-Control", "no-store").json(paymentsSnapshot(Object.keys(PAID)));
+  });
 
   app.get("/", (req, res) => {
+    res.set("Cache-Control", "public, max-age=300");
     if ((req.headers.accept ?? "").includes("text/html")) {
       res.type("text/plain").send(llmsTxt());
       return;
@@ -1590,10 +1600,10 @@ async function main() {
       "",
     ].join("\n");
 
-  app.get("/llms.txt", (_req, res) => res.type("text/plain").send(llmsTxt()));
+  app.get("/llms.txt", (_req, res) => res.set("Cache-Control", "public, max-age=3600").type("text/plain").send(llmsTxt()));
 
   app.get("/robots.txt", (_req, res) => {
-    res.type("text/plain").send(["User-agent: *", "Allow: /", "Disallow: /report", "Disallow: /read", "Disallow: /check", "Disallow: /news", "Disallow: /price", "Disallow: /solana-price", "Disallow: /balance", "Disallow: /tx", "Disallow: /gas", "Disallow: /token", "Disallow: /search", "Disallow: /rug-check", "Disallow: /token-safety", "Disallow: /honeypot-check", "Disallow: /credits/", "Disallow: /mcp", "Disallow: /rugradar/api/", `Sitemap: ${PUBLIC_URL}/sitemap.xml`, ""].join("\n"));
+    res.set("Cache-Control", "public, max-age=3600").type("text/plain").send(robotsTxt(PUBLIC_URL));
   });
 
   const ICON_PNG = (() => { try { return fs.readFileSync(path.join(__dirname, "assets", "icon.png")); } catch { return null; } })();
@@ -1640,14 +1650,14 @@ async function main() {
     payToSolana,
     openapi: `${PUBLIC_URL}/openapi.json`,
     llms: `${PUBLIC_URL}/llms.txt`,
-    free: ["/health", "/stats", "/examples", "/a/<id>", "/llms.txt", "/skill.md", "/agents.md", "/openapi.json", "/.well-known/x402", "/robots.txt", "/rugradar", "/credits/balance"],
+    free: ["/health", "/stats", "/stats/payments", "/examples", "/a/<id>", "/llms.txt", "/skill.md", "/agents.md", "/openapi.json", "/.well-known/x402", "/robots.txt", "/rugradar", "/credits/balance"],
   });
   // 402 Index domain verification (public SHA-256 hash of the claim token, not the token itself)
   app.get("/.well-known/402index-verify.txt", (_req, res) =>
     res.type("text/plain").send(process.env.INDEX402_VERIFY_HASH ?? "95632cdce38229948423be81cdaefe38e617bdffe5177f3ff38d3439ff63ee65"),
   );
-  app.get("/.well-known/x402", (_req, res) => res.json(wellKnown()));
-  app.get("/.well-known/x402.json", (_req, res) => res.json(wellKnown()));
+  app.get("/.well-known/x402", (_req, res) => res.set("Cache-Control", "public, max-age=300").json(wellKnown()));
+  app.get("/.well-known/x402.json", (_req, res) => res.set("Cache-Control", "public, max-age=300").json(wellKnown()));
 
   app.get("/openapi.json", (_req, res) => {
     const qp = (name: string, schema: any, required: boolean, description: string) => ({ name, in: "query", required, description, schema });
@@ -1675,7 +1685,7 @@ async function main() {
       },
     });
     const r = routes as any;
-    res.json({
+    res.set("Cache-Control", "public, max-age=3600").json({
       openapi: "3.1.0",
       info: {
         title: SERVICE_NAME,
