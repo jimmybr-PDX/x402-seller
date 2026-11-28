@@ -44,7 +44,7 @@ test("v5 page: paste box, Auto chip, free line, credits copy, folded agents with
     const { srv, base } = await start(() => deadFull(), sw);
     try {
       const h = await (await fetch(`${base}/rugradar`)).text();
-      for (const s of ['id="tok"', '<option value="auto">Auto', "Free \u00b7 no sign-up", "Prepaid credits finish checks ~2x faster", "Buy credits: results ~2x faster", "don't wait on a payment for each check (measured ~1.8x faster)", "Strong rug warning signs.", "No danger warnings found.", "No socials found", "More warnings", 'id="agents"', 'id="developers"', "For developers", "#developers", "/rugradar/embed?token=", "/rugradar/embed.json?token=", "Danger warnings only", "Full report also shows: live chart, dev activity, biggest buys/sells.", "or buy a credit pack (10, 50, or 200)", "Checks finish faster with credits \u00b7 buy once, skip the payment wait"]) assert.ok(h.includes(s), s);
+      for (const s of ['id="tok"', '<option value="auto">Auto', "Free \u00b7 no sign-up", "Credit packs", "Buying lots of checks? Credit packs", "id=\"credits\"", "id=\"wpayHome\"", "Strong rug warning signs.", "No danger warnings found.", "No socials found", "More warnings", 'id="agents"', 'id="developers"', "For developers", "#developers", "/rugradar/embed?token=", "/rugradar/embed.json?token=", "Danger warnings only", "Full report also shows: live chart, dev activity, biggest buys/sells.", "Buying lots of checks? Credit packs \u2192"]) assert.ok(h.includes(s), s);
       assert.ok(!/guarantee/i.test(h), "page has no guarantee wording");
       assert.equal((h.match(/<select id="chain"/g) ?? []).length, 1, "a single chain chip");
       assert.ok(!/id="watch"|More tools|Watch this token/.test(h), "no Watch feature or paid tool list in this release");
@@ -106,7 +106,7 @@ test("free check page: free line under the ring, no quota line above, quiet cred
   try {
     const h = await (await fetch(`${base}/rugradar`)).text();
     assert.match(h, /<small id="quota"><\/small>/); assert.ok(h.includes("Danger warnings only \u00b7 based on public on-chain data"));
-    assert.match(h, /class="linkbtn" id="buyc"/); assert.match(h, /Prepaid credits finish checks ~2x faster/); assert.match(h, /<details class="keyd" id="keyd"><summary>Have a credit key\?<\/summary>/);
+    assert.match(h, /<h2 id="credits">Credit packs<\/h2>/); assert.ok(!/2x faster|measured ~1\.8x faster|Checks finish faster with credits/.test(h)); assert.match(h, /<details class="keyd" id="keyd"><summary>Have a credit key\?<\/summary>/);
     assert.ok(!h.includes("dev history"));
     const e = await (await fetch(`${base}/rugradar/embed?token=${CLEAN}`)).text();
     assert.match(e, /class="gauge g-medium"/); assert.match(e, />CAUTION</); assert.ok(!e.includes("LOW RISK")); assert.match(e, /Free check: basic warnings only\. Full report unlocks more\./); assert.match(e, /Unlock live chart \+ full report - \$0\.01 \u203a/);
@@ -133,12 +133,12 @@ test("page ships the share buttons for free AND full results, free-only auto-run
   try {
     const h = await (await fetch(`${base}/rugradar?token=${DEAD}&s=x2`)).text();
     for (const s of ["Share on X", "https://x.com/intent/post?text=", "Copy report", "Copy link", "Copy embed", "function rrEmbed", "Copy link (Discord)", "Copy embed (website)", "1 free check used today, full report is $", "For bots & tools:", "MCP, x402, or a credit key", "function shotMode", "navigator.share", "execCommand('copy')", "shareBar(j,ws)", "f.dataset.free", "preview-x402-v2.png", 'content="1200"', 'content="630"', 'id="checksrun"']) assert.ok(h.includes(s), s);
-    assert.ok(h.includes("lockedPanel('','Unlock for $'+CFG.p,'or buy a credit pack (10, 50, or 200)')"), "unlock CTA keeps $0.01 primary and demotes credit packs");
+    assert.ok(h.includes("lockedPanel('','Unlock for $'+CFG.p,'Buying lots of checks? Credit packs \u2192')"), "unlock CTA keeps $0.01 primary and demotes credit packs to one muted line");
     assert.ok(h.includes("function unlockPay(st)") && h.includes("buyPack('1',cur,st)"), "Unlock for $0.01 starts the 1-credit Solana checkout");
     assert.ok(h.includes("Unlocking the full report") && h.includes("f.dispatchEvent(new Event('submit',{cancelable:true}))") && h.includes("tok').value.trim()"), "pollClaim auto-reruns /rug-check for the token on screen");
     assert.ok(h.includes("if(full&&j.liveReport)dt.open=true") && !h.includes("&&DESK)dt.open"), "paid chart and full report open on mobile too");
     assert.ok(h.includes("el('div','tease',j.lockedTeaser||'Full report')"), "N more warnings teaser kept");
-    assert.ok(h.includes("if(!full){c.append(el('div','unlockwhat','Full report also shows: live chart, dev activity, biggest buys/sells.'));c.append(lockedPanel('','Unlock for $'+CFG.p,'or buy a credit pack (10, 50, or 200)'));c.append(el('div','buyline','Checks finish faster with credits \u00b7 buy once, skip the payment wait'));c.append(el('div','tease',j.lockedTeaser||'Full report'));c.append(el('div','note','1 free check used today, full report is $'+CFG.p));c.append(shareBar(j,ws))}"), "share bar sits below the Unlock CTA on the free view, with the free-limit line");
+    assert.ok(h.includes("if(!full){c.append(el('div','unlockwhat','Full report also shows: live chart, dev activity, biggest buys/sells.'));c.append(lockedPanel('','Unlock for $'+CFG.p,'Buying lots of checks? Credit packs \u2192'));c.append(el('div','tease',j.lockedTeaser||'Full report'));c.append(el('div','note','1 free check used today, full report is $'+CFG.p));c.append(shareBar(j,ws))}"), "share bar sits below the Unlock CTA on the free view, with the free-limit line");
     assert.ok(/else if\(Array\.isArray\(j\.checks\)\)\{const fr=rrFree\(j\.checks,CFG\.lim,CFG\.warn\);c\.append\(shareBar\(\{riskScore:fr\.sc,riskLevel:fr\.lv,token:j\.token,chain:j\.chain,facts:fa\},fr\.ws\)\)\}/.test(h), "full-report branch shows the share bar, built from the free score and warnings only");
     assert.ok(h.includes('"lim":["mint_authority","freeze_authority","mint_function","holders","liquidity","age","dead_token","sell_route","sell_impact","honeypot","tax","heavy_selling","thin_trading","liquidity_vs_mcap","permanent_delegate","balance_mutable","owner_change_balance","transfer_control","fake_token","transfer_fee","owner_control","only_buys","selfdestruct","airdrop_scam","cannot_buy"]'), "page config carries the free check list");
     assert.ok(Buffer.byteLength(h) < 68_000, `page ${Buffer.byteLength(h)} bytes`);

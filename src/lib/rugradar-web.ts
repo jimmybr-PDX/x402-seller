@@ -293,7 +293,7 @@ button.tease{cursor:pointer;font:inherit;font-size:13px;font-weight:700}
 .lock{margin-top:8px;padding:10px 12px;border-radius:12px;background:#0E1528;border:1px dashed #4a5a8a;font-size:14px;line-height:1.35}
 .lock .btn{width:100%;margin-top:8px;padding:8px 12px;font-size:14px}.sec{background:transparent;border:1px solid rgba(56,189,248,.55);color:#9fdcf9}
 .unlockwhat{font-size:14px;margin:8px 0 2px;line-height:1.35}
-.lock .credsec{display:block;width:100%;margin-top:8px;text-align:center;font-size:13px;color:var(--mut)}
+.lock .credsec{display:block;width:100%;margin-top:6px;text-align:center;font-size:12px;font-weight:500;color:var(--mut)}
 .disc{font-size:12px;color:var(--mut);margin-top:10px;text-align:center}
 .buyline{font-size:12px;color:var(--mut);text-align:center;margin-top:6px}#swapbox{margin:10px 0 4px}#swapbox small{display:block;text-align:center}
 .card h2,.card h3{margin:0 0 6px;font-size:17px}.mut{color:var(--mut);font-size:14px;margin:0 0 10px}.note{font-size:13px;color:var(--mut);margin:8px 0 10px}
@@ -455,7 +455,7 @@ function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings
  if(typeof SWAPHOOK==='function'&&j.token===t&&shownLevel(j,ws)==='low'){const sb=SWAPHOOK(j);if(sb)c.append(sb)}
  const wc=el('div','wcards');ws.slice(0,3).forEach(w=>wc.append(card(w,j,true)));if(ws.length)c.append(wc);
  const full=!(j.report==='limited'&&j.checks);
- if(!full){c.append(el('div','unlockwhat','Full report also shows: live chart, dev activity, biggest buys/sells.'));c.append(lockedPanel('','Unlock for $'+CFG.p,'or buy a credit pack (10, 50, or 200)'));c.append(el('div','buyline','Checks finish faster with credits · buy once, skip the payment wait'));c.append(el('div','tease',j.lockedTeaser||'Full report'));c.append(el('div','note','1 free check used today, full report is $'+CFG.p));c.append(shareBar(j,ws))}
+ if(!full){c.append(el('div','unlockwhat','Full report also shows: live chart, dev activity, biggest buys/sells.'));c.append(lockedPanel('','Unlock for $'+CFG.p,'Buying lots of checks? Credit packs →'));c.append(el('div','tease',j.lockedTeaser||'Full report'));c.append(el('div','note','1 free check used today, full report is $'+CFG.p));c.append(shareBar(j,ws))}
  else if(Array.isArray(j.checks)){const fr=rrFree(j.checks,CFG.lim,CFG.warn);c.append(shareBar({riskScore:fr.sc,riskLevel:fr.lv,token:j.token,chain:j.chain,facts:fa},fr.ws))}
  const dt=el('details','quiet det');dt.id='more';if(full&&j.liveReport)dt.open=true;dt.append(el('summary',null,'Show details'));const sub=el('div','sub');dt.append(sub);
  if(Array.isArray(j.freeFacts)&&j.freeFacts.length)sub.append(el('div','ffl',j.freeFacts.join(' \u00b7 ')));
@@ -478,7 +478,7 @@ function recentLoad(){const k=RK();RS.hidden=true;if(!k)return;fetch('/rugradar/
 RS.addEventListener('change',async()=>{const v=RS.value;if(!v)return;const p=v.split('|'),k=RK();RS.selectedIndex=0;waitCard();try{const r=await fetch('/rugradar/api/recent/report?chain='+encodeURIComponent(p[0])+'&token='+encodeURIComponent(p[1]),{headers:{'X-RugRadar-Key':k}}),j=await r.json().catch(()=>({}));if(!r.ok){msgCard(j.message||'Saved report not found.');recentLoad();return}$('tok').value=p[1];if($('chain').querySelector('option[value="'+p[0]+'"]'))$('chain').value=p[0];render(j,p[1]);q.textContent='Saved report from '+new Date(j.savedAt).toLocaleDateString()+'. No credit used.';if(j.credits_remaining!=null)pill(j.credits_remaining)}catch(e){msgCard('Network error, try again.')}});
 $('key').addEventListener('change',recentLoad);
 function pill(n){$('credpill').textContent=(n==null?'Credits':'Credits: '+n)+' \u00b7 Buy'}
-$('credpill').addEventListener('click',e=>{e.preventDefault();openBuy(true)});$('buyc').addEventListener('click',()=>openBuy(false));
+$('credpill').addEventListener('click',e=>{e.preventDefault();openBuy(true)});
 function openDev(){const d=$('developers');if(d)d.open=true}
 document.querySelectorAll('a[href="#agents"],a[href="#developers"]').forEach(a=>a.addEventListener('click',openDev));
 const od=()=>{if(location.hash==='#developers'||location.hash==='#agents')openDev()};od();addEventListener('hashchange',od);
@@ -492,7 +492,6 @@ keyUI();recentLoad();walLoad();document.getElementById('wpayHome').append(wallet
 
 function page(d: WebDeps, promo = false) {
   const U = d.publicUrl, p = d.priceUsd, FC = promo ? FREE_COPY_PROMO : FREE_COPY;
-  const fast = d.speed ? `~${Math.round(d.speed.x)}x` : null;
   const faq = [
     ["Is RugRadar free?", `People get ${FC} ${promo ? "The free full report includes the live chart, dev and sniper wallets, biggest buys and sells and the sell test." : "The free check gives a 0-100 risk score with plain danger warnings and basic checks only; the full report adds the live chart, dev and sniper wallets, biggest buys and sells and the sell test."} Prepaid credits cost $${p} per full report (buy 1 to 1,000). Agents pay $${p} per call via x402 or use a credit key.`],
     ["Which chains does the rug check support?", "Solana (including pump.fun tokens), BNB Chain (four.meme), Base, Ethereum and Arbitrum. Chain is detected from the address."],
@@ -528,11 +527,9 @@ ${CSS_PAGE}</style></head><body><div class="wrap">
 </section>
 <div class="grid" style="margin-top:14px">
 <main><div id="out" aria-live="polite"></div></main>
-<aside><section class="card cred" aria-label="Prepaid credits">
-<h2 id="credits">${fast ? `Prepaid credits finish checks ${fast} faster` : "Prepaid credits"}</h2>
-<p class="mut">$${p} per full report \u00b7 buy 1 to 1,000 \u00b7 no account.</p>
-<button class="linkbtn" id="buyc" type="button">${fast ? `Buy credits: results ${fast} faster` : "Buy credits"}</button>
-<p class="note">${d.speed ? `With credits you don't wait on a payment for each check (measured ~${d.speed.x}x faster).` : "With credits you don't wait on a payment for each check."}</p>
+<aside><section class="card cred" aria-label="Credit packs">
+<h2 id="credits">Credit packs</h2>
+<p class="mut">$${p} per full report \u00b7 10, 50, or 200 \u00b7 no account.</p>
 <div id="buyx" hidden><div id="wpayHome"></div><small class="mut">Agents and scripts: pay once with any x402 client: <code>GET ${U}/credits/buy?credits=${UNLOCK_CREDITS}</code> ($${(UNLOCK_CREDITS * Number(p)).toFixed(2)}). You get a secret key once; paste it under "Have a credit key?" or send it as <code>X-RugRadar-Key</code>.</small></div>
 <div style="margin-top:6px;font-size:13px"><a href="#agents">For developers \u203a</a></div>
 </section></aside>

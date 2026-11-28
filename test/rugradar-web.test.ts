@@ -39,7 +39,7 @@ test("page has SEO title, description, JSON-LD; sitemap lists /rugradar", async 
   try {
     const h = await (await fetch(`${base}/rugradar`)).text();
     assert.match(h, /<title>RugRadar: Free Solana Rug Check & Honeypot Checker/); assert.match(h, /name="description"/); assert.match(h, /application\/ld\+json/); assert.match(h, /FAQPage/);
-    assert.match(h, /Danger warnings only/); assert.doesNotMatch(h, /Do your own research/); assert.doesNotMatch(h, /Not financial advice/); assert.match(h, /1\.8x faster/); assert.match(h, /1 free (limited check|full report) every day per visitor/); assert.match(h, /function lockedPanel/); assert.match(h, /function walletPacks/); assert.match(h, /\/rugradar\/pay\/config/); assert.match(h, /j\.report==='limited'&&j\.checks/); assert.match(h, /Unlock full report \u2014 10 credits for \$0\.10/); assert.match(h, /credits\/buy\?credits=10/); assert.ok(!/scammer/i.test(h));
+    assert.match(h, /Danger warnings only/); assert.doesNotMatch(h, /Do your own research/); assert.doesNotMatch(h, /Not financial advice/); assert.match(h, /Credit packs/); assert.match(h, /Buying lots of checks\? Credit packs \u2192/); assert.match(h, /1 free (limited check|full report) every day per visitor/); assert.match(h, /function lockedPanel/); assert.match(h, /function walletPacks/); assert.match(h, /\/rugradar\/pay\/config/); assert.match(h, /j\.report==='limited'&&j\.checks/); assert.match(h, /Unlock full report \u2014 10 credits for \$0\.10/); assert.match(h, /credits\/buy\?credits=10/); assert.ok(!/scammer/i.test(h));
     assert.match(await (await fetch(`${base}/sitemap.xml`)).text(), /\/rugradar<\/loc>/);
   } finally { srv.closeAllConnections(); srv.close(); }
 });
@@ -95,7 +95,8 @@ test("buy box: Phantom/Solflare packs live in #credits (one copy), SOL default, 
   try {
     const h = await (await fetch(`${base}/rugradar`)).text();
     const credits = h.slice(h.indexOf('<h2 id="credits">'), h.indexOf('<h2 id="credits">') + 1000);
-    assert.match(credits, /Buy credits: results ~2x faster.*measured ~1\.8x faster.*<div id="wpayHome"><\/div>.*x402 client/s, "pack box sits in Buy credits, x402 text kept for agents");
+    assert.match(credits, /<h2 id="credits">Credit packs<\/h2>.*<div id="wpayHome"><\/div>.*x402 client/s, "pack box sits in Credit packs, x402 text kept for agents");
+    assert.ok(!/2x faster|measured ~1\.8x faster/.test(h), "2x-faster credits pitch is gone");
     assert.match(h, /document\.getElementById\('wpayHome'\)\.append\(walletPacks\(\)\)/); assert.equal((h.match(/append\(walletPacks\(\)\)/g) ?? []).length, 1, "only one pack box (no duplicate ids)");
     assert.match(h, /\[\['sol','SOL'\],\['usdc','USDC'\]\]/, "SOL first = default, USDC selectable");
     assert.match(h, /id="keybox" hidden/); assert.match(h, /localStorage\.setItem\('rr_key',k\)/); assert.match(h, /bt\('Show'/); assert.match(h, /bt\('Copy'/); assert.match(h, /bt\('Forget'/); assert.match(h, /KS\.set\(kk\)/);
