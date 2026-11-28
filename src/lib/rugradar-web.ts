@@ -1,4 +1,4 @@
-import { countRugradar, countRugradarRejected } from "./rugradar-counts.js";
+import { countRugradar, countRugradarRejected, ptDay, publicChecksRun } from "./rugradar-counts.js";
 /**
  * RugRadar web surface: branded landing page with a free web checker (1 free limited check per visitor, limited by IP
  * and cookie), an embeddable result card (/rugradar/embed), sitemap.xml, and an MCP server (streamable HTTP, JSON responses) at /mcp.
@@ -214,11 +214,11 @@ export async function detectEvmChain(token: string): Promise<string> {
   return best;
 }
 
-// ---------- free-check limiter (in memory; resets daily and on deploy) ----------
+// ---------- free-check limiter (in memory; resets at midnight America/Los_Angeles and on deploy) ----------
 const byIp = new Map<string, number>(), byCookie = new Map<string, number>(), lastAt = new Map<string, number>();
 let day = "", dayTotal = 0;
 export function freeAllowance(ip: string, vid: string, now = Date.now()): { ok: boolean; left: number; reason?: string } {
-  const d = new Date(now).toISOString().slice(0, 10);
+  const d = ptDay(new Date(now));
   if (d !== day) { day = d; dayTotal = 0; byIp.clear(); byCookie.clear(); lastAt.clear(); }
   if (now - (lastAt.get(ip) ?? 0) < 2500) return { ok: false, left: -1, reason: "slow_down" };
   const used = Math.max(byIp.get(ip) ?? 0, byCookie.get(vid) ?? 0);
@@ -325,6 +325,7 @@ footer{color:var(--mut);font-size:12px;padding:8px 0 40px}
 
 /** Pure share-text helpers (also unit-tested). Only the free score, label, warning titles and address ever go in. */
 export const SHARE_JS = CLEAN_JS + `const RR_SOFT=${JSON.stringify(SOFT_CHECKS)},RR_SOFT_CAP=${SOFT_CAP},RR_DEAD=${DEAD_FLOOR};\n` + String.raw`function rrLink(o,a,c){c=c||(/^0x/i.test(a)?'base':'solana');return o+'/rugradar/c/'+encodeURIComponent(c)+'/'+encodeURIComponent(a)}
+function rrEmbed(o,a,c){c=c||(/^0x/i.test(a)?'base':'solana');return '<iframe src="'+o+'/rugradar/embed?token='+encodeURIComponent(a)+'&chain='+encodeURIComponent(c)+'" width="380" height="420" style="border:0;max-width:100%" loading="lazy" title="RugRadar token risk"></iframe>'}
 function rrNm(n){n=String(n||'');const d=n.charAt(0)==='$',x=rrClean(n,33);return d&&x&&!/\s/.test(x)?'$'+x:x}
 function rrShareText(sc,lb,ws,a,c,o,p,n){n=rrNm(n);const L=rrLink(o,a,c),h='Checked '+(n||'this token')+' on RugRadar \u2014 '+sc+' '+lb+'.',t=' Full report $'+p+'. '+L,room=270-h.length-t.length-2;let w=ws.slice(0,2).join(' + ');if(w.length>room)w=ws[0]||'';if(w.length>room)w=room>9?w.slice(0,room-1).trim()+'\u2026':'';return h+(w?' '+w+'.':'')+t}
 function rrReportText(sc,lb,ws,a,c,o,n){n=rrNm(n);return 'RugRadar \u2014 '+(n?n+' \u2014 ':'')+sc+' '+lb+'\n'+ws.slice(0,3).map(x=>'\u2022 '+x).join('\n')+(ws.length?'\n':'')+a+'\n'+rrLink(o,a,c)}
@@ -426,7 +427,7 @@ function shotMode(j,ws,lv,sc,lb,txt){const bd=el('div','shot'),c=el('div','shc')
 function shareBar(j,ws){const lv=shownLevel(j,ws),sc=Number(j.riskScore)||0,lb=VT[lv][0],a=String(j.token||''),tl=ws.map(w=>w.t),b=el('div','shr');
  const nm=rrTok(j.facts).share,txt=rrShareText(sc,lb,tl,a,j.chain,CFG.u,CFG.p,nm),x=el('a','btn xb','Share on X');x.href='https://x.com/intent/post?text='+encodeURIComponent(txt);x.target='_blank';x.rel='noopener noreferrer';
  const bt=(n,f)=>{const y=el('button','btn sec',n);y.type='button';y.addEventListener('click',()=>f(y));return y};
- b.append(x,bt('Share',()=>shotMode(j,ws,lv,sc,lb,txt)),bt('Copy report',y=>rrCopy(rrReportText(sc,lb,tl,a,j.chain,CFG.u,nm),y)),bt('Copy link',y=>rrCopy(rrLink(CFG.u,a,j.chain),y)));return b}
+ b.append(x,bt('Share',()=>shotMode(j,ws,lv,sc,lb,txt)),bt('Copy report',y=>rrCopy(rrReportText(sc,lb,tl,a,j.chain,CFG.u,nm),y)),bt('Copy link (Discord)',y=>rrCopy(rrLink(CFG.u,a,j.chain),y)),bt('Copy embed (website)',y=>rrCopy(rrEmbed(CFG.u,a,j.chain),y)));return b}
 const WS={get(){try{return localStorage.getItem('rr_wsess')||''}catch(e){return ''}},set(v){try{localStorage.setItem('rr_wsess',v)}catch(e){}},del(){try{localStorage.removeItem('rr_wsess')}catch(e){}}};
 const hexs=u=>Array.from(u,b=>b.toString(16).padStart(2,'0')).join('');
 async function walConnect(kind,st){try{let addr,sign;
@@ -454,14 +455,14 @@ function render(j,t){out.textContent='';const c=el('div','card res'),ws=warnings
  if(typeof SWAPHOOK==='function'&&j.token===t&&shownLevel(j,ws)==='low'){const sb=SWAPHOOK(j);if(sb)c.append(sb)}
  const wc=el('div','wcards');ws.slice(0,3).forEach(w=>wc.append(card(w,j,true)));if(ws.length)c.append(wc);
  const full=!(j.report==='limited'&&j.checks);
- if(!full){c.append(el('div','unlockwhat','Full report also shows: live chart, dev activity, biggest buys/sells.'));c.append(lockedPanel('','Unlock for $'+CFG.p,'or buy a credit pack (10, 50, or 200)'));c.append(el('div','buyline','Checks finish faster with credits · buy once, skip the payment wait'));c.append(el('div','tease',j.lockedTeaser||'Full report'));c.append(shareBar(j,ws))}
+ if(!full){c.append(el('div','unlockwhat','Full report also shows: live chart, dev activity, biggest buys/sells.'));c.append(lockedPanel('','Unlock for $'+CFG.p,'or buy a credit pack (10, 50, or 200)'));c.append(el('div','buyline','Checks finish faster with credits · buy once, skip the payment wait'));c.append(el('div','tease',j.lockedTeaser||'Full report'));c.append(el('div','note','1 free check used today, full report is $'+CFG.p));c.append(shareBar(j,ws))}
  else if(Array.isArray(j.checks)){const fr=rrFree(j.checks,CFG.lim,CFG.warn);c.append(shareBar({riskScore:fr.sc,riskLevel:fr.lv,token:j.token,chain:j.chain,facts:fa},fr.ws))}
  const dt=el('details','quiet det');dt.id='more';if(full&&j.liveReport)dt.open=true;dt.append(el('summary',null,'Show details'));const sub=el('div','sub');dt.append(sub);
  if(Array.isArray(j.freeFacts)&&j.freeFacts.length)sub.append(el('div','ffl',j.freeFacts.join(' \u00b7 ')));
  if(ws.length>3){sub.append(el('div','sec-title','More warnings'));const w2=el('div','wcards');ws.slice(3).forEach(w=>w2.append(card(w,j,true)));sub.append(w2)}
  if(j.liveReport){const h=el('div');sub.append(h);liveLoad().then(()=>{const b=window.RRLive(j);if(b)h.append(b)}).catch(()=>{})}
  c.append(dt);
- c.append(el('div','disc','Danger warnings only'));out.append(c)}
+ c.append(el('div','disc','Danger warnings only'));out.append(c);const call=el('div','wnote','For bots & tools: ');const ca=el('a',null,'MCP, x402, or a credit key');ca.href='#developers';ca.addEventListener('click',openDev);call.append(ca);out.append(call)}
 function waitCard(){out.textContent='';const c=el('div','card res'),v=el('div','verdict'),t=el('div');t.append(el('div','vt','Checking\u2026'),el('div','vl','Usually a few seconds.'));v.append(gauge('wait',0),t);v.querySelector('i').firstChild.textContent='\u2026';c.append(v);out.append(c)}
 function msgCard(text,lock,note){out.textContent='';const c=el('div','card res');c.append(el('p',null,text));if(lock)c.append(lockedPanel(note));out.append(c)}
 async function chainFor(t){const c=$('chain').value;if(c!=='auto')return c;if(!t.startsWith('0x'))return 'solana';try{const r=await fetch('/rugradar/api/chain?token='+encodeURIComponent(t));const j=await r.json();return j.chain||'base'}catch(e){return 'base'}}
@@ -519,7 +520,7 @@ ${CSS_PAGE}</style></head><body><div class="wrap">
 <h1>Is this token a rug? Check before you buy.</h1>
 <p>Paste an address. Plain danger warnings in seconds.</p>
 <form id="f" class="search"><span class="tw"><input id="tok" name="token" required autocomplete="off" spellcheck="false" placeholder="Token address (Solana mint or 0x contract)" aria-label="Token address"><button type="button" id="clr" class="clr" aria-label="Clear" hidden>\u00d7</button></span><button class="btn pri" id="go">Check token</button></form>
-<div class="subrow"><select id="chain" class="chainchip" aria-label="Chain" title="Chain: Auto-detect (Solana, Base, BNB, Ethereum, Arbitrum)"><option value="auto">Auto \u25BE</option>${CHAINS.map((c) => `<option value="${c}">${CHAIN_NAME[c]}</option>`).join("")}</select><span class="trust">Free \u00b7 no sign-up</span></div>
+<div class="subrow"><select id="chain" class="chainchip" aria-label="Chain" title="Chain: Auto-detect (Solana, Base, BNB, Ethereum, Arbitrum)"><option value="auto">Auto \u25BE</option>${CHAINS.map((c) => `<option value="${c}">${CHAIN_NAME[c]}</option>`).join("")}</select><span class="trust">Free \u00b7 no sign-up<span id="checksrun"></span></span></div>
 <details class="keyd" id="keyd"><summary>Have a credit key?</summary><input id="key" type="password" placeholder="Credit key (rr_...)" autocomplete="off" aria-label="Credit key"><small id="keybox" hidden></small></details>
 <details class="keyd" id="wald"><summary>Connect wallet to see your past checks</summary><div id="walbox"></div></details>
 <select id="recent" class="chainchip" hidden aria-label="Recent full reports"></select>
@@ -847,14 +848,26 @@ ${v.facts.length ? `<p class="facts">${escA(v.facts.slice(0, 3).join(" · "))}</
 <style>.tl{font-weight:700;font-size:17px;margin:0 0 12px;color:#EEF2F8}body{margin:0;background:#0B1020;color:#EEF2F8;font:16px/1.45 system-ui,sans-serif}main{max-width:420px;margin:24px auto;padding:20px;background:#131A2E;border:1px solid #232C47;border-radius:16px}.tok{margin:0 0 12px;font-weight:700}.tok small{display:block;color:#9AA4B8;font-weight:500;margin-top:4px}.score{font-size:40px;font-weight:700;margin:0 0 14px}.score span{font-size:16px;color:#9AA4B8;margin-left:4px}.w{display:flex;gap:8px;align-items:center;font-weight:700;padding:9px 10px;margin:0 0 6px;border-radius:10px;background:#0F1628}.w.d{border-left:4px solid #EF4444}.w.c{border-left:4px solid #F59E0B}.w b{font-size:11px;letter-spacing:.04em}.none,.facts,.more,.foot{color:#9AA4B8;font-size:14px}a{color:#38BDF8;font-weight:700}</style></head>
 <body><main>${body}</main></body></html>`;
 }
+const CHECKS_MAX_AGE = 600; // 10 min: tiny public counter, no Helius, little bandwidth
+function withChecksRun(html: string): string {
+  const v = publicChecksRun();
+  if (!v) return html;
+  return html.replace('id="checksrun"></span>', `id="checksrun"> · ${v.checksRun.toLocaleString("en-US")} checks run</span>`);
+}
+
 export function registerRugradarWeb(app: Express, d: WebDeps) {
   const skillMd = rugradarAgentGuide(d.publicUrl, d.priceUsd);
   const sendSkill = (_req: Request, res: Response) => { res.set("Content-Type", SKILL_CONTENT_TYPE).set("Cache-Control", "public, max-age=3600").send(skillMd); };
   app.get("/skill.md", sendSkill);
   app.get("/agents.md", sendSkill);
   const htmlBase = page(d), htmlPromo = page(d, true);
+  app.get("/rugradar/api/checks", (_req, res) => {
+    const v = publicChecksRun();
+    if (!v) { res.set("Cache-Control", "public, max-age=30").json({ checksRun: null }); return; }
+    res.set("Cache-Control", `public, max-age=${CHECKS_MAX_AGE}`).json(v);
+  });
   app.get("/rugradar", (req, res) => {
-    const html = fullFreeActive() ? htmlPromo : htmlBase, t = shareTarget(req);
+    const html = withChecksRun(fullFreeActive() ? htmlPromo : htmlBase), t = shareTarget(req);
     res.set("Cache-Control", "public, max-age=300").type("html").send(t ? html.replace(OG_RE, shareMeta(d.publicUrl, t.token, t.chain)) : html);
   });
   // Per-token share image (free-check data only). Rendered only from a stored result — never starts a new check.

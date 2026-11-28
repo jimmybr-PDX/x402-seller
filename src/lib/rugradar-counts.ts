@@ -74,5 +74,14 @@ export async function attachCounts(name: string, s: CountsStore, everyMs = 6 * 3
 
 function onTerm() { if (timer) { clearTimeout(timer); timer = null; } void saveCounts(); }
 
+
+/** All-time public checks run: free web checks + paid full reports. Owner checks are excluded. Null only when the store has not loaded and no in-memory counts exist yet. */
+export function publicChecksRun(): { checksRun: number } | null {
+  const s = rugradarStats();
+  const n = s.allTime.rugradarTotal;
+  if (!s.persistence.restored && n <= 0) return null;
+  return { checksRun: n };
+}
+
 /** Tests only. */
 export function _resetCounts() { base = {}; pending = {}; inflight = {}; store = null; saving = false; if (timer) clearTimeout(timer); timer = null; status = { store: null, restored: false, lastSavedAt: null }; process.removeListener("SIGTERM", onTerm); }

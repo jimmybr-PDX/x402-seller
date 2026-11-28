@@ -295,7 +295,7 @@ async function main() {
   app.use(express.json());
 
   // Interest tracker (counts only; visitor = salted hash of IP+UA, raw IPs never stored).
-  const FREE_LABELS = new Set(["/", "/health", "/stats", "/stats/payments", "/examples", "/llms.txt", "/skill.md", "/agents.md", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png", "/favicon.ico", "/rugradar", "/credits/balance", "/sitemap.xml", "/mcp", "/rugradar/api/check", "/rugradar/api/recent"]);
+  const FREE_LABELS = new Set(["/", "/health", "/stats", "/stats/payments", "/examples", "/llms.txt", "/skill.md", "/agents.md", "/openapi.json", "/.well-known/x402", "/.well-known/x402.json", "/robots.txt", "/icon.svg", "/icon.png", "/favicon.ico", "/rugradar", "/credits/balance", "/sitemap.xml", "/mcp", "/rugradar/api/check", "/rugradar/api/checks", "/rugradar/api/recent"]);
   app.use((req: Request, res: Response, next: NextFunction) => {
     const method = req.method;
     // HEAD on a paid route: answer like GET without payment (402 + PAYMENT-REQUIRED, no body) instead of
